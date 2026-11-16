@@ -105,7 +105,7 @@ export function parseState(body: string | undefined): State | undefined {
   }
 }
 
-export type Footer = { sha: string; runUrl?: string; models: string; effort: string; reason: string };
+export type Footer = { sha: string; runUrl?: string; models: string; effort: string; reason: string; skipped?: number };
 
 function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
@@ -152,6 +152,7 @@ export function renderSummary(review: Review, placed: Placed[], prior: State | u
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${p.title}`).join(', ')})`);
 
+  if (f.skipped) out.push('', `**Skipped:** ${f.skipped} file${f.skipped === 1 ? '' : 's'} matched \`skip\` and weren't reviewed.`);
   out.push('', `**Not checked:** ${review.not_checked}`, '', footer(f));
   const state: State = {
     sha: f.sha,

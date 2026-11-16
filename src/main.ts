@@ -60,6 +60,7 @@ async function run(): Promise<void> {
     maxTurns: number('max_turns'),
     timeoutMinutes: number('timeout_minutes'),
     configPath: input('config_path'),
+    dashboard: tokens.settings,
     dryRun: core.getBooleanInput('dry_run'),
     runUrl: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
     cwd: process.env.GITHUB_WORKSPACE ?? process.cwd(),

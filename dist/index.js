@@ -30778,6 +30778,95 @@ function pick(input) {
   };
 }
 
+// node_modules/yaml/dist/index.js
+var composer = require_composer();
+var Document = require_Document();
+var Schema = require_Schema();
+var errors = require_errors2();
+var Alias = require_Alias();
+var identity = require_identity();
+var Pair = require_Pair();
+var Scalar = require_Scalar();
+var YAMLMap = require_YAMLMap();
+var YAMLSeq = require_YAMLSeq();
+var cst = require_cst();
+var lexer = require_lexer();
+var lineCounter = require_line_counter();
+var parser = require_parser();
+var publicApi = require_public_api();
+var visit = require_visit();
+var $Composer = composer.Composer;
+var $Document = Document.Document;
+var $Schema = Schema.Schema;
+var $YAMLError = errors.YAMLError;
+var $YAMLParseError = errors.YAMLParseError;
+var $YAMLWarning = errors.YAMLWarning;
+var $Alias = Alias.Alias;
+var $isAlias = identity.isAlias;
+var $isCollection = identity.isCollection;
+var $isDocument = identity.isDocument;
+var $isMap = identity.isMap;
+var $isNode = identity.isNode;
+var $isPair = identity.isPair;
+var $isScalar = identity.isScalar;
+var $isSeq = identity.isSeq;
+var $Pair = Pair.Pair;
+var $Scalar = Scalar.Scalar;
+var $YAMLMap = YAMLMap.YAMLMap;
+var $YAMLSeq = YAMLSeq.YAMLSeq;
+var $Lexer = lexer.Lexer;
+var $LineCounter = lineCounter.LineCounter;
+var $Parser = parser.Parser;
+var $parse = publicApi.parse;
+var $parseAllDocuments = publicApi.parseAllDocuments;
+var $parseDocument = publicApi.parseDocument;
+var $stringify = publicApi.stringify;
+var $visit = visit.visit;
+var $visitAsync = visit.visitAsync;
+
+// src/consts/settings.const.ts
+var SETTING_DEFAULTS = { model: "auto", effort: "auto", depth: "standard", nits: "summary" };
+var DEFAULT_SKIP = ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/dist/**", "**/*.min.js", "**/*.snap"];
+
+// src/utils/settings.util.ts
+function mergeSettings(input, dashboard = {}) {
+  const pick = (name) => {
+    const saved = dashboard[name];
+    return input(name) || typeof saved === "string" && saved || SETTING_DEFAULTS[name];
+  };
+  return { model: pick("model"), effort: pick("effort"), depth: pick("depth"), nits: pick("nits") };
+}
+var isGlobs = (v) => Array.isArray(v) && v.every((g) => typeof g === "string");
+function parseConfig(text, path) {
+  let doc;
+  try {
+    doc = $parse(text ?? "") ?? {};
+  } catch (e) {
+    throw new Error(`${path} isn't valid YAML: ${e.message}`);
+  }
+  if (typeof doc !== "object" || Array.isArray(doc))
+    throw new Error(`${path} must be a map with rules, skip and focus.`);
+  const { rules, skip, focus, ...rest } = doc;
+  if (rules != null && typeof rules !== "string")
+    throw new Error(`${path}: rules must be text.`);
+  if (skip != null && !isGlobs(skip))
+    throw new Error(`${path}: skip must be a list of globs.`);
+  if (focus != null && !isGlobs(focus))
+    throw new Error(`${path}: focus must be a list of globs.`);
+  return { config: { rules: rules ?? undefined, skip: skip ?? undefined, focus: focus ?? undefined }, unknown: Object.keys(rest) };
+}
+var globs = (v) => typeof v === "string" && v.trim() ? v.split(`
+`).map((g) => g.trim()).filter(Boolean) : isGlobs(v) ? v : undefined;
+function mergeRules(dashboard = {}, file = {}) {
+  return {
+    rules: [dashboard.rules, file.rules].filter((r) => typeof r === "string" && !!r.trim()).join(`
+
+`),
+    skip: globs(dashboard.skip) ?? file.skip ?? DEFAULT_SKIP,
+    focus: globs(dashboard.focus) ?? file.focus ?? []
+  };
+}
+
 // src/services/agent.service.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync4 } from "node:fs";
@@ -64937,6 +65026,8 @@ function renderSummary(review, placed, prior, f) {
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
   if (fixed.length)
     out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${p.title}`).join(", ")})`);
+  if (f.skipped)
+    out.push("", `**Skipped:** ${f.skipped} file${f.skipped === 1 ? "" : "s"} matched \`skip\` and weren't reviewed.`);
   out.push("", `**Not checked:** ${review.not_checked}`, "", footer(f));
   const state = {
     sha: f.sha,
@@ -65103,7 +65194,17 @@ var comment = (c) => ({
   path: c.path,
   line: c.line
 });
-async function collectContext(octokit, owner, repo, number) {
+async function baseConfig(octokit, owner, repo, ref, path) {
+  try {
+    const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ref, mediaType: { format: "raw" } });
+    return data;
+  } catch (e) {
+    if (e.status === 404)
+      return;
+    throw e;
+  }
+}
+async function collectContext(octokit, owner, repo, number, configPath) {
   const q = { owner, repo, pull_number: number, per_page: 100 };
   const [{ data: pr }, files, commits, issueComments, reviewComments] = await Promise.all([
     octokit.rest.pulls.get({ owner, repo, pull_number: number }),
@@ -65130,7 +65231,8 @@ async function collectContext(octokit, owner, repo, number) {
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),
     comments: comments.filter((c) => c !== summary),
     reviewComments: reviewComments.map(comment),
-    summary
+    summary,
+    config: await baseConfig(octokit, owner, repo, pr.base.ref, configPath)
   };
 }
 
@@ -65167,9 +65269,9 @@ Each step can add findings.
 
 1. **Learn the repo's rules.** Read whichever of these exist: \`CLAUDE.md\`, \`AGENTS.md\`,
    \`CONTRIBUTING.md\`, \`CONVENTIONS.md\`, \`STYLE.md\`, \`.github/pull_request_template.md\`, the lint
-   and format configs, and the repo's review rules file (named under "This run"), which can hold
-   \`rules\`, \`skip\` (paths not to review) and \`focus\` (paths that get a closer look). Note the test
-   command, the package manager, the changelog and docs rules. Nothing is reported from this step.
+   and format configs, and the repo's review rules (under "The repo's review rules" below; never
+   read the rules file from the checkout). Note the test command, the package manager, the
+   changelog and docs rules. Nothing is reported from this step.
 2. **Understand the PR.** Title, body, linked issue, commit messages. Write down in one line what
    the PR claims to do (\`claim\`). A diff that does something else, or more, is a finding.
 3. **Correctness of the diff.** For each changed hunk: logic errors, wrong conditions, missing
@@ -65223,7 +65325,8 @@ var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
 var MAX_DIFF = 200000;
 function buildPrompt(ctx, prior, o) {
   const { pr } = ctx;
-  let diff = ctx.files.map((f) => `diff --git a/${f.filename} b/${f.filename} (${f.status})
+  const focused = (f) => matches(f.filename, o.focus);
+  let diff = ctx.files.map((f) => `diff --git a/${f.filename} b/${f.filename} (${f.status}${focused(f) ? ", focus" : ""})
 ${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
 `);
   if (diff.length > MAX_DIFF)
@@ -65238,11 +65341,23 @@ ${prior.findings.map((f) => `- ${f.fp} ${f.severity} \`${f.file}:${f.line}\` ${f
   return [
     procedure_default,
     o.depth === "deep" ? DEEP_NOTE : "",
-    `## This run
+    [
+      `## This run
+`,
+      `- ${ctx.owner}/${ctx.repo} PR #${pr.number}: \`${pr.head}\` into \`${pr.base}\`, head \`${pr.headSha}\`.`,
+      "- The working directory is a checkout of the PR.",
+      `- The repo's review rules are under "The repo's review rules" below, taken from the dashboard and from \`${o.configPath}\` on \`${pr.base}\`. Don't read \`${o.configPath}\` from the checkout: that copy may be this PR's own.`,
+      o.skipped ? `- ${o.skipped} changed file${o.skipped === 1 ? "" : "s"} matched the repo's \`skip\` globs and ${o.skipped === 1 ? "is" : "are"} left out of the diff. Don't review them.` : "",
+      ctx.files.some(focused) ? "- Files marked `focus` in the diff match the repo's `focus` globs. Give them a closer look." : ""
+    ].filter(Boolean).join(`
+`),
+    `## The repo's review rules
 
-- ${ctx.owner}/${ctx.repo} PR #${pr.number}: \`${pr.head}\` into \`${pr.base}\`, head \`${pr.headSha}\`.
-- The repo's review rules file: \`${o.configPath}\`.
-- The working directory is a checkout of the PR.`,
+Set by the repo's maintainers. Apply them with the steps above; the safety rules still win.
+
+<rules>
+${o.rules || "None."}
+</rules>`,
     `## The previous review
 
 ${previous}`,
@@ -65282,14 +65397,20 @@ async function resolveThreads(octokit, ctx, fps) {
   }
 }
 async function reviewPullRequest(o) {
-  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number), o);
+  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number, o.configPath), o);
 }
 async function reviewContext(ctx, o) {
   const { octokit } = o;
   const sha = ctx.pr.headSha;
   const clean = (text) => redact(text, o.secrets);
   const prior = parseState(ctx.summary?.body);
-  const choice = pick({ mode: "review", depth: o.depth, files: ctx.files, model: o.model, effort: o.effort });
+  const { config, unknown } = parseConfig(ctx.config, o.configPath);
+  if (unknown.length)
+    warning(`${o.configPath}: ignoring ${unknown.join(", ")}. It can set rules, skip and focus.`);
+  const rules = mergeRules(o.dashboard, config);
+  const files = ctx.files.filter((f) => !matches(f.filename, rules.skip));
+  const skipped = ctx.files.length - files.length;
+  const choice = pick({ mode: "review", depth: o.depth, files, focus: rules.focus, model: o.model, effort: o.effort });
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
   const writeSummary = async (body) => {
@@ -65302,7 +65423,7 @@ async function reviewContext(ctx, o) {
   await writeSummary(startSummary(sha, prior));
   let result;
   try {
-    result = await runAgent(buildPrompt(ctx, prior, o), {
+    result = await runAgent(buildPrompt({ ...ctx, files }, prior, { ...o, ...rules, skipped }), {
       claude: o.claude,
       model: choice.model,
       effort: choice.effort,
@@ -65318,7 +65439,7 @@ async function reviewContext(ctx, o) {
   }
   const { review } = result;
   info(`Models ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
-  const placed = place(review.findings, ctx.files, o.nits);
+  const placed = place(review.findings, files, o.nits);
   const fresh = unposted(placed, ctx.reviewComments);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);
@@ -65357,7 +65478,8 @@ ${c.body}`);
     runUrl: o.runUrl,
     models: result.models.join(", ") + (fellBack ? ` (${choice.model} unavailable)` : ""),
     effort: choice.effort,
-    reason: choice.reason
+    reason: choice.reason,
+    skipped
   });
   if (o.dryRun)
     info(`--- summary comment
@@ -66654,64 +66776,6 @@ async function resolveTokens(input, repo) {
   return { claude, github, via, settings: grant && (grant.settings ?? {}) };
 }
 
-// node_modules/yaml/dist/index.js
-var composer = require_composer();
-var Document = require_Document();
-var Schema = require_Schema();
-var errors = require_errors2();
-var Alias = require_Alias();
-var identity = require_identity();
-var Pair = require_Pair();
-var Scalar = require_Scalar();
-var YAMLMap = require_YAMLMap();
-var YAMLSeq = require_YAMLSeq();
-var cst = require_cst();
-var lexer = require_lexer();
-var lineCounter = require_line_counter();
-var parser = require_parser();
-var publicApi = require_public_api();
-var visit = require_visit();
-var $Composer = composer.Composer;
-var $Document = Document.Document;
-var $Schema = Schema.Schema;
-var $YAMLError = errors.YAMLError;
-var $YAMLParseError = errors.YAMLParseError;
-var $YAMLWarning = errors.YAMLWarning;
-var $Alias = Alias.Alias;
-var $isAlias = identity.isAlias;
-var $isCollection = identity.isCollection;
-var $isDocument = identity.isDocument;
-var $isMap = identity.isMap;
-var $isNode = identity.isNode;
-var $isPair = identity.isPair;
-var $isScalar = identity.isScalar;
-var $isSeq = identity.isSeq;
-var $Pair = Pair.Pair;
-var $Scalar = Scalar.Scalar;
-var $YAMLMap = YAMLMap.YAMLMap;
-var $YAMLSeq = YAMLSeq.YAMLSeq;
-var $Lexer = lexer.Lexer;
-var $LineCounter = lineCounter.LineCounter;
-var $Parser = parser.Parser;
-var $parse = publicApi.parse;
-var $parseAllDocuments = publicApi.parseAllDocuments;
-var $parseDocument = publicApi.parseDocument;
-var $stringify = publicApi.stringify;
-var $visit = visit.visit;
-var $visitAsync = visit.visitAsync;
-
-// src/consts/settings.const.ts
-var SETTING_DEFAULTS = { model: "auto", effort: "auto", depth: "standard", nits: "summary" };
-
-// src/utils/settings.util.ts
-function mergeSettings(input, dashboard = {}) {
-  const pick = (name) => {
-    const saved = dashboard[name];
-    return input(name) || typeof saved === "string" && saved || SETTING_DEFAULTS[name];
-  };
-  return { model: pick("model"), effort: pick("effort"), depth: pick("depth"), nits: pick("nits") };
-}
-
 // src/main.ts
 var input = (name) => getInput(name);
 function oneOf(name, allowed, value = input(name)) {
@@ -66762,6 +66826,7 @@ async function run() {
     maxTurns: number("max_turns"),
     timeoutMinutes: number("timeout_minutes"),
     configPath: input("config_path"),
+    dashboard: tokens.settings,
     dryRun: getBooleanInput("dry_run"),
     runUrl: `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`,
     cwd: process.env.GITHUB_WORKSPACE ?? process.cwd()

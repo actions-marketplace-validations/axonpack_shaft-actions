@@ -15,6 +15,8 @@ export type Context = {
   reviewComments: Comment[];
   /** Our sticky summary comment, if an earlier run made one. */
   summary?: Comment;
+  /** The review rules file's text on the base branch; undefined when it has none. */
+  config?: string;
 };
 
 const comment = (c: any): Comment => ({
@@ -27,8 +29,23 @@ const comment = (c: any): Comment => ({
   line: c.line,
 });
 
-/** Everything the review needs from GitHub: the PR text, the diff and the comments already posted. */
-export async function collectContext(octokit: Octokit, owner: string, repo: string, number: number): Promise<Context> {
+/**
+ * The review rules file as the base branch has it, through the API. Never the checkout's copy: on
+ * `pull_request` the checkout is the merge commit, so a PR could edit the file to switch its own
+ * rules off.
+ */
+async function baseConfig(octokit: Octokit, owner: string, repo: string, ref: string, path: string): Promise<string | undefined> {
+  try {
+    const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ref, mediaType: { format: 'raw' } });
+    return data as unknown as string;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return undefined;
+    throw e;
+  }
+}
+
+/** Everything the review needs from GitHub: the PR text, the diff, the comments already posted and the base branch's review rules. */
+export async function collectContext(octokit: Octokit, owner: string, repo: string, number: number, configPath: string): Promise<Context> {
   const q = { owner, repo, pull_number: number, per_page: 100 };
   const [{ data: pr }, files, commits, issueComments, reviewComments] = await Promise.all([
     octokit.rest.pulls.get({ owner, repo, pull_number: number }),
@@ -56,5 +73,6 @@ export async function collectContext(octokit: Octokit, owner: string, repo: stri
     comments: comments.filter((c) => c !== summary),
     reviewComments: reviewComments.map(comment),
     summary,
+    config: await baseConfig(octokit, owner, repo, pr.base.ref, configPath),
   };
 }

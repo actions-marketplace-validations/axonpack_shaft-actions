@@ -32,7 +32,7 @@ const LOCKFILE =
 const CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
 const COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
 
-const matches = (file: string, globs: string[]) => globs.some((g) => matchesGlob(file, g));
+export const matches = (file: string, globs: string[]) => globs.some((g) => matchesGlob(file, g));
 
 function isSensitive(f: ChangedFile): boolean {
   if (/(^|\/)package\.json$/.test(f.filename)) return f.patch === undefined || /ependencies"/.test(f.patch); // ponytail: a deps block in the hunk's context counts too

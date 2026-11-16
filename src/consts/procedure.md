@@ -30,9 +30,9 @@ Each step can add findings.
 
 1. **Learn the repo's rules.** Read whichever of these exist: `CLAUDE.md`, `AGENTS.md`,
    `CONTRIBUTING.md`, `CONVENTIONS.md`, `STYLE.md`, `.github/pull_request_template.md`, the lint
-   and format configs, and the repo's review rules file (named under "This run"), which can hold
-   `rules`, `skip` (paths not to review) and `focus` (paths that get a closer look). Note the test
-   command, the package manager, the changelog and docs rules. Nothing is reported from this step.
+   and format configs, and the repo's review rules (under "The repo's review rules" below; never
+   read the rules file from the checkout). Note the test command, the package manager, the
+   changelog and docs rules. Nothing is reported from this step.
 2. **Understand the PR.** Title, body, linked issue, commit messages. Write down in one line what
    the PR claims to do (`claim`). A diff that does something else, or more, is a finding.
 3. **Correctness of the diff.** For each changed hunk: logic errors, wrong conditions, missing
