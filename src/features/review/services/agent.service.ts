@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as core from '@actions/core';
 import { type AgentDefinition, type EffortLevel, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
-import pkg from '../../../package.json' with { type: 'json' };
-import type { ClaudeToken } from '../tokens';
-import { type Review, SEVERITIES, STEPS, TYPES, VERDICTS } from './render';
+import pkg from '../../../../package.json' with { type: 'json' };
+import type { ClaudeToken } from '../../../core/services/tokens.service';
+import { type Review, SEVERITIES, STEPS, TYPES, VERDICTS } from '../utils/render.util';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {

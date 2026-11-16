@@ -1,6 +1,4 @@
-import type { getOctokit } from '@actions/github';
-
-export type Octokit = ReturnType<typeof getOctokit>;
+import type { Octokit } from '../../../core/types/octokit.type';
 
 export type Route =
   | { mode: 'review'; number: number }

@@ -1,10 +1,10 @@
 import * as core from '@actions/core';
-import { pick } from '../auto';
-import type { Octokit } from '../route';
-import type { ClaudeToken } from '../tokens';
-import { DEEP_NOTE, runAgent } from './agent';
-import { type Context, collectContext } from './context';
-import procedure from './procedure.md' with { type: 'text' };
+import { pick } from '../utils/auto-pick.util';
+import type { Octokit } from '../../../core/types/octokit.type';
+import type { ClaudeToken } from '../../../core/services/tokens.service';
+import { DEEP_NOTE, runAgent } from './agent.service';
+import { type Context, collectContext } from './context.service';
+import procedure from '../constants/procedure.md' with { type: 'text' };
 import {
   failedSummary,
   inlineBody,
@@ -15,7 +15,7 @@ import {
   type State,
   startSummary,
   unposted,
-} from './render';
+} from '../utils/render.util';
 
 export type ReviewOptions = {
   /** Unused on a dry run with a context built by hand. */
