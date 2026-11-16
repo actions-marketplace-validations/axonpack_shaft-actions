@@ -24,4 +24,8 @@ A service calls an API or has another side effect. A util is a pure function. A 
 
 ## Tests
 
-Tests live in a `__tests__/` folder beside the code they test, named after that file: `features/routing/services/__tests__/route.service.test.ts` tests `route.service.ts`. Fixtures go in `__tests__/fixtures/` next to the tests that read them. `bun test` finds them all. `tsconfig.json` leaves `__tests__/` out of the typecheck, because the tests use Bun's own test types.
+Tests live in a `__tests__/` folder beside the code they test, named after that file: `features/routing/services/__tests__/route.service.test.ts` tests `route.service.ts`. Fixtures go in `__tests__/fixtures/` next to the tests that read them. `bun run test` runs them all with Vitest, and `bun run typecheck` checks them along with the code.
+
+## Lint
+
+`bun run lint` runs oxlint with `oxlint.config.mts`, which extends `oxlint-config-universe/node`. Turn a rule off there, with a one-line comment saying why, only when it fights a style the code already uses.

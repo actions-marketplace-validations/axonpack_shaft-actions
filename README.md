@@ -79,8 +79,9 @@ The model reads the repo with `Read`, `Grep`, `Glob`, `git diff`, `git log` and 
 
 ```sh
 bun install
+bun run lint
 bun run typecheck
-bun test
+bun run test
 bun run build   # writes dist/index.js, which is committed
 ```
 
