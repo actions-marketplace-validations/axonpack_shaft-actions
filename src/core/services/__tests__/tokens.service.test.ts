@@ -4,14 +4,23 @@ const masked: string[] = [];
 const calls: unknown[] = [];
 mock.module('@actions/core', () => ({ setSecret: (s: string) => masked.push(s) }));
 mock.module('@octokit/auth-app', () => ({
-  createAppAuth: (opts: unknown) => async () => (calls.push(opts), { token: 'app-jwt' }),
+  createAppAuth: (opts: unknown) => async () => {
+    calls.push(opts);
+    return { token: 'app-jwt' };
+  },
 }));
 mock.module('@actions/github', () => ({
   getOctokit: (token: string) => ({
     rest: {
       apps: {
-        getRepoInstallation: async (repo: unknown) => (calls.push({ token, repo }), { data: { id: 77 } }),
-        createInstallationAccessToken: async (req: unknown) => (calls.push(req), { data: { token: 'ghs_installation' } }),
+        getRepoInstallation: async (repo: unknown) => {
+          calls.push({ token, repo });
+          return { data: { id: 77 } };
+        },
+        createInstallationAccessToken: async (req: unknown) => {
+          calls.push(req);
+          return { data: { token: 'ghs_installation' } };
+        },
       },
     },
   }),

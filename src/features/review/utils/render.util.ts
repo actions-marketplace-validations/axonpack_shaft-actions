@@ -101,7 +101,7 @@ export function parseState(body: string | undefined): State | undefined {
   try {
     return JSON.parse(m[1]);
   } catch {
-    return;
+    return undefined;
   }
 }
 

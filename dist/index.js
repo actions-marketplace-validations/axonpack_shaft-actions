@@ -57029,6 +57029,7 @@ var package_default = {
   type: "module",
   scripts: {
     build: "bun build src/main.ts --target node --outfile dist/index.js",
+    lint: "oxlint src",
     typecheck: "tsc --noEmit",
     test: "bun test"
   },
@@ -57040,6 +57041,8 @@ var package_default = {
   },
   devDependencies: {
     "@types/node": "^26.6.6",
+    oxlint: "1.90.0",
+    "oxlint-config-universe": "0.2.0",
     typescript: "^7.0.2"
   }
 };
