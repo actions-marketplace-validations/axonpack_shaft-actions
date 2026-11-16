@@ -1,4 +1,4 @@
-import type { Octokit } from '../../../core/types/octokit.type';
+import type { Octokit } from '../types/octokit.type';
 
 export type Route =
   | { mode: 'review'; number: number }

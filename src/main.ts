@@ -1,8 +1,8 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
-import { reviewPullRequest } from './features/review/services/review.service';
-import { hasWriteAccess, route } from './features/routing/services/route.service';
-import { resolveTokens } from './core/services/tokens.service';
+import { reviewPullRequest } from './services/review.service';
+import { hasWriteAccess, route } from './services/route.service';
+import { resolveTokens } from './services/tokens.service';
 
 const input = (name: string) => core.getInput(name);
 

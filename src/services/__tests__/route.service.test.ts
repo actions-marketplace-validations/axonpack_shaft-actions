@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import type { Octokit } from '../../../../core/types/octokit.type';
+import type { Octokit } from '../../types/octokit.type';
 import { hasWriteAccess, route } from '../route.service';
 import comment from './fixtures/issue_comment.created.json';
 import fork from './fixtures/pull_request.fork.json';

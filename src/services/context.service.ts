@@ -1,5 +1,5 @@
 import type { ChangedFile } from '../utils/auto-pick.util';
-import type { Octokit } from '../../../core/types/octokit.type';
+import type { Octokit } from '../types/octokit.type';
 import { SUMMARY_MARKER } from '../utils/render.util';
 
 export type Comment = { id: number; author: string; body: string; isBot: boolean; html_url: string; path?: string; line?: number | null };

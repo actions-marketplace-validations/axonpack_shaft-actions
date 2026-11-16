@@ -1,10 +1,10 @@
 import * as core from '@actions/core';
 import { pick } from '../utils/auto-pick.util';
-import type { Octokit } from '../../../core/types/octokit.type';
-import type { ClaudeToken } from '../../../core/services/tokens.service';
+import type { Octokit } from '../types/octokit.type';
+import type { ClaudeToken } from './tokens.service';
 import { DEEP_NOTE, runAgent } from './agent.service';
 import { type Context, collectContext } from './context.service';
-import procedure from '../constants/procedure.md' with { type: 'text' };
+import procedure from '../consts/procedure.md' with { type: 'text' };
 import {
   failedSummary,
   inlineBody,

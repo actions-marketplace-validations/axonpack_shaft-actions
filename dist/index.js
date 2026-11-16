@@ -22948,7 +22948,7 @@ function getOctokit(token, options, ...additionalPlugins) {
   return new GitHubWithPlugins(getOctokitOptions(token, options));
 }
 
-// src/features/review/utils/auto-pick.util.ts
+// src/utils/auto-pick.util.ts
 import { matchesGlob } from "node:path";
 var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
 var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
@@ -23000,7 +23000,7 @@ function pick(input) {
   };
 }
 
-// src/features/review/services/agent.service.ts
+// src/services/agent.service.ts
 import { execFileSync } from "node:child_process";
 import { existsSync as existsSync4 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
@@ -57048,7 +57048,7 @@ var package_default = {
   }
 };
 
-// src/features/review/utils/render.util.ts
+// src/utils/render.util.ts
 import { createHash } from "node:crypto";
 var SUMMARY_MARKER = "<!-- shaft:summary -->";
 var VERDICTS = ["blocking", "needs-changes", "looks-good"];
@@ -57175,7 +57175,7 @@ function unposted(placed, reviewComments) {
   return placed.filter((p) => p.inline && !posted.has(p.fp));
 }
 
-// src/features/review/services/agent.service.ts
+// src/services/agent.service.ts
 var SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -57314,7 +57314,7 @@ ${JSON.stringify(raw, null, 2)}`);
   }
 }
 
-// src/features/review/services/context.service.ts
+// src/services/context.service.ts
 var comment = (c) => ({
   id: c.id,
   author: c.user?.login ?? "ghost",
@@ -57355,7 +57355,7 @@ async function collectContext(octokit, owner, repo, number) {
   };
 }
 
-// src/features/review/constants/procedure.md
+// src/consts/procedure.md
 var procedure_default = `# Review this pull request
 
 You are Shaft, reviewing one pull request. Walk the steps below in order. You only read: you
@@ -57439,7 +57439,7 @@ When "The previous review" below lists findings, check each one against the curr
 - \`not_checked\`: what you couldn't verify, e.g. no tests or builds were run.
 `;
 
-// src/features/review/services/review.service.ts
+// src/services/review.service.ts
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
 var MAX_DIFF = 200000;
 function buildPrompt(ctx, prior, o) {
@@ -57598,7 +57598,7 @@ ${clean(body)}`);
   };
 }
 
-// src/features/routing/services/route.service.ts
+// src/services/route.service.ts
 var REVIEW_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_review"];
 function route(eventName, payload, opts = {}) {
   const { mode = "auto", triggerPhrase = "@axonshaft" } = opts;
@@ -58817,7 +58817,7 @@ function createAppAuth(options) {
   });
 }
 
-// src/core/services/tokens.service.ts
+// src/services/tokens.service.ts
 async function resolveTokens(input, repo) {
   const { claudeCodeOauthToken: oauth, anthropicApiKey: apiKey, appId, privateKey } = input;
   if (!oauth === !apiKey) {
