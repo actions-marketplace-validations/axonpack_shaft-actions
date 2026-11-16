@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
+import { reportRun } from './services/api.service';
 import { reviewPullRequest } from './services/review.service';
 import { hasWriteAccess, route } from './services/route.service';
 import { resolveTokens } from './services/tokens.service';
@@ -19,6 +20,7 @@ function number(name: string): number {
 }
 
 async function run(): Promise<void> {
+  const started = Date.now();
   const r = route(context.eventName, context.payload, {
     mode: oneOf('mode', ['auto', 'review', 'task']),
     triggerPhrase: input('trigger_phrase'),
@@ -65,6 +67,10 @@ async function run(): Promise<void> {
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
+  // Only when /v1/token answered, which opened the run on the dashboard.
+  if (tokens.settings) {
+    await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, duration_ms: Date.now() - started });
+  }
 }
 
 run().catch((e) => core.setFailed(e instanceof Error ? e.message : String(e)));

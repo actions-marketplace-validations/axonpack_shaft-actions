@@ -35,7 +35,15 @@ export type ReviewOptions = {
   cwd: string;
 };
 
-export type ReviewOutcome = { verdict: string; findings: number; summaryUrl: string };
+export type ReviewOutcome = {
+  verdict: string;
+  findings: number;
+  summaryUrl: string;
+  /** For the run history on the dashboard. */
+  model: string;
+  effort: string;
+  bySeverity: { blocking: number; should_fix: number; nit: number };
+};
 
 /** One step down when the plan behind the token can't use the picked model. */
 const FALLBACK: Record<string, string> = { opus: 'sonnet,haiku', sonnet: 'haiku' };
@@ -177,5 +185,12 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== 'nit').length,
     summaryUrl: o.dryRun ? '' : (summary?.html_url ?? ''),
+    model: result.models.join(', '),
+    effort: choice.effort,
+    bySeverity: {
+      blocking: placed.filter((p) => p.severity === 'blocking').length,
+      should_fix: placed.filter((p) => p.severity === 'should-fix').length,
+      nit: placed.filter((p) => p.severity === 'nit').length,
+    },
   };
 }

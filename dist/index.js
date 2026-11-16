@@ -23733,6 +23733,57 @@ function getOctokit(token, options, ...additionalPlugins) {
   return new GitHubWithPlugins(getOctokitOptions(token, options));
 }
 
+// src/consts/api.const.ts
+var API_AUDIENCE = "https://api-shaft.axonpack.dev";
+var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
+var INSTALL_URL = "https://github.com/apps/axonshaft/installations/new";
+var DASHBOARD_URL = "https://shaft.axonpack.dev";
+
+// src/services/api.service.ts
+async function post(path, body) {
+  if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
+    throw new Error("Add `permissions: id-token: write` to the workflow, so Shaft can fetch its tokens from the Shaft API.");
+  }
+  const oidc = await getIDToken(API_AUDIENCE);
+  try {
+    return await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${oidc}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000)
+    });
+  } catch (e) {
+    throw new Error(`Couldn't reach the Shaft API at ${API_URL}: ${e.message}`);
+  }
+}
+async function fetchGrant() {
+  const res = await post("/v1/token", {});
+  if (res.status === 404)
+    throw new Error(`The AxonShaft app isn't installed on this repo. Install it: ${INSTALL_URL}`);
+  if (res.status === 429)
+    throw new Error(`The Shaft API rate-limited this repo. Retry-After: ${res.headers.get("retry-after") ?? "not given"}.`);
+  if (!res.ok) {
+    const why = res.status === 401 || res.status === 403 ? "refused this run's OIDC token" : "failed";
+    throw new Error(`The Shaft API ${why} (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  }
+  const grant = await res.json();
+  if (typeof grant?.github_token !== "string")
+    throw new Error("The Shaft API sent no github_token.");
+  setSecret(grant.github_token);
+  if (grant.claude_token)
+    setSecret(grant.claude_token.value);
+  return grant;
+}
+async function reportRun(summary) {
+  try {
+    const res = await post("/v1/runs", summary);
+    if (!res.ok)
+      throw new Error(`the API answered ${res.status}`);
+  } catch (e) {
+    warning(`Couldn't record the run on the Shaft API: ${e.message}`);
+  }
+}
+
 // src/utils/auto-pick.util.ts
 import { matchesGlob } from "node:path";
 var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
@@ -58379,7 +58430,14 @@ ${clean(body)}`);
   return {
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== "nit").length,
-    summaryUrl: o.dryRun ? "" : summary?.html_url ?? ""
+    summaryUrl: o.dryRun ? "" : summary?.html_url ?? "",
+    model: result.models.join(", "),
+    effort: choice.effort,
+    bySeverity: {
+      blocking: placed.filter((p) => p.severity === "blocking").length,
+      should_fix: placed.filter((p) => p.severity === "should-fix").length,
+      nit: placed.filter((p) => p.severity === "nit").length
+    }
   };
 }
 
@@ -59602,48 +59660,6 @@ function createAppAuth(options) {
   });
 }
 
-// src/consts/api.const.ts
-var API_AUDIENCE = "https://api-shaft.axonpack.dev";
-var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
-var INSTALL_URL = "https://github.com/apps/axonshaft/installations/new";
-var DASHBOARD_URL = "https://shaft.axonpack.dev";
-
-// src/services/api.service.ts
-async function post(path, body) {
-  if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
-    throw new Error("Add `permissions: id-token: write` to the workflow, so Shaft can fetch its tokens from the Shaft API.");
-  }
-  const oidc = await getIDToken(API_AUDIENCE);
-  try {
-    return await fetch(`${API_URL}${path}`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${oidc}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000)
-    });
-  } catch (e) {
-    throw new Error(`Couldn't reach the Shaft API at ${API_URL}: ${e.message}`);
-  }
-}
-async function fetchGrant() {
-  const res = await post("/v1/token", {});
-  if (res.status === 404)
-    throw new Error(`The AxonShaft app isn't installed on this repo. Install it: ${INSTALL_URL}`);
-  if (res.status === 429)
-    throw new Error(`The Shaft API rate-limited this repo. Retry-After: ${res.headers.get("retry-after") ?? "not given"}.`);
-  if (!res.ok) {
-    const why = res.status === 401 || res.status === 403 ? "refused this run's OIDC token" : "failed";
-    throw new Error(`The Shaft API ${why} (${res.status}): ${(await res.text()).slice(0, 200)}`);
-  }
-  const grant = await res.json();
-  if (typeof grant?.github_token !== "string")
-    throw new Error("The Shaft API sent no github_token.");
-  setSecret(grant.github_token);
-  if (grant.claude_token)
-    setSecret(grant.claude_token.value);
-  return grant;
-}
-
 // src/services/tokens.service.ts
 async function resolveTokens(input, repo) {
   const { claudeCodeOauthToken: oauth, anthropicApiKey: apiKey, appId, privateKey } = input;
@@ -59721,6 +59737,7 @@ function number(name) {
   return value;
 }
 async function run() {
+  const started = Date.now();
   const r = route(context2.eventName, context2.payload, {
     mode: oneOf("mode", ["auto", "review", "task"]),
     triggerPhrase: input("trigger_phrase")
@@ -59763,5 +59780,8 @@ async function run() {
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);
   setOutput("summary_url", out.summaryUrl);
+  if (tokens.settings) {
+    await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, duration_ms: Date.now() - started });
+  }
 }
 run().catch((e) => setFailed(e instanceof Error ? e.message : String(e)));
