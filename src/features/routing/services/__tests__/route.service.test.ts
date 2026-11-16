@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
-import type { Octokit } from '../src/core/types/octokit.type';
-import { hasWriteAccess, route } from '../src/features/routing/services/route.service';
+import type { Octokit } from '../../../../core/types/octokit.type';
+import { hasWriteAccess, route } from '../route.service';
 import comment from './fixtures/issue_comment.created.json';
 import fork from './fixtures/pull_request.fork.json';
 import opened from './fixtures/pull_request.opened.json';

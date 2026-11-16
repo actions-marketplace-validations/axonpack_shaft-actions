@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { parseReview } from '../src/features/review/services/agent.service';
+import { parseReview } from '../../services/agent.service';
 import {
   diffLines,
   type Finding,
@@ -13,7 +13,7 @@ import {
   stateLine,
   startSummary,
   unposted,
-} from '../src/features/review/utils/render.util';
+} from '../render.util';
 
 const patch = '@@ -40,4 +40,5 @@ export function retry() {\n   const max = 3;\n-  let attempt = max;\n+  let attempt = max;\n+  // retry\n   while (attempt < max) {\n   }';
 const files = [{ filename: 'src/retry.ts', patch }, { filename: 'src/retry.test.ts', patch: '@@ -1,1 +1,2 @@\n import x;\n+test();' }];

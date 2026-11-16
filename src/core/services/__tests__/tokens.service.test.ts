@@ -16,7 +16,7 @@ mock.module('@actions/github', () => ({
     },
   }),
 }));
-const { resolveTokens } = await import('../src/core/services/tokens.service');
+const { resolveTokens } = await import('../tokens.service');
 
 const repo = { owner: 'acme', repo: 'widgets' };
 beforeEach(() => {
