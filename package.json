@@ -1,5 +1,5 @@
 {
-  "name": "axonbot",
+  "name": "shaft",
   "version": "0.0.0",
   "private": true,
   "description": "A GitHub Action that reviews pull requests with Claude through the Claude Agent SDK.",

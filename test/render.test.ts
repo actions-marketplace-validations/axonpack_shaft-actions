@@ -83,7 +83,7 @@ test('dedupe: an inline finding already posted is not posted again', () => {
 test('the inline comment format', () => {
   const [p] = place(review.findings, files, 'summary');
   expect(inlineBody(p)).toBe(
-    `**Blocking** · correctness\n\na body\n\n\`\`\`suggestion\nlet attempt = 0;\n\`\`\`\n\n<!-- axonbot:finding ${p.fp} -->`,
+    `**Blocking** · correctness\n\na body\n\n\`\`\`suggestion\nlet attempt = 0;\n\`\`\`\n\n<!-- shaft:finding ${p.fp} -->`,
   );
 });
 
@@ -98,7 +98,7 @@ test('the summary format', () => {
     reason: '412 lines',
   });
   const [text, state] = [body.slice(0, body.lastIndexOf('\n')), body.slice(body.lastIndexOf('\n') + 1)];
-  expect(text).toBe(`<!-- axonbot:summary -->
+  expect(text).toBe(`<!-- shaft:summary -->
 **Needs changes** · Bug fix · 85% confidence
 
 \`retry()\` never retries, so the fix this PR is for does not take effect.
@@ -118,7 +118,7 @@ test('the summary format', () => {
 
 **Not checked:** no tests or builds were run.
 
-<sub>axonbot · reviewed \`a1b2c3d\` · [run](https://github.com/acme/widgets/actions/runs/1) · claude-sonnet-5 · medium · 412 lines</sub>`);
+<sub>Shaft · reviewed \`a1b2c3d\` · [run](https://github.com/acme/widgets/actions/runs/1) · claude-sonnet-5 · medium · 412 lines</sub>`);
   expect(parseState(state)).toEqual({
     sha: 'a1b2c3d4e5f6',
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),
@@ -132,7 +132,7 @@ test('a looks-good review with no findings has no Findings section', () => {
     effort: 'low',
     reason: '3 lines, docs and config only',
   });
-  expect(body).toStartWith('<!-- axonbot:summary -->\n**Looks good** · Bug fix');
+  expect(body).toStartWith('<!-- shaft:summary -->\n**Looks good** · Bug fix');
   expect(body).not.toContain('**Findings**');
 });
 
@@ -140,13 +140,13 @@ test('the state line survives a title with --> in it', () => {
   const state = { sha: 'abc', findings: [{ fp: '123456', file: 'a.ts', line: 1, severity: 'nit' as const, title: 'x --> y' }] };
   expect(stateLine(state)).not.toContain('x -->');
   expect(parseState(`text\n${stateLine(state)}`)).toEqual(state);
-  expect(parseState('<!-- axonbot:state {broken -->')).toBeUndefined();
+  expect(parseState('<!-- shaft:state {broken -->')).toBeUndefined();
 });
 
 test('the start text keeps the previous state', () => {
   const prior = { sha: 'abc', findings: [] };
   expect(parseState(startSummary('a1b2c3d4e5', prior))).toEqual(prior);
-  expect(startSummary('a1b2c3d4e5')).toBe('<!-- axonbot:summary -->\nReviewing `a1b2c3d`…');
+  expect(startSummary('a1b2c3d4e5')).toBe('<!-- shaft:summary -->\nReviewing `a1b2c3d`…');
 });
 
 test('redact replaces every secret', () => {

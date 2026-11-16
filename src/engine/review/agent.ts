@@ -76,7 +76,7 @@ function claudeBinary(): string | undefined {
     return createRequire(import.meta.url).resolve(file); // running from source, with node_modules
   } catch {}
   // ponytail: glibc only; a musl runner (Alpine) needs the -musl package
-  const dir = join(process.env.RUNNER_TEMP ?? tmpdir(), 'axonbot-claude');
+  const dir = join(process.env.RUNNER_TEMP ?? tmpdir(), 'shaft-claude');
   const bin = join(dir, 'node_modules', file);
   if (!existsSync(bin)) {
     core.info(`Installing ${name}@${SDK_VERSION}`);
@@ -89,7 +89,7 @@ function claudeBinary(): string | undefined {
 function cliEnv(claude: ClaudeToken): Record<string, string | undefined> {
   const drop = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$|CLAUDE_CODE_OAUTH_TOKEN$)/;
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !drop.test(k)));
-  return { ...env, [claude.env]: claude.value, CLAUDE_AGENT_SDK_CLIENT_APP: `axonbot/${pkg.version}` };
+  return { ...env, [claude.env]: claude.value, CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}` };
 }
 
 const deepAgents = (model: string, effort: EffortLevel): Record<string, AgentDefinition> =>

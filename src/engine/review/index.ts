@@ -75,7 +75,7 @@ async function resolveThreads(octokit: Octokit, ctx: Context, fps: string[]): Pr
     { owner: ctx.owner, repo: ctx.repo, n: ctx.pr.number },
   );
   for (const t of data.repository.pullRequest.reviewThreads.nodes) {
-    const fp = /axonbot:finding (\w+)/.exec(t.comments.nodes[0]?.body ?? '')?.[1];
+    const fp = /shaft:finding (\w+)/.exec(t.comments.nodes[0]?.body ?? '')?.[1];
     if (!t.isResolved && fp && fps.includes(fp)) {
       await octokit.graphql('mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}', { id: t.id });
     }
@@ -147,7 +147,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
         pull_number: ctx.pr.number,
         commit_id: sha,
         event: 'COMMENT',
-        body: `axonbot left ${comments.length} new comment${comments.length === 1 ? '' : 's'} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
+        body: `Shaft left ${comments.length} new comment${comments.length === 1 ? '' : 's'} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
         comments,
       });
     } catch (e) {

@@ -17,7 +17,7 @@ export type PickInput = {
   mode: 'review' | 'task';
   depth?: string;
   files?: ChangedFile[];
-  /** From `.github/axonbot.yml` (Phase 3); empty until then. */
+  /** From `.github/shaft.yml` (Phase 3); empty until then. */
   focus?: string[];
   skip?: string[];
   model?: string;

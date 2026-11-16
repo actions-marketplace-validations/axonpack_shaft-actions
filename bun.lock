@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "axonbot",
+      "name": "shaft",
       "dependencies": {
         "@actions/core": "^3.0.1",
         "@actions/github": "^9.1.1",

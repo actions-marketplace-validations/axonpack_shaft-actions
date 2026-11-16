@@ -15,7 +15,7 @@ export function route(
   payload: any,
   opts: { mode?: string; triggerPhrase?: string } = {},
 ): Route {
-  const { mode = 'auto', triggerPhrase = '@axonbot' } = opts;
+  const { mode = 'auto', triggerPhrase = '@shaft' } = opts;
   const pr = payload.pull_request;
   const number: number | undefined = pr?.number ?? payload.issue?.number;
 
@@ -46,7 +46,7 @@ export function route(
       : eventName === 'pull_request_review'
         ? payload.action === 'submitted' && payload.review?.body
         : undefined;
-  if (typeof text !== 'string' || !text.includes(triggerPhrase)) return { mode: 'skip', reason: `${eventName} has nothing for axonbot.` };
+  if (typeof text !== 'string' || !text.includes(triggerPhrase)) return { mode: 'skip', reason: `${eventName} has nothing for Shaft.` };
   if (payload.sender?.type === 'Bot') return { mode: 'skip', reason: 'Comments from bots never start a task.' };
   return { mode: 'task', number: number!, actor: payload.sender.login };
 }

@@ -1,4 +1,4 @@
-name: axonbot
+name: Shaft
 description: Review pull requests with Claude, on your own runners and your own Claude token.
 author: axonpack
 
@@ -38,7 +38,7 @@ inputs:
   trigger_phrase:
     description: What a comment must contain to start a task.
     required: false
-    default: "@axonbot"
+    default: "@shaft"
   max_turns:
     description: Agent SDK turn limit per run.
     required: false
@@ -57,7 +57,7 @@ inputs:
   config_path:
     description: Where the repo's review rules live.
     required: false
-    default: .github/axonbot.yml
+    default: .github/shaft.yml
   dry_run:
     description: Print the summary and inline comments to the job log instead of posting them.
     required: false

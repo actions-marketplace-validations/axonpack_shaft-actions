@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const SUMMARY_MARKER = '<!-- axonbot:summary -->';
+export const SUMMARY_MARKER = '<!-- shaft:summary -->';
 
 export const VERDICTS = ['blocking', 'needs-changes', 'looks-good'] as const;
 export const SEVERITIES = ['blocking', 'should-fix', 'nit'] as const;
@@ -87,16 +87,16 @@ const fence = (s: string, lang = '') => `\`\`\`${lang}\n${s.replace(/\n$/, '')}\
 export function inlineBody(f: Placed): string {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, f.body];
   if (f.suggestion) parts.push(fence(f.suggestion, 'suggestion'));
-  return `${parts.join('\n\n')}\n\n<!-- axonbot:finding ${f.fp} -->`;
+  return `${parts.join('\n\n')}\n\n<!-- shaft:finding ${f.fp} -->`;
 }
 
 /** Hidden JSON can't contain `-->`; `>` only appears inside JSON strings, so escaping it stays valid JSON. */
 export function stateLine(state: State): string {
-  return `<!-- axonbot:state ${JSON.stringify(state).replace(/>/g, '\\u003e')} -->`;
+  return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, '\\u003e')} -->`;
 }
 
 export function parseState(body: string | undefined): State | undefined {
-  const m = body && /<!-- axonbot:state (.*?) -->/s.exec(body);
+  const m = body && /<!-- shaft:state (.*?) -->/s.exec(body);
   if (!m) return;
   try {
     return JSON.parse(m[1]);
@@ -109,7 +109,7 @@ export type Footer = { sha: string; runUrl?: string; models: string; effort: str
 
 function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
-  return `<sub>axonbot · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  return `<sub>Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
 }
 
 export function startSummary(sha: string, prior?: State): string {
@@ -168,6 +168,6 @@ export function redact(text: string, secrets: string[]): string {
 
 /** Inline findings that no earlier run posted, judged by the fingerprints in the PR's review comments. */
 export function unposted(placed: Placed[], reviewComments: { body: string }[]): Placed[] {
-  const posted = new Set(reviewComments.flatMap((c) => [...c.body.matchAll(/<!-- axonbot:finding (\w+) -->/g)].map((m) => m[1])));
+  const posted = new Set(reviewComments.flatMap((c) => [...c.body.matchAll(/<!-- shaft:finding (\w+) -->/g)].map((m) => m[1])));
   return placed.filter((p) => p.inline && !posted.has(p.fp));
 }

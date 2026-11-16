@@ -57021,7 +57021,7 @@ qe();
 qe();
 // package.json
 var package_default = {
-  name: "axonbot",
+  name: "shaft",
   version: "0.0.0",
   private: true,
   description: "A GitHub Action that reviews pull requests with Claude through the Claude Agent SDK.",
@@ -57046,7 +57046,7 @@ var package_default = {
 
 // src/engine/review/render.ts
 import { createHash } from "node:crypto";
-var SUMMARY_MARKER = "<!-- axonbot:summary -->";
+var SUMMARY_MARKER = "<!-- shaft:summary -->";
 var VERDICTS = ["blocking", "needs-changes", "looks-good"];
 var SEVERITIES = ["blocking", "should-fix", "nit"];
 var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security"];
@@ -57095,13 +57095,13 @@ function inlineBody(f) {
 
 `)}
 
-<!-- axonbot:finding ${f.fp} -->`;
+<!-- shaft:finding ${f.fp} -->`;
 }
 function stateLine(state) {
-  return `<!-- axonbot:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
+  return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
 }
 function parseState(body) {
-  const m = body && /<!-- axonbot:state (.*?) -->/s.exec(body);
+  const m = body && /<!-- shaft:state (.*?) -->/s.exec(body);
   if (!m)
     return;
   try {
@@ -57112,7 +57112,7 @@ function parseState(body) {
 }
 function footer(f) {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  return `<sub>axonbot · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  return `<sub>Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
 }
 function startSummary(sha, prior) {
   return [SUMMARY_MARKER, `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
@@ -57167,7 +57167,7 @@ function redact(text, secrets) {
   return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join("***"), text);
 }
 function unposted(placed, reviewComments) {
-  const posted = new Set(reviewComments.flatMap((c) => [...c.body.matchAll(/<!-- axonbot:finding (\w+) -->/g)].map((m) => m[1])));
+  const posted = new Set(reviewComments.flatMap((c) => [...c.body.matchAll(/<!-- shaft:finding (\w+) -->/g)].map((m) => m[1])));
   return placed.filter((p) => p.inline && !posted.has(p.fp));
 }
 
@@ -57224,7 +57224,7 @@ function claudeBinary() {
   try {
     return createRequire2(import.meta.url).resolve(file);
   } catch {}
-  const dir = join2(process.env.RUNNER_TEMP ?? tmpdir(), "axonbot-claude");
+  const dir = join2(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
   const bin = join2(dir, "node_modules", file);
   if (!existsSync4(bin)) {
     info(`Installing ${name}@${SDK_VERSION}`);
@@ -57235,7 +57235,7 @@ function claudeBinary() {
 function cliEnv(claude) {
   const drop = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$|CLAUDE_CODE_OAUTH_TOKEN$)/;
   const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !drop.test(k)));
-  return { ...env, [claude.env]: claude.value, CLAUDE_AGENT_SDK_CLIENT_APP: `axonbot/${package_default.version}` };
+  return { ...env, [claude.env]: claude.value, CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}` };
 }
 var deepAgents = (model, effort) => Object.fromEntries([
   ["correctness", "step 3: logic errors, wrong conditions, missing await, off-by-one, null and empty cases, swallowed errors, races, leaks"],
@@ -57354,7 +57354,7 @@ async function collectContext(octokit, owner, repo, number) {
 // src/engine/review/procedure.md
 var procedure_default = `# Review this pull request
 
-You are axonbot, reviewing one pull request. Walk the steps below in order. You only read: you
+You are Shaft, reviewing one pull request. Walk the steps below in order. You only read: you
 never edit files, install anything or run the PR's code. Your reply is the JSON the output schema
 asks for, nothing else. Our code posts it to GitHub; you never call GitHub yourself.
 
@@ -57492,7 +57492,7 @@ ${diff}
 async function resolveThreads(octokit, ctx, fps) {
   const data = await octokit.graphql("query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{body}}}}}}}", { owner: ctx.owner, repo: ctx.repo, n: ctx.pr.number });
   for (const t of data.repository.pullRequest.reviewThreads.nodes) {
-    const fp = /axonbot:finding (\w+)/.exec(t.comments.nodes[0]?.body ?? "")?.[1];
+    const fp = /shaft:finding (\w+)/.exec(t.comments.nodes[0]?.body ?? "")?.[1];
     if (!t.isResolved && fp && fps.includes(fp)) {
       await octokit.graphql("mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: t.id });
     }
@@ -57559,7 +57559,7 @@ ${c.body}`);
         pull_number: ctx.pr.number,
         commit_id: sha,
         event: "COMMENT",
-        body: `axonbot left ${comments.length} new comment${comments.length === 1 ? "" : "s"} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
+        body: `Shaft left ${comments.length} new comment${comments.length === 1 ? "" : "s"} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
         comments
       });
     } catch (e) {
@@ -57597,7 +57597,7 @@ ${clean(body)}`);
 // src/engine/route.ts
 var REVIEW_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_review"];
 function route(eventName, payload, opts = {}) {
-  const { mode = "auto", triggerPhrase = "@axonbot" } = opts;
+  const { mode = "auto", triggerPhrase = "@shaft" } = opts;
   const pr = payload.pull_request;
   const number = pr?.number ?? payload.issue?.number;
   if (mode === "review") {
@@ -57624,7 +57624,7 @@ function route(eventName, payload, opts = {}) {
   }
   const text = eventName === "issue_comment" || eventName === "pull_request_review_comment" ? payload.action === "created" && payload.comment?.body : eventName === "pull_request_review" ? payload.action === "submitted" && payload.review?.body : undefined;
   if (typeof text !== "string" || !text.includes(triggerPhrase))
-    return { mode: "skip", reason: `${eventName} has nothing for axonbot.` };
+    return { mode: "skip", reason: `${eventName} has nothing for Shaft.` };
   if (payload.sender?.type === "Bot")
     return { mode: "skip", reason: "Comments from bots never start a task." };
   return { mode: "task", number, actor: payload.sender.login };
