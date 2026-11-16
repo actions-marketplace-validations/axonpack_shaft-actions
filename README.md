@@ -84,6 +84,8 @@ bun test
 bun run build   # writes dist/index.js, which is committed
 ```
 
+How the code is laid out and how files are named: [CONVENTIONS.md](CONVENTIONS.md).
+
 ## License
 
 MIT
