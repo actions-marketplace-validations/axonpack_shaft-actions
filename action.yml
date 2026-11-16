@@ -1,0 +1,76 @@
+name: axonbot
+description: Review pull requests with Claude, on your own runners and your own Claude token.
+author: axonpack
+
+inputs:
+  claude_code_oauth_token:
+    description: A Claude Pro or Max plan token, from `claude setup-token`. Set exactly one of this or anthropic_api_key.
+    required: false
+  anthropic_api_key:
+    description: An Anthropic Console API key. Set exactly one of this or claude_code_oauth_token.
+    required: false
+  app_id:
+    description: Post as this GitHub App. Set both app_id and private_key, or neither.
+    required: false
+  private_key:
+    description: The private key of the GitHub App in app_id.
+    required: false
+  github_token:
+    description: The token used when there are no app inputs.
+    required: false
+    default: ${{ github.token }}
+  model:
+    description: "`auto` picks per run. Or any Claude model ID or alias (opus, sonnet, haiku)."
+    required: false
+    default: auto
+  effort:
+    description: "`auto` picks per run. Or low, medium, high, xhigh, max."
+    required: false
+    default: auto
+  depth:
+    description: "`standard`: one session walks the review steps. `deep`: correctness, breakage and security run as separate subagents, then a verifier. About 3x the cost."
+    required: false
+    default: standard
+  mode:
+    description: "`auto` picks from the event. `review` or `task` forces one."
+    required: false
+    default: auto
+  trigger_phrase:
+    description: What a comment must contain to start a task.
+    required: false
+    default: "@axonbot"
+  max_turns:
+    description: Agent SDK turn limit per run.
+    required: false
+    default: "30"
+  timeout_minutes:
+    description: The run stops after this many minutes and posts what it has.
+    required: false
+    default: "15"
+  nits:
+    description: "`summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them."
+    required: false
+    default: summary
+  task_tools:
+    description: Extra tools for task mode, e.g. `Bash(bun test:*),Bash(bun run lint)`. Review mode never gets these.
+    required: false
+  config_path:
+    description: Where the repo's review rules live.
+    required: false
+    default: .github/axonbot.yml
+  dry_run:
+    description: Print the summary and inline comments to the job log instead of posting them.
+    required: false
+    default: "false"
+
+outputs:
+  verdict:
+    description: blocking, needs-changes or looks-good.
+  findings:
+    description: The number of blocking and should-fix findings.
+  summary_url:
+    description: The URL of the summary comment. Empty on a dry run.
+
+runs:
+  using: node24
+  main: dist/index.js
