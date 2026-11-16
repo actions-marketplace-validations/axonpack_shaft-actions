@@ -2,7 +2,7 @@
 
 A GitHub Action that reviews pull requests with Claude. It runs the Claude Agent SDK on your own GitHub runners with your own Claude token. The model reads the code and returns its findings as JSON; the action posts one summary comment, which it edits on every push, and one review with inline comments.
 
-Task mode (`@shaft fix ...` in a comment) is not built yet.
+Task mode (`@axonshaft fix ...` in a comment) is not built yet.
 
 ## Setup
 
@@ -37,7 +37,7 @@ Task mode (`@shaft fix ...` in a comment) is not built yet.
 
 By default the comments come from `github-actions[bot]`. To post as your own GitHub App, give it contents, pull requests and issues (write) and metadata (read), install it on the repo, and pass its `app_id` and `private_key`.
 
-A pull request from a fork gets no secrets, so Shaft skips it and leaves a notice in the log.
+A pull request from a fork gets no secrets, so Shaft skips it and leaves a notice in the log: a maintainer can comment `@axonshaft review` instead.
 
 ## Inputs
 
@@ -53,7 +53,7 @@ Only the Claude token is required.
 | `effort` | `auto` | `auto` picks from the diff. Or `low`, `medium`, `high`, `xhigh`, `max`. |
 | `depth` | `standard` | `standard` runs one session. `deep` runs correctness, breakage and security as separate subagents, then a verifier, for about 3x the cost. |
 | `mode` | `auto` | `auto` picks from the event. `review` or `task` forces one, for example in a `workflow_dispatch` run. |
-| `trigger_phrase` | `@shaft` | What a comment must contain to start a task. |
+| `trigger_phrase` | `@axonshaft` | What a comment must contain to start a task. |
 | `max_turns` | `30` | The Agent SDK turn limit per run. |
 | `timeout_minutes` | `15` | The run stops after this long and says so in the summary. |
 | `nits` | `summary` | `summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. |

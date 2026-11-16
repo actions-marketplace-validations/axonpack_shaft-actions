@@ -15,7 +15,7 @@ export function route(
   payload: any,
   opts: { mode?: string; triggerPhrase?: string } = {},
 ): Route {
-  const { mode = 'auto', triggerPhrase = '@shaft' } = opts;
+  const { mode = 'auto', triggerPhrase = '@axonshaft' } = opts;
   const pr = payload.pull_request;
   const number: number | undefined = pr?.number ?? payload.issue?.number;
 

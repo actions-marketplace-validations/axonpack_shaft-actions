@@ -57597,7 +57597,7 @@ ${clean(body)}`);
 // src/engine/route.ts
 var REVIEW_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_review"];
 function route(eventName, payload, opts = {}) {
-  const { mode = "auto", triggerPhrase = "@shaft" } = opts;
+  const { mode = "auto", triggerPhrase = "@axonshaft" } = opts;
   const pr = payload.pull_request;
   const number = pr?.number ?? payload.issue?.number;
   if (mode === "review") {

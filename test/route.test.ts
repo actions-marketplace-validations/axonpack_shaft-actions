@@ -20,7 +20,7 @@ test('other pull_request actions exit quietly', () => {
 });
 
 test('a PR from a fork is skipped with a notice', () => {
-  expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true });
+  expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true, reason: expect.stringContaining('"@axonshaft review"') });
 });
 
 test('comments and reviews with the trigger phrase: task', () => {
