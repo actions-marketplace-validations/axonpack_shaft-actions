@@ -1,22 +1,22 @@
 name: Shaft
-description: Review pull requests with Claude, on your own runners and your own Claude token.
+description: Review pull requests with Claude, on your own runners. Needs `permissions: id-token: write` to fetch its tokens from shaft.axonpack.dev.
 author: axonpack
 
 inputs:
   claude_code_oauth_token:
-    description: A Claude Pro or Max plan token, from `claude setup-token`. Set exactly one of this or anthropic_api_key.
+    description: Optional. A Claude Pro or Max plan token, from `claude setup-token`, used instead of the token saved on shaft.axonpack.dev. Set at most one of this or anthropic_api_key.
     required: false
   anthropic_api_key:
-    description: An Anthropic Console API key. Set exactly one of this or claude_code_oauth_token.
+    description: Optional. An Anthropic Console API key, used instead of the token saved on shaft.axonpack.dev. Set at most one of this or claude_code_oauth_token.
     required: false
   app_id:
-    description: Post as this GitHub App. Set both app_id and private_key, or neither.
+    description: Optional. Post as this GitHub App instead of AxonShaft. Set both app_id and private_key, or neither.
     required: false
   private_key:
     description: The private key of the GitHub App in app_id.
     required: false
   github_token:
-    description: The token used when there are no app inputs.
+    description: Used when there are no app inputs and the Shaft API can't be reached. Comments then come from github-actions[bot].
     required: false
     default: ${{ github.token }}
   model:
