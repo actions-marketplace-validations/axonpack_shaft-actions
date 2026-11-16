@@ -51,7 +51,7 @@ inputs:
     description: Extra tools for task mode, e.g. `Bash(bun test:*),Bash(bun run lint)`. Review mode never gets these.
     required: false
   config_path:
-    description: Where the repo's review rules live.
+    description: Where the repo's review rules (rules, skip, focus) live. Read from the PR's base branch, so a PR can't change its own rules.
     required: false
     default: .github/shaft.yml
   dry_run:

@@ -67,10 +67,35 @@ None are required. Each setting comes from the first place that sets it: the inp
 | `timeout_minutes` | `15` | The run stops after this long and says so in the summary. |
 | `nits` | `summary` | `summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. |
 | `task_tools` | | Extra tools for task mode, such as `Bash(bun test:*)`. Review mode never gets them. |
-| `config_path` | `.github/shaft.yml` | The repo's review rules, which the model reads before it reviews. |
+| `config_path` | `.github/shaft.yml` | Where the repo's review rules live. Shaft reads the base branch's copy. |
 | `dry_run` | `false` | Print the summary and inline comments to the job log instead of posting them. |
 
-With `model: auto`, a small change gets `sonnet`, docs and config get `haiku`, and large or sensitive changes (auth, crypto, payments, workflows, migrations, dependency changes) get `opus`. The summary footer shows the model, the effort and the reason.
+With `model: auto`, a small change gets `sonnet`, docs and config get `haiku`, and large or sensitive changes (auth, crypto, payments, workflows, migrations, dependency changes, or a `focus` path) get `opus`. The summary footer shows the model, the effort and the reason.
+
+## Review rules (`.github/shaft.yml`)
+
+A repo can add its own review rules in `.github/shaft.yml`:
+
+```yaml
+rules: |
+  Every user-facing change needs a changeset.
+  New API routes need a test for the 401 case.
+skip:
+  - "**/generated/**"
+  - "**/*.snap"
+focus:
+  - "src/billing/**"
+```
+
+- `rules` is free text the model applies along with its own review steps. Its safety rules (it never runs the PR's code or posts a secret) still win.
+- `skip` lists globs for changed files to leave out of the review. The summary says how many files were skipped. When neither the dashboard nor this file sets `skip`, Shaft skips lockfiles and generated files: `**/*.lock`, `**/package-lock.json`, `**/pnpm-lock.yaml`, `**/dist/**`, `**/*.min.js` and `**/*.snap`. Setting `skip` replaces that list, and `skip: []` reviews everything.
+- `focus` lists globs for files that get a closer look. The model is told which changed files match, and with `model: auto` a match picks `opus` with `high` effort.
+
+Globs match the whole path from the repo root, so `*.snap` only matches at the root and `**/*.snap` matches in any folder.
+
+Shaft reads the file from the PR's base branch, so a PR can't change the rules its own review uses. A change to the file applies once it is merged.
+
+Rules saved on the dashboard come first and the file's rules are added after them. For `skip` and `focus`, a list set on the dashboard replaces the file's. Other keys in the file are ignored with a warning in the log, and a file that isn't valid YAML, or a key with the wrong type, fails the run with a message naming the problem.
 
 ### Errors from the Shaft API
 
