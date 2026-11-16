@@ -20,17 +20,14 @@ inputs:
     required: false
     default: ${{ github.token }}
   model:
-    description: "`auto` picks per run. Or any Claude model ID or alias (opus, sonnet, haiku)."
+    description: "`auto` picks per run. Or any Claude model ID or alias (opus, sonnet, haiku). Default: auto, unless set on shaft.axonpack.dev."
     required: false
-    default: auto
   effort:
-    description: "`auto` picks per run. Or low, medium, high, xhigh, max."
+    description: "`auto` picks per run. Or low, medium, high, xhigh, max. Default: auto, unless set on shaft.axonpack.dev."
     required: false
-    default: auto
   depth:
-    description: "`standard`: one session walks the review steps. `deep`: correctness, breakage and security run as separate subagents, then a verifier. About 3x the cost."
+    description: "`standard`: one session walks the review steps. `deep`: correctness, breakage and security run as separate subagents, then a verifier. About 3x the cost. Default: standard, unless set on shaft.axonpack.dev."
     required: false
-    default: standard
   mode:
     description: "`auto` picks from the event. `review` or `task` forces one."
     required: false
@@ -48,9 +45,8 @@ inputs:
     required: false
     default: "15"
   nits:
-    description: "`summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them."
+    description: "`summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. Default: summary, unless set on shaft.axonpack.dev."
     required: false
-    default: summary
   task_tools:
     description: Extra tools for task mode, e.g. `Bash(bun test:*),Bash(bun run lint)`. Review mode never gets these.
     required: false

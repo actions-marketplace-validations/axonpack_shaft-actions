@@ -59695,10 +59695,21 @@ async function resolveTokens(input, repo) {
   return { claude, github, via, settings: grant && (grant.settings ?? {}) };
 }
 
+// src/consts/settings.const.ts
+var SETTING_DEFAULTS = { model: "auto", effort: "auto", depth: "standard", nits: "summary" };
+
+// src/utils/settings.util.ts
+function mergeSettings(input, dashboard = {}) {
+  const pick = (name) => {
+    const saved = dashboard[name];
+    return input(name) || typeof saved === "string" && saved || SETTING_DEFAULTS[name];
+  };
+  return { model: pick("model"), effort: pick("effort"), depth: pick("depth"), nits: pick("nits") };
+}
+
 // src/main.ts
 var input = (name) => getInput(name);
-function oneOf(name, allowed) {
-  const value = input(name);
+function oneOf(name, allowed, value = input(name)) {
   if (!allowed.includes(value))
     throw new Error(`${name} must be one of ${allowed.join(", ")}, not "${value}".`);
   return value;
@@ -59730,6 +59741,7 @@ async function run() {
       return notice(`${r.actor} has no write access, so no task was started.`);
     return notice("Task mode is not built yet.");
   }
+  const settings = mergeSettings(input, tokens.settings);
   const out = await reviewPullRequest({
     octokit,
     owner,
@@ -59737,10 +59749,10 @@ async function run() {
     number: r.number,
     claude: tokens.claude,
     secrets: [tokens.claude.value, tokens.github, Buffer.from(`x-access-token:${tokens.github}`).toString("base64")],
-    model: input("model"),
-    effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"]),
-    depth: oneOf("depth", ["standard", "deep"]),
-    nits: oneOf("nits", ["summary", "inline", "off"]),
+    model: settings.model,
+    effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"], settings.effort),
+    depth: oneOf("depth", ["standard", "deep"], settings.depth),
+    nits: oneOf("nits", ["summary", "inline", "off"], settings.nits),
     maxTurns: number("max_turns"),
     timeoutMinutes: number("timeout_minutes"),
     configPath: input("config_path"),

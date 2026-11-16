@@ -3,11 +3,11 @@ import { context, getOctokit } from '@actions/github';
 import { reviewPullRequest } from './services/review.service';
 import { hasWriteAccess, route } from './services/route.service';
 import { resolveTokens } from './services/tokens.service';
+import { mergeSettings } from './utils/settings.util';
 
 const input = (name: string) => core.getInput(name);
 
-function oneOf(name: string, allowed: string[]): string {
-  const value = input(name);
+function oneOf(name: string, allowed: string[], value = input(name)): string {
   if (!allowed.includes(value)) throw new Error(`${name} must be one of ${allowed.join(', ')}, not "${value}".`);
   return value;
 }
@@ -43,6 +43,7 @@ async function run(): Promise<void> {
     return core.notice('Task mode is not built yet.');
   }
 
+  const settings = mergeSettings(input, tokens.settings);
   const out = await reviewPullRequest({
     octokit,
     owner,
@@ -50,10 +51,10 @@ async function run(): Promise<void> {
     number: r.number,
     claude: tokens.claude,
     secrets: [tokens.claude.value, tokens.github, Buffer.from(`x-access-token:${tokens.github}`).toString('base64')],
-    model: input('model'),
-    effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max']),
-    depth: oneOf('depth', ['standard', 'deep']),
-    nits: oneOf('nits', ['summary', 'inline', 'off']),
+    model: settings.model,
+    effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
+    depth: oneOf('depth', ['standard', 'deep'], settings.depth),
+    nits: oneOf('nits', ['summary', 'inline', 'off'], settings.nits),
     maxTurns: number('max_turns'),
     timeoutMinutes: number('timeout_minutes'),
     configPath: input('config_path'),
