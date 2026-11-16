@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, test } from 'vitest';
 import { type ChangedFile, pick } from '../auto-pick.util';
 
 const file = (filename: string, lines = 10, patch?: string): ChangedFile => ({ filename, additions: lines, deletions: 0, patch });

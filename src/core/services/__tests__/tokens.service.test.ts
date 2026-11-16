@@ -1,15 +1,15 @@
-import { beforeEach, expect, mock, test } from 'bun:test';
+import { beforeEach, expect, test, vi } from 'vitest';
 
 const masked: string[] = [];
 const calls: unknown[] = [];
-mock.module('@actions/core', () => ({ setSecret: (s: string) => masked.push(s) }));
-mock.module('@octokit/auth-app', () => ({
+vi.doMock('@actions/core', () => ({ setSecret: (s: string) => masked.push(s) }));
+vi.doMock('@octokit/auth-app', () => ({
   createAppAuth: (opts: unknown) => async () => {
     calls.push(opts);
     return { token: 'app-jwt' };
   },
 }));
-mock.module('@actions/github', () => ({
+vi.doMock('@actions/github', () => ({
   getOctokit: (token: string) => ({
     rest: {
       apps: {

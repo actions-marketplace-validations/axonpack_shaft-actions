@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, test } from 'vitest';
 import { parseReview } from '../../services/agent.service';
 import {
   diffLines,
@@ -132,7 +132,7 @@ test('a looks-good review with no findings has no Findings section', () => {
     effort: 'low',
     reason: '3 lines, docs and config only',
   });
-  expect(body).toStartWith('<!-- shaft:summary -->\n**Looks good** · Bug fix');
+  expect(body.startsWith('<!-- shaft:summary -->\n**Looks good** · Bug fix')).toBe(true);
   expect(body).not.toContain('**Findings**');
 });
 

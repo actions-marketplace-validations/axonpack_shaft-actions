@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { expect, test } from 'vitest';
 import type { Octokit } from '../../../../core/types/octokit.type';
 import { hasWriteAccess, route } from '../route.service';
 import comment from './fixtures/issue_comment.created.json';
