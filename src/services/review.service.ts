@@ -142,14 +142,22 @@ export function buildPrompt(
     .join('\n\n');
 }
 
-async function resolveThreads(octokit: Octokit, ctx: Context, fps: string[]): Promise<void> {
+/**
+ * Resolve the threads of fixed findings. Only a thread `bot` started counts, by the marker at the
+ * end of its first comment, the same rule as `unposted`: anyone else's thread with our marker in it
+ * stays open.
+ */
+export async function resolveThreads(octokit: Octokit, ctx: Context, fps: string[], bot: string): Promise<void> {
   // ponytail: the first 100 threads; page through them if a PR ever has more
   const data: any = await octokit.graphql(
-    'query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{body}}}}}}}',
+    'query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{body author{__typename login}}}}}}}}',
     { owner: ctx.owner, repo: ctx.repo, n: ctx.pr.number },
   );
   for (const t of data.repository.pullRequest.reviewThreads.nodes) {
-    const fp = /shaft:finding (\w+)/.exec(t.comments.nodes[0]?.body ?? '')?.[1];
+    const first = t.comments.nodes[0];
+    // GraphQL names a bot without the `[bot]` that REST adds.
+    const author = first?.author && (first.author.__typename === 'Bot' ? `${first.author.login}[bot]` : first.author.login);
+    const fp = author === bot ? /<!-- shaft:finding (\w+) -->\s*$/.exec(first.body ?? '')?.[1] : undefined;
     if (!t.isResolved && fp && fps.includes(fp)) {
       await octokit.graphql('mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}', { id: t.id });
     }
@@ -257,7 +265,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun) core.info(`Would resolve the threads of ${fixed.join(', ')}`);
   else if (fixed.length) {
-    await resolveThreads(octokit, ctx, fixed).catch((e) => core.warning(`Resolving fixed threads failed: ${e.message}`));
+    await resolveThreads(octokit, ctx, fixed, o.bot).catch((e) => core.warning(`Resolving fixed threads failed: ${e.message}`));
   }
 
   return {

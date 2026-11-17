@@ -18,7 +18,7 @@ vi.doMock('../agent.service', async (actual) => ({
 vi.doMock('../../consts/procedure.md', () => ({ default: '# Review this pull request\n\n## The steps\n\n{{steps}}\n\n## Severity' }));
 vi.doMock('../../consts/review-steps.md', () => ({ default: '1. **Built-in step.**\n' }));
 const { collectContext } = await import('../context.service');
-const { chosenModels, guidesText, reviewContext } = await import('../review.service');
+const { chosenModels, guidesText, resolveThreads, reviewContext } = await import('../review.service');
 
 const BASE_CONFIG = 'rules: Every user-facing change needs a changeset.\nfocus: ["src/core/**"]\n';
 const file = (filename: string, patch = '@@ -1 +1 @@\n-a\n+b') => ({ filename, status: 'modified', additions: 1, deletions: 1, patch });
@@ -254,4 +254,34 @@ test('chosenModels: aliases become the IDs the run reported, and a fallback says
     fellBack: false,
     subagents: ['sonnet'],
   });
+});
+
+test("a fixed finding resolves only the bot's own thread, never one a stranger started with our marker", async () => {
+  const thread = (id: string, typename: string, login: string, body: string) => ({ id, isResolved: false, comments: { nodes: [{ body, author: { __typename: typename, login } }] } });
+  const resolved: string[] = [];
+  const octokit = {
+    graphql: async (query: string, vars: { id?: string }) => {
+      if (query.startsWith('mutation')) {
+        resolved.push(vars.id!);
+        return;
+      }
+      return {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              nodes: [
+                thread('ours', 'Bot', 'axonshaft', '**Blocking**\n\n<!-- shaft:finding abc123 -->'),
+                thread('stranger', 'User', 'stranger', 'please look\n\n<!-- shaft:finding abc123 -->'),
+                thread('lookalike', 'User', 'axonshaft', 'hi <!-- shaft:finding abc123 -->'),
+                thread('quoted', 'Bot', 'axonshaft', '<!-- shaft:finding abc123 -->\nmore'),
+              ],
+            },
+          },
+        },
+      };
+    },
+  };
+  const ctx = { owner: 'o', repo: 'r', pr: { number: 7 } } as any;
+  await resolveThreads(octokit as any, ctx, ['abc123'], 'axonshaft[bot]');
+  expect(resolved).toEqual(['ours']);
 });

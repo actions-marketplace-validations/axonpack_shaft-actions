@@ -65538,10 +65538,12 @@ ${diff}
 
 `);
 }
-async function resolveThreads(octokit, ctx, fps) {
-  const data = await octokit.graphql("query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{body}}}}}}}", { owner: ctx.owner, repo: ctx.repo, n: ctx.pr.number });
+async function resolveThreads(octokit, ctx, fps, bot) {
+  const data = await octokit.graphql("query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{body author{__typename login}}}}}}}}", { owner: ctx.owner, repo: ctx.repo, n: ctx.pr.number });
   for (const t of data.repository.pullRequest.reviewThreads.nodes) {
-    const fp = /shaft:finding (\w+)/.exec(t.comments.nodes[0]?.body ?? "")?.[1];
+    const first = t.comments.nodes[0];
+    const author = first?.author && (first.author.__typename === "Bot" ? `${first.author.login}[bot]` : first.author.login);
+    const fp = author === bot ? /<!-- shaft:finding (\w+) -->\s*$/.exec(first.body ?? "")?.[1] : undefined;
     if (!t.isResolved && fp && fps.includes(fp)) {
       await octokit.graphql("mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: t.id });
     }
@@ -65645,7 +65647,7 @@ ${clean(body)}`);
   if (fixed.length && o.dryRun)
     info(`Would resolve the threads of ${fixed.join(", ")}`);
   else if (fixed.length) {
-    await resolveThreads(octokit, ctx, fixed).catch((e) => warning(`Resolving fixed threads failed: ${e.message}`));
+    await resolveThreads(octokit, ctx, fixed, o.bot).catch((e) => warning(`Resolving fixed threads failed: ${e.message}`));
   }
   return {
     verdict: review.verdict,
