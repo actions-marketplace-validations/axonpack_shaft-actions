@@ -101,11 +101,14 @@ const fence = (s: string, lang = '') => `\`\`\`${lang}\n${s.replace(/\n$/, '')}\
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s*[\r\n]+\s*/g, ' ');
 const html = (s: string) => s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 /**
- * Model text as it may be posted: no images. A comment or file in the PR could talk the model into
- * an image whose URL carries data out when GitHub fetches it.
+ * Model text as it may be posted: no images, and no `<!--`. A comment or file in the PR could talk
+ * the model into an image whose URL carries data out when GitHub fetches it, or into a hidden
+ * `shaft:` marker that a later run would read back.
  */
 export const prose = (s: string) =>
-  s.replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, '').replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, '');
+  s
+    .replace(/<!--/g, '&lt;!--')
+    .replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, '').replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, '');
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function inlineBody(f: Placed): string {
@@ -119,8 +122,9 @@ export function stateLine(state: State): string {
   return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, '\\u003e')} -->`;
 }
 
+/** The state line is always the comment's last line; one anywhere else isn't ours. */
 export function parseState(body: string | undefined): State | undefined {
-  const m = body && /<!-- shaft:state (.*?) -->/s.exec(body);
+  const m = body && /(?:^|\n)<!-- shaft:state ([^\n]*) -->\s*$/.exec(body);
   if (!m) return;
   try {
     return JSON.parse(m[1]);
@@ -258,8 +262,11 @@ export function redact(text: string, secrets: string[]): string {
   return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join('***'), text);
 }
 
-/** Inline findings that no earlier run posted, judged by the fingerprints in the PR's review comments. */
-export function unposted(placed: Placed[], reviewComments: { body: string }[]): Placed[] {
-  const posted = new Set(reviewComments.flatMap((c) => [...c.body.matchAll(/<!-- shaft:finding (\w+) -->/g)].map((m) => m[1])));
+/**
+ * Inline findings that no earlier run posted, judged by the fingerprint at the end of each review
+ * comment `bot` wrote. Anyone else's marker, or one in the middle of a comment, counts for nothing.
+ */
+export function unposted(placed: Placed[], reviewComments: { body: string; author: string }[], bot: string): Placed[] {
+  const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
   return placed.filter((p) => p.inline && !posted.has(p.fp));
 }

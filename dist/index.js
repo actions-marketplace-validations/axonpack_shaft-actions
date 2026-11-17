@@ -30679,6 +30679,8 @@ function getOctokit(token, options, ...additionalPlugins) {
 var API_AUDIENCE = "https://api-shaft.axonpack.dev";
 var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
 var APP_MENTION = "@axonshaft";
+var APP_BOT = "axonshaft[bot]";
+var ACTIONS_BOT = "github-actions[bot]";
 var INSTALL_URL = "https://github.com/apps/axonshaft/installations/new";
 var DASHBOARD_URL = "https://shaft.axonpack.dev";
 
@@ -64986,7 +64988,7 @@ ${s.replace(/\n$/, "")}
 \`\`\``;
 var cell = (s) => s.replace(/\|/g, "\\|").replace(/\s*[\r\n]+\s*/g, " ");
 var html = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-var prose = (s) => s.replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, "").replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, "");
+var prose = (s) => s.replace(/<!--/g, "&lt;!--").replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, "").replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, "");
 var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function inlineBody(f) {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
@@ -65002,7 +65004,7 @@ function stateLine(state) {
   return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
 }
 function parseState(body) {
-  const m = body && /<!-- shaft:state (.*?) -->/s.exec(body);
+  const m = body && /(?:^|\n)<!-- shaft:state ([^\n]*) -->\s*$/.exec(body);
   if (!m)
     return;
   try {
@@ -65106,8 +65108,8 @@ ${stateLine(state)}`;
 function redact(text, secrets) {
   return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join("***"), text);
 }
-function unposted(placed, reviewComments) {
-  const posted = new Set(reviewComments.flatMap((c) => [...c.body.matchAll(/<!-- shaft:finding (\w+) -->/g)].map((m) => m[1])));
+function unposted(placed, reviewComments, bot) {
+  const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
   return placed.filter((p) => p.inline && !posted.has(p.fp));
 }
 
@@ -65318,7 +65320,6 @@ var comment = (c) => ({
   author: c.user?.login ?? "ghost",
   association: c.author_association ?? "NONE",
   body: c.body ?? "",
-  isBot: c.user?.type === "Bot",
   html_url: c.html_url,
   path: c.path,
   line: c.line
@@ -65333,7 +65334,7 @@ async function baseConfig(octokit, owner, repo, ref, path) {
     throw e;
   }
 }
-async function collectContext(octokit, owner, repo, number, configPath) {
+async function collectContext(octokit, owner, repo, number, configPath, bot) {
   const q = { owner, repo, pull_number: number, per_page: 100 };
   const [{ data: pr }, files, commits, issueComments, reviewComments] = await Promise.all([
     octokit.rest.pulls.get({ owner, repo, pull_number: number }),
@@ -65343,7 +65344,7 @@ async function collectContext(octokit, owner, repo, number, configPath) {
     octokit.paginate(octokit.rest.pulls.listReviewComments, q)
   ]);
   const comments = issueComments.map(comment);
-  const summary = comments.find((c) => c.isBot && c.body.startsWith(SUMMARY_MARKER));
+  const summary = comments.find((c) => c.author === bot && c.body.startsWith(SUMMARY_MARKER));
   return {
     owner,
     repo,
@@ -65503,7 +65504,7 @@ async function resolveThreads(octokit, ctx, fps) {
   }
 }
 async function reviewPullRequest(o) {
-  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number, o.configPath), o);
+  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number, o.configPath, o.bot), o);
 }
 async function reviewContext(ctx, o) {
   const { octokit } = o;
@@ -65548,7 +65549,7 @@ async function reviewContext(ctx, o) {
   const { review } = result;
   info(`Models ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
   const placed = place(review.findings, files, o.nits);
-  const fresh = unposted(placed, ctx.reviewComments);
+  const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);
     return {
@@ -66869,9 +66870,12 @@ async function resolveTokens(input, repo, request) {
   setSecret(claude.value);
   let github;
   let via;
+  let bot;
   if (appId && privateKey) {
     const { token: jwt } = await createAppAuth({ appId, privateKey })({ type: "app" });
     const app = getOctokit(jwt);
+    const { data: me } = await app.rest.apps.getAuthenticated();
+    bot = `${me?.slug}[bot]`;
     const { data: installation } = await app.rest.apps.getRepoInstallation(repo);
     const { data } = await app.rest.apps.createInstallationAccessToken({
       installation_id: installation.id,
@@ -66882,12 +66886,14 @@ async function resolveTokens(input, repo, request) {
   } else if (input.githubToken) {
     github = input.githubToken;
     via = "github_token";
+    bot = ACTIONS_BOT;
   } else {
     github = grant.github_token;
     via = "shaft";
+    bot = APP_BOT;
   }
   setSecret(github);
-  return { claude, github, via, settings: grant && (grant.settings ?? {}), job: grant?.job };
+  return { claude, github, via, bot, settings: grant && (grant.settings ?? {}), job: grant?.job };
 }
 
 // src/main.ts
@@ -66944,6 +66950,7 @@ async function run() {
     maxTurns: number("max_turns", settings.maxTurns),
     timeoutMinutes: number("timeout_minutes", settings.timeLimit),
     configPath: input("config_path"),
+    bot: tokens.bot,
     dashboard: tokens.settings,
     instructions: tokens.job?.instructions,
     checks: tokens.job?.checks,

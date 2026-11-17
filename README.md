@@ -191,6 +191,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 - It runs with only `PATH`, `HOME` and the Claude token in its environment. The OIDC request token, the action's inputs and `GITHUB_TOKEN` aren't there, and the commands it runs don't get the Claude token either.
 - The prompt has the PR's title, body, commits and diff, and only the comments of the repo's owners, members and collaborators. Comments from anyone else are left out.
 - Images are stripped from everything the model writes before it's posted, so an image URL can't carry data out.
+- The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments its own bot wrote (`axonshaft[bot]`, your app's bot, or `github-actions[bot]` with `github_token`), so a copy posted by someone else is ignored.
 - Before anything is posted, the action replaces the tokens it holds with `***`, and it masks every token in the job log.
 
 With `mode: review`, the person whose event started the run needs write access, and a PR from a fork is skipped, as it is with `mode: auto`.

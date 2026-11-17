@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import { getOctokit } from '@actions/github';
 import { createAppAuth } from '@octokit/auth-app';
-import { DASHBOARD_URL } from '../consts/api.const';
+import { ACTIONS_BOT, APP_BOT, DASHBOARD_URL } from '../consts/api.const';
 import { fetchGrant, type Grant, type GrantJob, type GrantRequest } from './api.service';
 
 export type TokenInputs = {
@@ -19,6 +19,8 @@ export type Tokens = {
   claude: ClaudeToken;
   github: string;
   via: 'app' | 'shaft' | 'github_token';
+  /** The login the comments come from, so only its own markers are trusted. */
+  bot: string;
   /** The dashboard's settings; undefined when the Axon Shaft API wasn't used. */
   settings?: Record<string, unknown>;
   /** The project's job from the Axon Shaft API; undefined when it wasn't used. */
@@ -59,9 +61,12 @@ export async function resolveTokens(
 
   let github: string;
   let via: Tokens['via'];
+  let bot: string;
   if (appId && privateKey) {
     const { token: jwt } = await createAppAuth({ appId, privateKey })({ type: 'app' });
     const app = getOctokit(jwt);
+    const { data: me } = await app.rest.apps.getAuthenticated();
+    bot = `${me?.slug}[bot]`;
     const { data: installation } = await app.rest.apps.getRepoInstallation(repo);
     const { data } = await app.rest.apps.createInstallationAccessToken({
       installation_id: installation.id,
@@ -72,10 +77,13 @@ export async function resolveTokens(
   } else if (input.githubToken) {
     github = input.githubToken;
     via = 'github_token';
+    // ponytail: assumes the run's own token; a personal token posts as its owner, whose markers then aren't found
+    bot = ACTIONS_BOT;
   } else {
     github = grant!.github_token; // the API was called: no input set this token
     via = 'shaft';
+    bot = APP_BOT;
   }
   core.setSecret(github);
-  return { claude, github, via, settings: grant && (grant.settings ?? {}), job: grant?.job };
+  return { claude, github, via, bot, settings: grant && (grant.settings ?? {}), job: grant?.job };
 }

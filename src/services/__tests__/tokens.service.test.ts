@@ -17,6 +17,7 @@ vi.doMock('@actions/github', () => ({
   getOctokit: (token: string) => ({
     rest: {
       apps: {
+        getAuthenticated: async () => ({ data: { slug: 'my-reviewer' } }),
         getRepoInstallation: async (repo: unknown) => {
           calls.push({ token, repo });
           return { data: { id: 77 } };
@@ -68,6 +69,7 @@ test('with no inputs, both tokens, the settings and the job come from the Axon S
     claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-shaft' },
     github: 'ghs_shaft',
     via: 'shaft',
+    bot: 'axonshaft[bot]',
     settings: { model: 'opus' },
     job,
   });
@@ -98,7 +100,7 @@ test("a Claude input beats the API's token", async () => {
 
 test("the app inputs beat the API's GitHub token, with an installation token scoped to this repo", async () => {
   const t = await resolve({ appId: '123', privateKey: 'PEM', githubToken: 'ghs_run' });
-  expect(t).toMatchObject({ github: 'ghs_installation', via: 'app', settings: { model: 'opus' } });
+  expect(t).toMatchObject({ github: 'ghs_installation', via: 'app', bot: 'my-reviewer[bot]', settings: { model: 'opus' } });
   expect(calls).toEqual([
     { appId: '123', privateKey: 'PEM' },
     { token: 'app-jwt', repo },
@@ -110,14 +112,14 @@ test("the app inputs beat the API's GitHub token, with an installation token sco
 test('standalone: a Claude input and github_token never call the API', async () => {
   const t = await resolve({ claudeCodeOauthToken: 'sk-ant-oat-1', githubToken: 'ghs_run' });
   expect(sent).toEqual([]);
-  expect(t).toEqual({ claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-1' }, github: 'ghs_run', via: 'github_token' });
+  expect(t).toEqual({ claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-1' }, github: 'ghs_run', via: 'github_token', bot: 'github-actions[bot]' });
   expect(masked).toEqual(['sk-ant-oat-1', 'ghs_run']);
 });
 
 test('standalone: a Claude input and the app inputs never call the API', async () => {
   const t = await resolve({ anthropicApiKey: 'sk-ant-api-1', appId: '123', privateKey: 'PEM' });
   expect(sent).toEqual([]);
-  expect(t).toEqual({ claude: { env: 'ANTHROPIC_API_KEY', value: 'sk-ant-api-1' }, github: 'ghs_installation', via: 'app' });
+  expect(t).toEqual({ claude: { env: 'ANTHROPIC_API_KEY', value: 'sk-ant-api-1' }, github: 'ghs_installation', via: 'app', bot: 'my-reviewer[bot]' });
 });
 
 test("with a token missing from the inputs, the API's error fails the run", async () => {

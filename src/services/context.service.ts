@@ -8,7 +8,6 @@ export type Comment = {
   /** GitHub's `author_association`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE and so on. */
   association: string;
   body: string;
-  isBot: boolean;
   html_url: string;
   path?: string;
   line?: number | null;
@@ -34,7 +33,6 @@ const comment = (c: any): Comment => ({
   author: c.user?.login ?? 'ghost',
   association: c.author_association ?? 'NONE',
   body: c.body ?? '',
-  isBot: c.user?.type === 'Bot',
   html_url: c.html_url,
   path: c.path,
   line: c.line,
@@ -56,7 +54,15 @@ async function baseConfig(octokit: Octokit, owner: string, repo: string, ref: st
 }
 
 /** Everything the review needs from GitHub: the PR text, the diff, the comments already posted and the base branch's review rules. */
-export async function collectContext(octokit: Octokit, owner: string, repo: string, number: number, configPath: string): Promise<Context> {
+export async function collectContext(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  number: number,
+  configPath: string,
+  /** Our own login: the summary is the comment it wrote, never one someone else made to look like it. */
+  bot: string,
+): Promise<Context> {
   const q = { owner, repo, pull_number: number, per_page: 100 };
   const [{ data: pr }, files, commits, issueComments, reviewComments] = await Promise.all([
     octokit.rest.pulls.get({ owner, repo, pull_number: number }),
@@ -66,7 +72,7 @@ export async function collectContext(octokit: Octokit, owner: string, repo: stri
     octokit.paginate(octokit.rest.pulls.listReviewComments, q),
   ]);
   const comments = issueComments.map(comment);
-  const summary = comments.find((c) => c.isBot && c.body.startsWith(SUMMARY_MARKER));
+  const summary = comments.find((c) => c.author === bot && c.body.startsWith(SUMMARY_MARKER));
   return {
     owner,
     repo,

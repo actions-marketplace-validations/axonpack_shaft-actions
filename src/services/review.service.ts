@@ -32,6 +32,8 @@ export type ReviewOptions = {
   maxTurns: number;
   timeoutMinutes: number;
   configPath: string;
+  /** The login our comments come from. Only its markers are read back. */
+  bot: string;
   /** The Axon Shaft API's settings, for `rules`, `skip` and `focus`; undefined when the API wasn't used. */
   dashboard?: Record<string, unknown>;
   /** The job's numbered steps from the Axon Shaft API; without them, the built-in steps (the catalog's defaults). */
@@ -122,7 +124,7 @@ async function resolveThreads(octokit: Octokit, ctx: Context, fps: string[]): Pr
 }
 
 export async function reviewPullRequest(o: ReviewOptions & { owner: string; repo: string; number: number }): Promise<ReviewOutcome> {
-  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number, o.configPath), o);
+  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number, o.configPath, o.bot), o);
 }
 
 /** Review a collected PR and post the result (or print it, on a dry run). */
@@ -172,7 +174,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   core.info(`Models ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
 
   const placed = place(review.findings, files, o.nits);
-  const fresh = unposted(placed, ctx.reviewComments);
+  const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);
     return {

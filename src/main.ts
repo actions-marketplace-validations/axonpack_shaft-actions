@@ -63,6 +63,7 @@ async function run(): Promise<void> {
     maxTurns: number('max_turns', settings.maxTurns),
     timeoutMinutes: number('timeout_minutes', settings.timeLimit),
     configPath: input('config_path'),
+    bot: tokens.bot,
     dashboard: tokens.settings,
     instructions: tokens.job?.instructions,
     checks: tokens.job?.checks,
