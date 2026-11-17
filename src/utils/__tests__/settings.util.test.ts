@@ -4,17 +4,23 @@ import { mergeRules, mergeSettings, parseConfig } from '../settings.util';
 
 const inputs = (set: Record<string, string>) => (name: string) => set[name] ?? '';
 
-test('an input beats the dashboard, the dashboard beats the default, per field', () => {
-  expect(mergeSettings(inputs({ model: 'haiku' }), { model: 'opus', effort: 'high', depth: null })).toEqual({
+test("an input beats the API, the API beats the default, per field; depth and nits come from the job's options", () => {
+  const settings = { model: 'opus', effort: 'high', depth: 'deep', nits: 'off', maxTurns: 50, timeLimit: null };
+  expect(mergeSettings(inputs({ model: 'haiku', timeout_minutes: '20' }), settings, { depth: 'deep', nits: 'inline' })).toEqual({
     model: 'haiku',
     effort: 'high',
-    depth: 'standard',
-    nits: 'summary',
+    depth: 'deep',
+    nits: 'inline',
+    maxTurns: '50',
+    timeLimit: '20',
   });
+  // depth and nits in settings don't count: the API keeps them in the job's options.
+  expect(mergeSettings(inputs({}), settings, {})).toMatchObject({ depth: 'standard', nits: 'summary', timeLimit: '15' });
+  expect(mergeSettings(inputs({ depth: 'standard', max_turns: '10' }), settings, { depth: 'deep' })).toMatchObject({ depth: 'standard', maxTurns: '10' });
 });
 
-test('without the dashboard, the defaults', () => {
-  expect(mergeSettings(inputs({}))).toEqual({ model: 'auto', effort: 'auto', depth: 'standard', nits: 'summary' });
+test('without the API, the defaults', () => {
+  expect(mergeSettings(inputs({}))).toEqual({ model: 'auto', effort: 'auto', depth: 'standard', nits: 'summary', maxTurns: '30', timeLimit: '15' });
 });
 
 const PATH = '.github/shaft.yml';

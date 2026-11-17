@@ -30832,16 +30832,20 @@ var $visit = visit.visit;
 var $visitAsync = visit.visitAsync;
 
 // src/consts/settings.const.ts
-var SETTING_DEFAULTS = { model: "auto", effort: "auto", depth: "standard", nits: "summary" };
+var SETTING_DEFAULTS = { model: "auto", effort: "auto", depth: "standard", nits: "summary", maxTurns: "30", timeLimit: "15" };
 var DEFAULT_SKIP = ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/dist/**", "**/*.min.js", "**/*.snap"];
 
 // src/utils/settings.util.ts
-function mergeSettings(input, dashboard = {}) {
-  const pick = (name) => {
-    const saved = dashboard[name];
-    return input(name) || typeof saved === "string" && saved || SETTING_DEFAULTS[name];
+function mergeSettings(input, settings = {}, options = {}) {
+  const pick = (field, name, saved) => input(name) || (typeof saved === "string" || typeof saved === "number" ? String(saved) : "") || SETTING_DEFAULTS[field];
+  return {
+    model: pick("model", "model", settings.model),
+    effort: pick("effort", "effort", settings.effort),
+    depth: pick("depth", "depth", options.depth),
+    nits: pick("nits", "nits", options.nits),
+    maxTurns: pick("maxTurns", "max_turns", settings.maxTurns),
+    timeLimit: pick("timeLimit", "timeout_minutes", settings.timeLimit)
   };
-  return { model: pick("model"), effort: pick("effort"), depth: pick("depth"), nits: pick("nits") };
 }
 var isGlobs = (v) => Array.isArray(v) && v.every((g) => typeof g === "string");
 function parseConfig(text, path) {
@@ -66794,10 +66798,10 @@ function oneOf(name, allowed, value = input(name)) {
     throw new Error(`${name} must be one of ${allowed.join(", ")}, not "${value}".`);
   return value;
 }
-function number(name) {
-  const value = Number(input(name));
+function number(name, text) {
+  const value = Number(text);
   if (!(value > 0))
-    throw new Error(`${name} must be a positive number, not "${input(name)}".`);
+    throw new Error(`${name} must be a positive number, not "${text}".`);
   return value;
 }
 async function run() {
@@ -66821,7 +66825,7 @@ async function run() {
       return notice(`${r.actor} has no write access, so no task was started.`);
     return notice("Task mode is not built yet.");
   }
-  const settings = mergeSettings(input, tokens.settings);
+  const settings = mergeSettings(input, tokens.settings, tokens.job?.options);
   const out = await reviewPullRequest({
     octokit,
     owner,
@@ -66833,8 +66837,8 @@ async function run() {
     effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"], settings.effort),
     depth: oneOf("depth", ["standard", "deep"], settings.depth),
     nits: oneOf("nits", ["summary", "inline", "off"], settings.nits),
-    maxTurns: number("max_turns"),
-    timeoutMinutes: number("timeout_minutes"),
+    maxTurns: number("max_turns", settings.maxTurns),
+    timeoutMinutes: number("timeout_minutes", settings.timeLimit),
     configPath: input("config_path"),
     dashboard: tokens.settings,
     dryRun: getBooleanInput("dry_run"),

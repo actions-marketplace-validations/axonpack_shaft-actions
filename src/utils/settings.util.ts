@@ -9,13 +9,25 @@ export type RepoConfig = { rules?: string; skip?: string[]; focus?: string[] };
 /** What the review applies: the rules text, and the globs to leave out and to look at closely. */
 export type ReviewRules = { rules: string; skip: string[]; focus: string[] };
 
-/** Each field from the first that sets it: the input, then the dashboard, then the default. */
-export function mergeSettings(input: (name: string) => string, dashboard: Record<string, unknown> = {}): Settings {
-  const pick = (name: keyof Settings) => {
-    const saved = dashboard[name];
-    return input(name) || (typeof saved === 'string' && saved) || SETTING_DEFAULTS[name];
+/**
+ * Each field from the first that sets it: the input, then the Axon Shaft API, then the default.
+ * The API keeps `depth` and `nits` in the job's `options` and the rest in `settings`.
+ */
+export function mergeSettings(
+  input: (name: string) => string,
+  settings: Record<string, unknown> = {},
+  options: Record<string, unknown> = {},
+): Settings {
+  const pick = (field: keyof Settings, name: string, saved: unknown) =>
+    input(name) || (typeof saved === 'string' || typeof saved === 'number' ? String(saved) : '') || SETTING_DEFAULTS[field];
+  return {
+    model: pick('model', 'model', settings.model),
+    effort: pick('effort', 'effort', settings.effort),
+    depth: pick('depth', 'depth', options.depth),
+    nits: pick('nits', 'nits', options.nits),
+    maxTurns: pick('maxTurns', 'max_turns', settings.maxTurns),
+    timeLimit: pick('timeLimit', 'timeout_minutes', settings.timeLimit),
   };
-  return { model: pick('model'), effort: pick('effort'), depth: pick('depth'), nits: pick('nits') };
 }
 
 const isGlobs = (v: unknown): v is string[] => Array.isArray(v) && v.every((g) => typeof g === 'string');

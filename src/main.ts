@@ -13,9 +13,9 @@ function oneOf(name: string, allowed: string[], value = input(name)): string {
   return value;
 }
 
-function number(name: string): number {
-  const value = Number(input(name));
-  if (!(value > 0)) throw new Error(`${name} must be a positive number, not "${input(name)}".`);
+function number(name: string, text: string): number {
+  const value = Number(text);
+  if (!(value > 0)) throw new Error(`${name} must be a positive number, not "${text}".`);
   return value;
 }
 
@@ -44,7 +44,7 @@ async function run(): Promise<void> {
     return core.notice('Task mode is not built yet.');
   }
 
-  const settings = mergeSettings(input, tokens.settings);
+  const settings = mergeSettings(input, tokens.settings, tokens.job?.options);
   const out = await reviewPullRequest({
     octokit,
     owner,
@@ -56,8 +56,8 @@ async function run(): Promise<void> {
     effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
     depth: oneOf('depth', ['standard', 'deep'], settings.depth),
     nits: oneOf('nits', ['summary', 'inline', 'off'], settings.nits),
-    maxTurns: number('max_turns'),
-    timeoutMinutes: number('timeout_minutes'),
+    maxTurns: number('max_turns', settings.maxTurns),
+    timeoutMinutes: number('timeout_minutes', settings.timeLimit),
     configPath: input('config_path'),
     dashboard: tokens.settings,
     dryRun: core.getBooleanInput('dry_run'),

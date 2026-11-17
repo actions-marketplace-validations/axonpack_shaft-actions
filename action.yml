@@ -33,13 +33,11 @@ inputs:
     required: false
     default: auto
   max_turns:
-    description: Agent SDK turn limit per run.
+    description: "Agent SDK turn limit per run. Default: 30, unless set on shaft.axonpack.dev."
     required: false
-    default: "30"
   timeout_minutes:
-    description: The run stops after this many minutes and posts what it has.
+    description: "The run stops after this many minutes and posts what it has. Default: 15, unless set on shaft.axonpack.dev."
     required: false
-    default: "15"
   nits:
     description: "`summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. Default: summary, unless set on shaft.axonpack.dev."
     required: false
