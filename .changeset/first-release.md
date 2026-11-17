@@ -9,6 +9,8 @@
 - **Summary card**: the comment opens with the verdict, the headline, the finding counts and a mark for each check, then a table of findings linked to their lines
 - **Settings order**: an input wins over the dashboard, the dashboard over `.github/shaft.yml`, and the file over the defaults
 - **Review rules in `.github/shaft.yml`**: `rules`, `skip` and `focus`, read from the base branch, so a pull request can't change its own review
+- **Only trusted comments are read**: the review reads comments from the repo's owners, members and collaborators, and leaves out everyone else's
+- **The review stays in the checkout**: it can read only the repo's files and run only `git diff`, `git log` and `git show`, and it never sees the runner's other tokens
 - **Review memory**: a finding is posted once, and the next review marks fixed ones and resolves their threads
 - **Model and effort picked per run**: with `auto`, small changes get Sonnet, docs and config get Haiku, and large or sensitive changes get Opus
 - **Dry run**: `dry_run: true` prints the comments to the job log instead of posting them

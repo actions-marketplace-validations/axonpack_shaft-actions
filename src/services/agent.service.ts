@@ -4,10 +4,11 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as core from '@actions/core';
-import { type AgentDefinition, type EffortLevel, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import { type AgentDefinition, type EffortLevel, type HookCallback, type PreToolUseHookInput, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import pkg from '../../package.json' with { type: 'json' };
 import type { ClaudeToken } from './tokens.service';
 import { type Review, SEVERITIES, STEPS, TYPES, VERDICTS } from '../utils/render.util';
+import { toolDenial } from '../utils/tool-guard.util';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -63,6 +64,20 @@ export function parseReview(x: unknown): Review | undefined {
 
 const READ_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
 const ALLOWED = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)'];
+/** The CLI's own deny rules, on top of the hook below. `//` makes a rule path absolute. */
+const DENIED = ['Read(//proc/**)', 'Read(//sys/**)'];
+
+/**
+ * Checks every tool call, the subagents' too, before the allow rules let it through: a hook runs
+ * where `canUseTool` doesn't, since that is only asked about calls no rule allows.
+ */
+const guard =
+  (cwd: string): HookCallback =>
+  async (input) => {
+    const { tool_name, tool_input } = input as PreToolUseHookInput;
+    const why = toolDenial(tool_name, (tool_input ?? {}) as Record<string, unknown>, cwd);
+    return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
+  };
 const SDK_VERSION = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
 
 /**
@@ -85,11 +100,19 @@ function claudeBinary(): string | undefined {
   return bin;
 }
 
-/** The CLI's environment: ours without the action's inputs or runner tokens, plus the Claude token. */
-function cliEnv(claude: ClaudeToken): Record<string, string | undefined> {
-  const drop = /^(INPUT_|ACTIONS_RUNTIME_TOKEN$|ACTIONS_ID_TOKEN_REQUEST_|GITHUB_TOKEN$|GH_TOKEN$|ANTHROPIC_API_KEY$|ANTHROPIC_AUTH_TOKEN$|CLAUDE_CODE_OAUTH_TOKEN$)/;
-  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !drop.test(k)));
-  return { ...env, [claude.env]: claude.value, CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}` };
+/**
+ * The CLI's environment: only `PATH`, `HOME` and the Claude token, so nothing else the runner holds
+ * (the OIDC request token, the action's inputs, GITHUB_TOKEN) is there to leak. The CLI scrubs the
+ * Claude token from the environment of what it runs (git).
+ */
+export function cliEnv(claude: ClaudeToken): Record<string, string | undefined> {
+  return {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    [claude.env]: claude.value,
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+    CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}`,
+  };
 }
 
 /** The extra passes a deep review runs as subagents, each named after the check it covers. */
@@ -153,6 +176,8 @@ async function once(prompt: string, o: AgentOptions, controller: AbortController
       maxTurns: o.maxTurns,
       tools: deep ? [...READ_TOOLS, 'Agent'] : READ_TOOLS,
       allowedTools: deep ? [...ALLOWED, 'Agent'] : ALLOWED,
+      disallowedTools: DENIED,
+      hooks: { PreToolUse: [{ hooks: [guard(o.cwd)] }] },
       permissionMode: 'dontAsk',
       // No project or user settings: a PR could otherwise add hooks or MCP servers that run its code.
       settingSources: [],

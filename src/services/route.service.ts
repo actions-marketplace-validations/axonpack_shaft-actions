@@ -5,7 +5,8 @@ import type { Octokit } from '../types/octokit.type';
 export type ReviewEvent = 'opened' | 'push' | 'ready';
 
 export type Route =
-  | { mode: 'review'; number: number; event?: ReviewEvent }
+  /** `actor` is set when `mode: review` forced the review: that person needs write access. */
+  | { mode: 'review'; number: number; event?: ReviewEvent; actor?: string }
   | { mode: 'task'; number: number; actor: string }
   | { mode: 'skip'; reason: string; notice?: boolean };
 
@@ -22,10 +23,13 @@ export function route(
   const pr = payload.pull_request;
   const number: number | undefined = pr?.number ?? payload.issue?.number;
   const event = eventName === 'pull_request' ? REVIEW_EVENTS[payload.action] : undefined;
+  const fork = pr && pr.head.repo?.full_name !== pr.base.repo.full_name;
+  const forkSkip = (n: number): Route => ({ mode: 'skip', reason: `PR #${n} is from a fork, which gets no secrets, so it was skipped.`, notice: true });
 
   if (mode === 'review') {
     if (!pr && !payload.issue?.pull_request) return { mode: 'skip', reason: 'mode is review, but this event has no pull request.', notice: true };
-    return { mode: 'review', number: number!, event };
+    if (fork) return forkSkip(pr.number);
+    return { mode: 'review', number: number!, event, actor: payload.sender?.login };
   }
   if (mode === 'task') {
     if (!number) return { mode: 'skip', reason: 'mode is task, but this event has no pull request or issue.', notice: true };
@@ -34,13 +38,7 @@ export function route(
 
   if (eventName === 'pull_request') {
     if (!event) return { mode: 'skip', reason: `pull_request ${payload.action} is not reviewed.` };
-    if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
-      return {
-        mode: 'skip',
-        reason: `PR #${pr.number} is from a fork, which gets no secrets, so it was skipped.`,
-        notice: true,
-      };
-    }
+    if (fork) return forkSkip(pr.number);
     return { mode: 'review', number: pr.number, event };
   }
 
@@ -53,6 +51,17 @@ export function route(
   if (typeof text !== 'string' || !text.includes(APP_MENTION)) return { mode: 'skip', reason: `${eventName} has nothing for Axon Shaft.` };
   if (payload.sender?.type === 'Bot') return { mode: 'skip', reason: 'Comments from bots never start a task.' };
   return { mode: 'task', number: number!, actor: payload.sender.login };
+}
+
+/**
+ * Why a review that `mode: review` forced may not run, or undefined when it may: the person who
+ * started it needs write access, and the PR can't come from a fork. A comment's payload doesn't say
+ * where the PR's branch lives, so this asks GitHub.
+ */
+export async function forcedReviewDenial(octokit: Octokit, owner: string, repo: string, number: number, actor: string): Promise<string | undefined> {
+  if (!(await hasWriteAccess(octokit, owner, repo, actor))) return `${actor} has no write access, so no review was started.`;
+  const { data: pr } = await octokit.rest.pulls.get({ owner, repo, pull_number: number });
+  if (pr.head.repo?.full_name !== pr.base.repo.full_name) return `PR #${number} is from a fork, so no review was started.`;
 }
 
 /** Only people with write access may start a task. */

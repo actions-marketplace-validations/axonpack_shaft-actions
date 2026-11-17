@@ -2,7 +2,17 @@ import type { ChangedFile } from '../utils/auto-pick.util';
 import type { Octokit } from '../types/octokit.type';
 import { SUMMARY_MARKER } from '../utils/render.util';
 
-export type Comment = { id: number; author: string; body: string; isBot: boolean; html_url: string; path?: string; line?: number | null };
+export type Comment = {
+  id: number;
+  author: string;
+  /** GitHub's `author_association`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE and so on. */
+  association: string;
+  body: string;
+  isBot: boolean;
+  html_url: string;
+  path?: string;
+  line?: number | null;
+};
 
 export type Context = {
   owner: string;
@@ -22,6 +32,7 @@ export type Context = {
 const comment = (c: any): Comment => ({
   id: c.id,
   author: c.user?.login ?? 'ghost',
+  association: c.author_association ?? 'NONE',
   body: c.body ?? '',
   isBot: c.user?.type === 'Bot',
   html_url: c.html_url,

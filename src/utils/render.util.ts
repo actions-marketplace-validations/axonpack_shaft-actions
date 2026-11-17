@@ -100,10 +100,16 @@ const fence = (s: string, lang = '') => `\`\`\`${lang}\n${s.replace(/\n$/, '')}\
 /** One table cell: a `|` or a line break would end the cell or the table. */
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s*[\r\n]+\s*/g, ' ');
 const html = (s: string) => s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/**
+ * Model text as it may be posted: no images. A comment or file in the PR could talk the model into
+ * an image whose URL carries data out when GitHub fetches it.
+ */
+export const prose = (s: string) =>
+  s.replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, '').replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, '');
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function inlineBody(f: Placed): string {
-  const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, f.body];
+  const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
   if (f.suggestion) parts.push(fence(f.suggestion, 'suggestion'));
   return `${parts.join('\n\n')}\n\n<!-- shaft:finding ${f.fp} -->`;
 }
@@ -212,12 +218,15 @@ export function failedSummary(sha: string, why: string, runUrl: string | undefin
     .join('\n');
 }
 
-export function renderSummary(review: Review, placed: Placed[], prior: State | undefined, f: Footer): string {
+export function renderSummary(raw: Review, placed: Placed[], prior: State | undefined, f: Footer): string {
+  const { headline, claim, impact, scope, not_checked } = raw;
+  const review = { ...raw, headline: prose(headline), claim: prose(claim), impact: prose(impact), scope: prose(scope), not_checked: prose(not_checked) };
+  const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
-  const out = [SUMMARY_MARKER, card(review, placed, fixed.length, f)];
+  const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
 
-  const main = placed.filter((p) => p.severity !== 'nit');
-  const nits = placed.filter((p) => p.severity === 'nit');
+  const main = shown.filter((p) => p.severity !== 'nit');
+  const nits = shown.filter((p) => p.severity === 'nit');
   if (main.length) out.push('', table(main, f));
   // A suggestion is code, which a table cell can't hold; inline comments carry theirs already.
   for (const p of placed.filter((p) => !p.inline && p.suggestion)) {
@@ -225,7 +234,7 @@ export function renderSummary(review: Review, placed: Placed[], prior: State | u
   }
   if (nits.length) out.push('', details(plural(nits.length, 'nit'), table(nits, f)));
 
-  if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${p.title}`).join(', ')})`);
+  if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   out.push(
     '',

@@ -182,7 +182,18 @@ A dry run prints the same text to the job log.
 
 ## What the review can do
 
-The model reads the repo from the workflow's checkout, so keep the `actions/checkout` step. It uses `Read`, `Grep`, `Glob`, `git diff`, `git log` and `git show`, and a diff longer than 200,000 characters is cut, with the model reading the rest from the checkout. It never edits files, installs anything or runs the PR's code, and it doesn't load the repo's Claude Code settings, hooks or MCP servers. Before anything is posted, the action replaces the tokens it holds with `***`, and it masks every token in the job log.
+The model reads the repo from the workflow's checkout, so keep the `actions/checkout` step. It uses `Read`, `Grep`, `Glob`, `git diff`, `git log` and `git show`, and a diff longer than 200,000 characters is cut, with the model reading the rest from the checkout. It never edits files, installs anything or runs the PR's code, and it doesn't load the repo's Claude Code settings, hooks or MCP servers.
+
+A PR, or a comment on it, can try to talk the model into leaking something, so the review is fenced in:
+
+- It can read and search only files inside the checkout. Paths outside it are refused, and so are `/proc`, `/sys`, the runner's temp and tool folders, and any symlink in the PR that points out of the checkout.
+- Its only commands are `git diff`, `git log` and `git show`, with no shell operators, no `--no-index`, `--output` or `--ext-diff`, and no path outside the checkout.
+- It runs with only `PATH`, `HOME` and the Claude token in its environment. The OIDC request token, the action's inputs and `GITHUB_TOKEN` aren't there, and the commands it runs don't get the Claude token either.
+- The prompt has the PR's title, body, commits and diff, and only the comments of the repo's owners, members and collaborators. Comments from anyone else are left out.
+- Images are stripped from everything the model writes before it's posted, so an image URL can't carry data out.
+- Before anything is posted, the action replaces the tokens it holds with `***`, and it masks every token in the job log.
+
+With `mode: review`, the person whose event started the run needs write access, and a PR from a fork is skipped, as it is with `mode: auto`.
 
 ## Development
 

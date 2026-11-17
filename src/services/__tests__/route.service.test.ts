@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Octokit } from '../../types/octokit.type';
-import { hasWriteAccess, route } from '../route.service';
+import { forcedReviewDenial, hasWriteAccess, route } from '../route.service';
 import comment from './fixtures/issue_comment.created.json';
 import fork from './fixtures/pull_request.fork.json';
 import opened from './fixtures/pull_request.opened.json';
@@ -46,9 +46,27 @@ test('anything else exits quietly', () => {
 });
 
 test('mode review forces a review of the event PR, and needs one', () => {
-  expect(route('issue_comment', comment, { mode: 'review' })).toEqual({ mode: 'review', number: 12 });
-  expect(route('pull_request', { ...opened, action: 'labeled' }, { mode: 'review' })).toEqual({ mode: 'review', number: 12 });
+  expect(route('issue_comment', comment, { mode: 'review' })).toEqual({ mode: 'review', number: 12, actor: 'maintainer' });
+  expect(route('pull_request', { ...opened, action: 'labeled' }, { mode: 'review' })).toMatchObject({ mode: 'review', number: 12 });
   expect(route('workflow_dispatch', push, { mode: 'review' })).toMatchObject({ mode: 'skip', notice: true });
+});
+
+test('mode review refuses a PR from a fork, as auto does', () => {
+  expect(route('pull_request', fork, { mode: 'review' })).toEqual({ mode: 'skip', notice: true, reason: 'PR #13 is from a fork, which gets no secrets, so it was skipped.' });
+});
+
+test('a forced review needs write access from its sender, and a PR whose branch is in this repo', async () => {
+  const octokit = (permission: string, head: string) =>
+    ({
+      rest: {
+        repos: { getCollaboratorPermissionLevel: async () => ({ data: { permission } }) },
+        pulls: { get: async () => ({ data: { head: { repo: { full_name: head } }, base: { repo: { full_name: 'acme/widgets' } } } }) },
+      },
+    }) as unknown as Octokit;
+  const deny = (permission: string, head: string) => forcedReviewDenial(octokit(permission, head), 'acme', 'widgets', 12, 'someone');
+  expect(await deny('write', 'acme/widgets')).toBeUndefined();
+  expect(await deny('read', 'acme/widgets')).toBe('someone has no write access, so no review was started.');
+  expect(await deny('admin', 'stranger/widgets')).toBe('PR #12 is from a fork, so no review was started.');
 });
 
 test('write access: admin and write pass, the rest do not', async () => {

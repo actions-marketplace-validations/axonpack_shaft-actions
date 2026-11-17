@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
 import { reportRun } from './services/api.service';
 import { reviewPullRequest } from './services/review.service';
-import { hasWriteAccess, route } from './services/route.service';
+import { forcedReviewDenial, hasWriteAccess, route } from './services/route.service';
 import { resolveTokens } from './services/tokens.service';
 import { mergeSettings } from './utils/settings.util';
 
@@ -42,6 +42,10 @@ async function run(): Promise<void> {
   if (r.mode === 'task') {
     if (!(await hasWriteAccess(octokit, owner, repo, r.actor))) return core.notice(`${r.actor} has no write access, so no task was started.`);
     return core.notice('Task mode is not built yet.');
+  }
+  if (r.actor) {
+    const why = await forcedReviewDenial(octokit, owner, repo, r.number, r.actor);
+    if (why) return core.notice(why);
   }
 
   const settings = mergeSettings(input, tokens.settings, tokens.job?.options);
