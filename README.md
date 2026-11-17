@@ -155,6 +155,19 @@ If recording the run afterwards fails, the action logs a warning and the run sti
 | `findings` | The number of blocking and should-fix findings. |
 | `summary_url` | The link to the summary comment. Empty on a dry run. |
 
+## What the comment looks like
+
+Axon Shaft keeps one summary comment on the PR and edits it on every push. From the top:
+
+- A card in a GitHub alert: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. It holds the verdict, the headline, chips with the number of blocking, should-fix and nit findings and how many earlier findings this push fixed, and a chip per check: ✅ nothing found, ⚠️ only should-fix or nit findings, ❌ a blocking finding, ➖ turned off on the dashboard. Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something. The last line gives the kind of change, the model's confidence and the reviewed commit.
+- A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit. A finding with an inline comment says "inline"; a finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
+- The nits, folded.
+- The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
+- "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
+- A footer with the run link, the model, the effort and why `auto` picked them.
+
+A dry run prints the same text to the job log.
+
 ## What the review can do
 
 The model reads the repo with `Read`, `Grep`, `Glob`, `git diff`, `git log` and `git show`. It never edits files, installs anything or runs the PR's code, and it doesn't load the repo's Claude Code settings, hooks or MCP servers. Before anything is posted, the action replaces the tokens it holds with `***`, and it masks every token in the job log.

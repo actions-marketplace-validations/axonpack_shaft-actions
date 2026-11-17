@@ -92,6 +92,7 @@ test('the summary format', () => {
   const prior = { sha: 'f00', findings: [{ fp: 'aaaaaa', file: 'src/retry.ts', line: 30, severity: 'blocking' as const, title: 'unhandled rejection' }] };
   const body = renderSummary(review, placed, prior, {
     sha: 'a1b2c3d4e5f6',
+    repo: 'acme/widgets',
     runUrl: 'https://github.com/acme/widgets/actions/runs/1',
     models: 'claude-sonnet-5',
     effort: 'medium',
@@ -99,41 +100,90 @@ test('the summary format', () => {
   });
   const [text, state] = [body.slice(0, body.lastIndexOf('\n')), body.slice(body.lastIndexOf('\n') + 1)];
   expect(text).toBe(`<!-- shaft:summary -->
-**Needs changes** · Bug fix · 85% confidence
+> [!WARNING]
+> ### 🟡 Needs changes
+> \`retry()\` never retries, so the fix this PR is for does not take effect.
+>
+> <kbd>🔴 1 blocking</kbd> <kbd>🟡 2 should fix</kbd> <kbd>⚪ 2 nits</kbd> <kbd>✅ 1 fixed</kbd>
+>
+> <kbd>❌ Correctness</kbd> <kbd>✅ Breakage</kbd> <kbd>✅ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>✅ Docs</kbd> <kbd>✅ Security</kbd>
+>
+> <sub>Bug fix · 85% confidence · reviewed \`a1b2c3d\`</sub>
 
-\`retry()\` never retries, so the fix this PR is for does not take effect.
+| Severity | Where | Finding | Details |
+|---|---|---|---|
+| 🔴 Blocking | [\`src/retry.ts:41\`](https://github.com/acme/widgets/blob/a1b2c3d4e5f6/src/retry.ts#L41) | retry loop never runs again | inline |
+| 🟡 Should fix | [\`src/retry.test.ts:2\`](https://github.com/acme/widgets/blob/a1b2c3d4e5f6/src/retry.test.ts#L2) | no test for a failure followed by a success | inline |
+| 🟡 Should fix | [\`src/config.ts:10\`](https://github.com/acme/widgets/blob/a1b2c3d4e5f6/src/config.ts#L10) | default changed from 5 to 3, not in the changeset | See \`.changeset/x.md:1\`. |
+
+<details><summary>2 nits</summary>
+
+| Severity | Where | Finding | Details |
+|---|---|---|---|
+| ⚪ Nit | [\`src/retry.ts:42\`](https://github.com/acme/widgets/blob/a1b2c3d4e5f6/src/retry.ts#L42) | comment says nothing | a body |
+| ⚪ Nit | [\`src/retry.ts:43\`](https://github.com/acme/widgets/blob/a1b2c3d4e5f6/src/retry.ts#L43) | loop could be a for | a body |
+
+</details>
+
+**Fixed since last review:** 1 (\`src/retry.ts:30\` unhandled rejection)
+
+<details><summary>What this PR does</summary>
 
 **Claim:** retry failed uploads up to 3 times.
 **Impact:** uploads that fail once still fail.
 **Scope:** \`packages/upload\`, both platforms.
-
-**Findings**
-- **Blocking** \`src/retry.ts:41\` retry loop never runs again (inline)
-- **Should fix** \`src/retry.test.ts:2\` no test for a failure followed by a success (inline)
-- **Should fix** \`src/config.ts:10\` default changed from 5 to 3, not in the changeset (outside the diff)
-  See \`.changeset/x.md:1\`.
-- 2 nits
-
-**Fixed since last review:** 1 (\`src/retry.ts:30\` unhandled rejection)
-
 **Not checked:** no tests or builds were run.
 
-<sub>Axon Shaft · reviewed \`a1b2c3d\` · [run](https://github.com/acme/widgets/actions/runs/1) · claude-sonnet-5 · medium · 412 lines</sub>`);
+</details>
+
+<sub>[Axon Shaft](https://shaft.axonpack.dev) · [run](https://github.com/acme/widgets/actions/runs/1) · claude-sonnet-5 · medium · 412 lines</sub>`);
   expect(parseState(state)).toEqual({
     sha: 'a1b2c3d4e5f6',
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),
   });
 });
 
-test('a looks-good review with no findings has no Findings section', () => {
-  const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, {
-    sha: 'abc1234',
-    models: 'claude-haiku-4',
-    effort: 'low',
-    reason: '3 lines, docs and config only',
-  });
-  expect(body.startsWith('<!-- shaft:summary -->\n**Looks good** · Bug fix')).toBe(true);
-  expect(body).not.toContain('**Findings**');
+const info = { sha: 'abc1234', repo: 'acme/widgets', models: 'claude-haiku-4', effort: 'low', reason: '3 lines' };
+
+test('a looks-good review with no findings: a TIP card with one chip, and no table', () => {
+  const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info);
+  expect(body).toContain('> [!TIP]\n> ### 🟢 Looks good\n');
+  expect(body).toContain('\n> <kbd>✅ No findings</kbd>\n');
+  expect(body).not.toContain('| Severity |');
+  expect(body).not.toContain('fixed</kbd>');
+});
+
+test('blocking is a CAUTION card; a check the project turned off shows ➖', () => {
+  const placed = place([finding({ severity: 'blocking', step: 'security' })], files, 'summary');
+  const body = renderSummary({ ...review, verdict: 'blocking' }, placed, undefined, { ...info, checks: ['correctness', 'tests'] });
+  expect(body).toContain('> [!CAUTION]\n> ### 🔴 Blocking\n');
+  expect(body).toContain('> <kbd>🔴 1 blocking</kbd>\n');
+  expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>➖ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>✅ Tests</kbd> <kbd>➖ Docs</kbd> <kbd>❌ Security</kbd>\n');
+});
+
+test("the repo's own checks get a chip only when they found something", () => {
+  const chip = (findings: Finding[]) => renderSummary(review, place(findings, files, 'summary'), undefined, info).match(/<kbd>\S+ 📌 Your checks<\/kbd>/)?.[0];
+  expect(chip([finding({ step: 'rules' })])).toBe('<kbd>⚠️ 📌 Your checks</kbd>');
+  expect(chip([finding({ step: 'rules', severity: 'blocking' })])).toBe('<kbd>❌ 📌 Your checks</kbd>');
+  expect(chip([finding({})])).toBeUndefined();
+});
+
+test("the headline can't close the alert or add HTML", () => {
+  const body = renderSummary({ ...review, headline: 'Bad <img src=x onerror=alert(1)>\n\n# not a heading' }, [], undefined, info);
+  expect(body).toContain('> Bad &lt;img src=x onerror=alert(1)&gt;\n> \n> # not a heading\n>\n');
+});
+
+test("a title or body with | or a line break can't break the table; a range links L<line>-L<end>", () => {
+  const placed = place(
+    [finding({ file: 'src/a b.ts', line: 3, end_line: 5, title: 'a | b\nc', body: 'one |\n\n two', suggestion: 'x = 1;\ny = 2;\n' })],
+    files,
+    'summary',
+  );
+  const body = renderSummary(review, placed, undefined, info);
+  expect(body).toContain(
+    '| 🟡 Should fix | [`src/a b.ts:3-5`](https://github.com/acme/widgets/blob/abc1234/src/a%20b.ts#L3-L5) | a \\| b c | one \\| two |\n\n',
+  );
+  expect(body).toContain('<details><summary>Suggested change for <code>src/a b.ts:3-5</code></summary>\n\n```\nx = 1;\ny = 2;\n```\n\n</details>');
 });
 
 test('the state line survives a title with --> in it', () => {

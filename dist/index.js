@@ -64964,12 +64964,26 @@ function place(findings, files, nits) {
   });
 }
 var SEVERITY_LABEL = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
+var SEVERITY_DOT = { blocking: "\uD83D\uDD34", "should-fix": "\uD83D\uDFE1", nit: "⚪" };
 var VERDICT_LABEL = { blocking: "Blocking", "needs-changes": "Needs changes", "looks-good": "Looks good" };
-var label = (s) => s.charAt(0).toUpperCase() + s.slice(1).replace(/-/g, " ");
-var where = (f) => `\`${f.file}:${f.line}\``;
+var VERDICT_ALERT = { blocking: ["CAUTION", "\uD83D\uDD34"], "needs-changes": ["WARNING", "\uD83D\uDFE1"], "looks-good": ["TIP", "\uD83D\uDFE2"] };
+var CHECK_LABEL = {
+  correctness: "Correctness",
+  breakage: "Breakage",
+  standards: "Standards",
+  tests: "Tests",
+  docs: "Docs",
+  security: "Security",
+  rules: "\uD83D\uDCCC Your checks"
+};
+var loc = (f) => `${f.file}:${f.line}${f.end_line && f.end_line > f.line ? `-${f.end_line}` : ""}`;
+var where = (f) => `\`${loc(f)}\``;
 var fence = (s, lang = "") => `\`\`\`${lang}
 ${s.replace(/\n$/, "")}
 \`\`\``;
+var cell = (s) => s.replace(/\|/g, "\\|").replace(/\s*[\r\n]+\s*/g, " ");
+var html = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function inlineBody(f) {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, f.body];
   if (f.suggestion)
@@ -64995,8 +65009,58 @@ function parseState(body) {
 }
 function footer(f) {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  return `<sub>Axon Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
 }
+var chip = (text) => `<kbd>${text}</kbd>`;
+function card(review, placed, fixed, f) {
+  const n = (s) => placed.filter((p) => p.severity === s).length;
+  const countChips = [
+    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
+    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
+    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
+    !placed.length && chip("✅ No findings"),
+    fixed && chip(`✅ ${fixed} fixed`)
+  ].filter(Boolean);
+  const checkChips = STEPS.flatMap((step) => {
+    const found = placed.filter((p) => p.step === step);
+    if (step === "rules" && !found.length)
+      return [];
+    const mark = found.some((p) => p.severity === "blocking") ? "❌" : found.length ? "⚠️" : f.checks && !f.checks.includes(step) ? "➖" : "✅";
+    return [chip(`${mark} ${CHECK_LABEL[step]}`)];
+  });
+  const headline = html(review.headline).split(/\r?\n/);
+  const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
+  const [alert, dot] = VERDICT_ALERT[review.verdict];
+  return [
+    `> [!${alert}]`,
+    `> ### ${dot} ${VERDICT_LABEL[review.verdict]}`,
+    ...headline.map((l) => `> ${l}`),
+    ">",
+    `> ${countChips.join(" ")}`,
+    ">",
+    `> ${checkChips.join(" ")}`,
+    ">",
+    `> <sub>${type} · ${review.confidence}% confidence · reviewed \`${f.sha.slice(0, 7)}\`</sub>`
+  ].join(`
+`);
+}
+function table(rows, f) {
+  const link = (p) => {
+    const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : "";
+    return `[${where(p)}](https://github.com/${f.repo}/blob/${f.sha}/${encodeURI(p.file)}#L${p.line}${end})`;
+  };
+  return [
+    "| Severity | Where | Finding | Details |",
+    "|---|---|---|---|",
+    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.title)} | ${p.inline ? "inline" : cell(p.body)} |`)
+  ].join(`
+`);
+}
+var details = (summary, body) => `<details><summary>${summary}</summary>
+
+${body}
+
+</details>`;
 function startSummary(sha, prior) {
   return [SUMMARY_MARKER, `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
 `);
@@ -65007,39 +65071,23 @@ function failedSummary(sha, why, runUrl, prior) {
 `);
 }
 function renderSummary(review, placed, prior, f) {
-  const out = [
-    SUMMARY_MARKER,
-    `**${VERDICT_LABEL[review.verdict]}** · ${label(review.type)} · ${review.confidence}% confidence`,
-    "",
-    review.headline,
-    "",
-    `**Claim:** ${review.claim}`,
-    `**Impact:** ${review.impact}`,
-    `**Scope:** ${review.scope}`
-  ];
-  const listed = placed.filter((p) => p.inline || p.severity !== "nit");
-  const counted = placed.length - listed.length;
-  if (placed.length) {
-    out.push("", "**Findings**");
-    for (const p of listed) {
-      out.push(`- **${SEVERITY_LABEL[p.severity]}** ${where(p)} ${p.title} (${p.inline ? "inline" : "outside the diff"})`);
-      if (!p.inline) {
-        out.push(...p.body.split(`
-`).map((l) => `  ${l}`));
-        if (p.suggestion)
-          out.push(...fence(p.suggestion).split(`
-`).map((l) => `  ${l}`));
-      }
-    }
-    if (counted)
-      out.push(`- ${counted} nit${counted === 1 ? "" : "s"}`);
-  }
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
+  const out = [SUMMARY_MARKER, card(review, placed, fixed.length, f)];
+  const main = placed.filter((p) => p.severity !== "nit");
+  const nits = placed.filter((p) => p.severity === "nit");
+  if (main.length)
+    out.push("", table(main, f));
+  for (const p of placed.filter((p) => !p.inline && p.suggestion)) {
+    out.push("", details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion)));
+  }
+  if (nits.length)
+    out.push("", details(plural(nits.length, "nit"), table(nits, f)));
   if (fixed.length)
     out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${p.title}`).join(", ")})`);
   if (f.skipped)
-    out.push("", `**Skipped:** ${f.skipped} file${f.skipped === 1 ? "" : "s"} matched \`skip\` and weren't reviewed.`);
-  out.push("", `**Not checked:** ${review.not_checked}`, "", footer(f));
+    out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
+  out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
+`)), "", footer(f));
   const state = {
     sha: f.sha,
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title }))
@@ -65466,6 +65514,8 @@ ${c.body}`);
   const fellBack = choice.autoModel && !result.models.some((m) => m.includes(choice.model));
   const body = renderSummary(review, placed, prior, {
     sha,
+    repo: `${ctx.owner}/${ctx.repo}`,
+    checks: o.checks,
     runUrl: o.runUrl,
     models: result.models.join(", ") + (fellBack ? ` (${choice.model} unavailable)` : ""),
     effort: choice.effort,

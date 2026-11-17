@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { DASHBOARD_URL } from '../consts/api.const';
 
 export const SUMMARY_MARKER = '<!-- shaft:summary -->';
 
@@ -80,10 +81,26 @@ export function place(findings: Finding[], files: { filename: string; patch?: st
 }
 
 const SEVERITY_LABEL: Record<Severity, string> = { blocking: 'Blocking', 'should-fix': 'Should fix', nit: 'Nit' };
+const SEVERITY_DOT: Record<Severity, string> = { blocking: '🔴', 'should-fix': '🟡', nit: '⚪' };
 const VERDICT_LABEL: Record<string, string> = { blocking: 'Blocking', 'needs-changes': 'Needs changes', 'looks-good': 'Looks good' };
-const label = (s: string) => s.charAt(0).toUpperCase() + s.slice(1).replace(/-/g, ' ');
-const where = (f: { file: string; line: number }) => `\`${f.file}:${f.line}\``;
+/** Each verdict's GitHub alert and the dot in front of its heading. */
+const VERDICT_ALERT: Record<string, [string, string]> = { blocking: ['CAUTION', '🔴'], 'needs-changes': ['WARNING', '🟡'], 'looks-good': ['TIP', '🟢'] };
+const CHECK_LABEL: Record<string, string> = {
+  correctness: 'Correctness',
+  breakage: 'Breakage',
+  standards: 'Standards',
+  tests: 'Tests',
+  docs: 'Docs',
+  security: 'Security',
+  rules: '📌 Your checks',
+};
+const loc = (f: { file: string; line: number; end_line?: number }) => `${f.file}:${f.line}${f.end_line && f.end_line > f.line ? `-${f.end_line}` : ''}`;
+const where = (f: Parameters<typeof loc>[0]) => `\`${loc(f)}\``;
 const fence = (s: string, lang = '') => `\`\`\`${lang}\n${s.replace(/\n$/, '')}\n\`\`\``;
+/** One table cell: a `|` or a line break would end the cell or the table. */
+const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s*[\r\n]+\s*/g, ' ');
+const html = (s: string) => s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function inlineBody(f: Placed): string {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, f.body];
@@ -106,12 +123,83 @@ export function parseState(body: string | undefined): State | undefined {
   }
 }
 
-export type Footer = { sha: string; runUrl?: string; models: string; effort: string; reason: string; skipped?: number };
+export type Footer = {
+  sha: string;
+  /** `owner/repo`, for the links to the reviewed lines. */
+  repo: string;
+  runUrl?: string;
+  models: string;
+  effort: string;
+  reason: string;
+  skipped?: number;
+  /** The catalog checks the project keeps on, from the Axon Shaft API; the others show as off. */
+  checks?: string[];
+};
 
 function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
-  return `<sub>Axon Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
 }
+
+const chip = (text: string) => `<kbd>${text}</kbd>`;
+
+/**
+ * The card at the top: the verdict as a GitHub alert, the headline, chips for the counts and for
+ * each check (❌ a blocking finding, ⚠️ any other, ✅ none, ➖ turned off), and the PR's type.
+ * The headline is model text, so `<` and `>` are escaped and every line stays in the alert.
+ */
+function card(review: Review, placed: Placed[], fixed: number, f: Footer): string {
+  const n = (s: Severity) => placed.filter((p) => p.severity === s).length;
+  const countChips = [
+    n('blocking') && chip(`🔴 ${n('blocking')} blocking`),
+    n('should-fix') && chip(`🟡 ${n('should-fix')} should fix`),
+    n('nit') && chip(`⚪ ${plural(n('nit'), 'nit')}`),
+    !placed.length && chip('✅ No findings'),
+    fixed && chip(`✅ ${fixed} fixed`),
+  ].filter(Boolean);
+  const checkChips = STEPS.flatMap((step) => {
+    const found = placed.filter((p) => p.step === step);
+    if (step === 'rules' && !found.length) return [];
+    // A finding shows even under a check that's off, so a blocking one is never hidden.
+    const mark = found.some((p) => p.severity === 'blocking')
+      ? '❌'
+      : found.length
+        ? '⚠️'
+        : f.checks && !f.checks.includes(step)
+          ? '➖'
+          : '✅';
+    return [chip(`${mark} ${CHECK_LABEL[step]}`)];
+  });
+  const headline = html(review.headline).split(/\r?\n/);
+  const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, ' ');
+  const [alert, dot] = VERDICT_ALERT[review.verdict];
+  return [
+    `> [!${alert}]`,
+    `> ### ${dot} ${VERDICT_LABEL[review.verdict]}`,
+    ...headline.map((l) => `> ${l}`),
+    '>',
+    `> ${countChips.join(' ')}`,
+    '>',
+    `> ${checkChips.join(' ')}`,
+    '>',
+    `> <sub>${type} · ${review.confidence}% confidence · reviewed \`${f.sha.slice(0, 7)}\`</sub>`,
+  ].join('\n');
+}
+
+/** A table of findings, each location linked to its lines at the reviewed commit. */
+function table(rows: Placed[], f: Footer): string {
+  const link = (p: Placed) => {
+    const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : '';
+    return `[${where(p)}](https://github.com/${f.repo}/blob/${f.sha}/${encodeURI(p.file)}#L${p.line}${end})`;
+  };
+  return [
+    '| Severity | Where | Finding | Details |',
+    '|---|---|---|---|',
+    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.title)} | ${p.inline ? 'inline' : cell(p.body)} |`),
+  ].join('\n');
+}
+
+const details = (summary: string, body: string) => `<details><summary>${summary}</summary>\n\n${body}\n\n</details>`;
 
 export function startSummary(sha: string, prior?: State): string {
   return [SUMMARY_MARKER, `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
@@ -125,36 +213,29 @@ export function failedSummary(sha: string, why: string, runUrl: string | undefin
 }
 
 export function renderSummary(review: Review, placed: Placed[], prior: State | undefined, f: Footer): string {
-  const out = [
-    SUMMARY_MARKER,
-    `**${VERDICT_LABEL[review.verdict]}** · ${label(review.type)} · ${review.confidence}% confidence`,
-    '',
-    review.headline,
-    '',
-    `**Claim:** ${review.claim}`,
-    `**Impact:** ${review.impact}`,
-    `**Scope:** ${review.scope}`,
-  ];
-
-  const listed = placed.filter((p) => p.inline || p.severity !== 'nit');
-  const counted = placed.length - listed.length;
-  if (placed.length) {
-    out.push('', '**Findings**');
-    for (const p of listed) {
-      out.push(`- **${SEVERITY_LABEL[p.severity]}** ${where(p)} ${p.title} (${p.inline ? 'inline' : 'outside the diff'})`);
-      if (!p.inline) {
-        out.push(...p.body.split('\n').map((l) => `  ${l}`));
-        if (p.suggestion) out.push(...fence(p.suggestion).split('\n').map((l) => `  ${l}`));
-      }
-    }
-    if (counted) out.push(`- ${counted} nit${counted === 1 ? '' : 's'}`);
-  }
-
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
-  if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${p.title}`).join(', ')})`);
+  const out = [SUMMARY_MARKER, card(review, placed, fixed.length, f)];
 
-  if (f.skipped) out.push('', `**Skipped:** ${f.skipped} file${f.skipped === 1 ? '' : 's'} matched \`skip\` and weren't reviewed.`);
-  out.push('', `**Not checked:** ${review.not_checked}`, '', footer(f));
+  const main = placed.filter((p) => p.severity !== 'nit');
+  const nits = placed.filter((p) => p.severity === 'nit');
+  if (main.length) out.push('', table(main, f));
+  // A suggestion is code, which a table cell can't hold; inline comments carry theirs already.
+  for (const p of placed.filter((p) => !p.inline && p.suggestion)) {
+    out.push('', details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion!)));
+  }
+  if (nits.length) out.push('', details(plural(nits.length, 'nit'), table(nits, f)));
+
+  if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${p.title}`).join(', ')})`);
+  if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
+  out.push(
+    '',
+    details(
+      'What this PR does',
+      [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join('\n'),
+    ),
+    '',
+    footer(f),
+  );
   const state: State = {
     sha: f.sha,
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),

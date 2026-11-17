@@ -202,6 +202,8 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   const fellBack = choice.autoModel && !result.models.some((m) => m.includes(choice.model));
   const body = renderSummary(review, placed, prior, {
     sha,
+    repo: `${ctx.owner}/${ctx.repo}`,
+    checks: o.checks,
     runUrl: o.runUrl,
     models: result.models.join(', ') + (fellBack ? ` (${choice.model} unavailable)` : ''),
     effort: choice.effort,
