@@ -1,0 +1,7 @@
+{
+  "action": "created",
+  "issue": { "number": 12, "title": "Retry failed uploads", "pull_request": { "url": "https://api.github.com/repos/acme/widgets/pulls/12" } },
+  "comment": { "id": 501, "body": "@axonshaft fix the failing test please", "user": { "login": "maintainer", "type": "User" } },
+  "repository": { "full_name": "acme/widgets", "name": "widgets", "owner": { "login": "acme" } },
+  "sender": { "login": "maintainer", "type": "User" }
+}
