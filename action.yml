@@ -1,5 +1,5 @@
 name: Axon Shaft
-description: Review pull requests with Claude, on your own runners. Needs `permissions: id-token: write` to fetch its tokens from shaft.axonpack.dev.
+description: "Review pull requests with Claude, on your own runners. Needs `permissions: id-token: write` to fetch its tokens from shaft.axonpack.dev."
 author: axonpack
 
 inputs:
