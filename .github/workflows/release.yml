@@ -1,0 +1,89 @@
+name: Release
+
+# On every push to main. With changesets pending, it opens or refreshes the Version Packages PR.
+# Merging that PR leaves none pending, so the next run tags the new version, moves the major tag
+# (v1) to it and creates a GitHub Release. The action ships from these tags, not from npm.
+on:
+  push:
+    branches: [main]
+
+# Never cancel a run halfway through tagging.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Check what to release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      pending: ${{ steps.check.outputs.pending }}
+      version: ${{ steps.check.outputs.version }}
+      tagged: ${{ steps.check.outputs.tagged }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: check
+        run: |
+          pending=false
+          ls .changeset/*.md 2>/dev/null | grep -qv README.md && pending=true
+          version=$(jq -r .version package.json)
+          tagged=false
+          git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null && tagged=true
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tagged=$tagged" >> "$GITHUB_OUTPUT"
+          echo "pending changesets: $pending, version: $version, tagged: $tagged"
+
+  # The Version Packages PR from `changeset-release/main`: the new version, its CHANGELOG section
+  # and the dist/index.js built for it, for a person to read before anything ships.
+  release-pr:
+    name: Version Packages PR
+    needs: plan
+    if: needs.plan.outputs.pending == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          version-script: bun run version-packages
+          commit-message: Version Packages
+          pr-title: Version Packages
+
+  # Runs once per version: after the Version Packages PR is merged, when its tag doesn't exist yet.
+  release:
+    name: Tag and GitHub Release
+    needs: plan
+    if: needs.plan.outputs.pending == 'false' && needs.plan.outputs.tagged == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Tag v${{ needs.plan.outputs.version }} and move the major tag
+        run: |
+          major="v${VERSION%%.*}"
+          git tag "v$VERSION"
+          git tag -f "$major"
+          git push origin "refs/tags/v$VERSION"
+          git push -f origin "refs/tags/$major"
+      - name: Create the GitHub Release
+        run: |
+          awk -v v="## $VERSION" '$0 == v { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
+          gh release create "v$VERSION" --title "v$VERSION" --notes-file notes.md --verify-tag

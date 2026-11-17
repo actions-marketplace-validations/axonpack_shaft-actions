@@ -184,6 +184,16 @@ bun run build   # writes dist/index.js, which is committed
 
 How the code is laid out and how files are named: [CONVENTIONS.md](CONVENTIONS.md).
 
+## Releasing
+
+Versions are kept with [Changesets](https://github.com/changesets/changesets), and the action ships from git tags.
+
+1. A PR that changes something users would notice adds a changeset: run `bun run changeset`, pick the bump, and describe the change in a line or two.
+2. Each push to `main` with changesets pending opens or refreshes the Version Packages PR. It raises the version in `package.json`, adds the changes to `CHANGELOG.md` and rebuilds `dist/index.js`.
+3. Merging that PR releases the version, for example `1.2.3`: the release workflow tags the merge commit `v1.2.3`, moves the `v1` tag to the same commit, and creates a GitHub Release with that version's changelog.
+
+Workflows that use `axonpack/shaft-actions@v1` get every 1.x release. To stay on one version, use `@v1.2.3`.
+
 ## License
 
 MIT

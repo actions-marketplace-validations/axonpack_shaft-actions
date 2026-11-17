@@ -64909,7 +64909,9 @@ var package_default = {
     build: "bun build src/main.ts --target node --outfile dist/index.js",
     lint: "oxlint src",
     typecheck: "tsc --noEmit",
-    test: "vitest run"
+    test: "vitest run",
+    changeset: "changeset",
+    "version-packages": "changeset version && bun run build"
   },
   dependencies: {
     "@actions/core": "^3.0.1",
@@ -64919,6 +64921,7 @@ var package_default = {
     yaml: "2.9.1"
   },
   devDependencies: {
+    "@changesets/cli": "3.0.3",
     "@types/node": "^26.6.6",
     oxlint: "1.90.0",
     "oxlint-config-universe": "0.2.0",
