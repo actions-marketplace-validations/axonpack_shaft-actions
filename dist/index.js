@@ -64904,7 +64904,7 @@ qe();
 // package.json
 var package_default = {
   name: "shaft",
-  version: "0.0.0",
+  version: "1.0.0",
   private: true,
   description: "A GitHub Action that reviews pull requests with Claude through the Claude Agent SDK.",
   license: "MIT",
