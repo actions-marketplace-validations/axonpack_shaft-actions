@@ -65573,7 +65573,7 @@ function route(eventName, payload, opts = {}) {
     if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
       return {
         mode: "skip",
-        reason: `PR #${pr.number} is from a fork, which gets no secrets, so it was skipped. A maintainer can comment "${APP_MENTION} review" instead.`,
+        reason: `PR #${pr.number} is from a fork, which gets no secrets, so it was skipped.`,
         notice: true
       };
     }

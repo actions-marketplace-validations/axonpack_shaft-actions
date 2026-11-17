@@ -1,50 +1,50 @@
 name: Axon Shaft
-description: "Review pull requests with Claude, on your own runners. Needs `permissions: id-token: write` to fetch its tokens from shaft.axonpack.dev."
+description: "Review pull requests with Claude, on your own runners. Needs `permissions: id-token: write` to fetch its tokens from shaft.axonpack.dev, unless every token is given as an input."
 author: axonpack
 
 inputs:
   claude_code_oauth_token:
-    description: Optional. A Claude Pro or Max plan token, from `claude setup-token`, used instead of the token saved on shaft.axonpack.dev. Set at most one of this or anthropic_api_key.
+    description: "A Claude Pro or Max plan token from `claude setup-token`. Set this or anthropic_api_key, not both. Default: the Claude token saved on shaft.axonpack.dev."
     required: false
   anthropic_api_key:
-    description: Optional. An Anthropic Console API key, used instead of the token saved on shaft.axonpack.dev. Set at most one of this or claude_code_oauth_token.
+    description: "An Anthropic Console API key. Default: the Claude token saved on shaft.axonpack.dev."
     required: false
   app_id:
-    description: Optional. Post as this GitHub App instead of AxonShaft. Set both app_id and private_key, or neither.
+    description: "Post as this GitHub App instead of AxonShaft. Set both app_id and private_key, or neither. Default: the GitHub token from shaft.axonpack.dev."
     required: false
   private_key:
     description: The private key of the GitHub App in app_id.
     required: false
   github_token:
-    description: "Post with this token instead of the one from shaft.axonpack.dev, such as the run's own `github.token`; comments then come from github-actions[bot]. With a Claude token input too, the action never calls the Axon Shaft API."
+    description: "Post with this token, such as the run's own `github.token` (comments then come from github-actions[bot]). Default: the GitHub token from shaft.axonpack.dev. With a Claude token input too, the action never calls the Axon Shaft API."
     required: false
   model:
-    description: "`auto` picks per run. Or any Claude model ID or alias (opus, sonnet, haiku). Default: auto, unless set on shaft.axonpack.dev."
+    description: "`auto` picks a model from the diff. Or any Claude model ID or alias (opus, sonnet, haiku). Default: the dashboard's, else auto."
     required: false
   effort:
-    description: "`auto` picks per run. Or low, medium, high, xhigh, max. Default: auto, unless set on shaft.axonpack.dev."
+    description: "`auto` picks from the diff. Or low, medium, high, xhigh, max. Default: the dashboard's, else auto."
     required: false
   depth:
-    description: "`standard`: one session walks the review steps. `deep`: correctness, breakage and security run as separate subagents, then a verifier. About 3x the cost. Default: standard, unless set on shaft.axonpack.dev."
+    description: "`standard` runs one session. `deep` also runs the correctness, breakage and security checks as separate subagents, then a verifier, for about 3x the cost. Default: the Code review job's, else standard."
     required: false
   mode:
-    description: "`auto` picks from the event. `review` or `task` forces one."
+    description: "`auto` picks from the event. `review` forces a review of the event's pull request. `task` forces task mode, which isn't built yet."
     required: false
     default: auto
   max_turns:
-    description: "Agent SDK turn limit per run. Default: 30, unless set on shaft.axonpack.dev."
+    description: "The Agent SDK turn limit per run. Default: the dashboard's, else 30."
     required: false
   timeout_minutes:
-    description: "The run stops after this many minutes and posts what it has. Default: 15, unless set on shaft.axonpack.dev."
+    description: "The run stops after this many minutes and says so in the summary. Default: the dashboard's, else 15."
     required: false
   nits:
-    description: "`summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. Default: summary, unless set on shaft.axonpack.dev."
+    description: "`summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. Default: the Code review job's, else summary."
     required: false
   task_tools:
-    description: Extra tools for task mode, e.g. `Bash(bun test:*),Bash(bun run lint)`. Review mode never gets these.
+    description: "Extra tools for task mode, such as `Bash(bun test:*)`. Task mode isn't built yet, so this does nothing for now. Review mode never gets them."
     required: false
   config_path:
-    description: Where the repo's review rules (rules, skip, focus) live. Read from the PR's base branch, so a PR can't change its own rules.
+    description: Where the repo's review rules (rules, skip, focus) live. Axon Shaft reads the base branch's copy, so a PR can't change its own rules.
     required: false
     default: .github/shaft.yml
   dry_run:
@@ -58,7 +58,7 @@ outputs:
   findings:
     description: The number of blocking and should-fix findings.
   summary_url:
-    description: The URL of the summary comment. Empty on a dry run.
+    description: The link to the summary comment. Empty on a dry run.
 
 runs:
   using: node24
