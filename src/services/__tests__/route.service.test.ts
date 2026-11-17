@@ -10,9 +10,10 @@ import push from './fixtures/push.json';
 
 const quiet = (r: ReturnType<typeof route>) => r.mode === 'skip' && !r.notice;
 
-test('pull_request opened, synchronize, reopened, ready_for_review: review', () => {
-  for (const action of ['opened', 'synchronize', 'reopened', 'ready_for_review']) {
-    expect(route('pull_request', { ...opened, action })).toEqual({ mode: 'review', number: 12 });
+test('pull_request opened, synchronize, reopened, ready_for_review: review, with the event the API gets', () => {
+  const events = { opened: 'opened', reopened: 'opened', synchronize: 'push', ready_for_review: 'ready' };
+  for (const [action, event] of Object.entries(events)) {
+    expect(route('pull_request', { ...opened, action })).toEqual({ mode: 'review', number: 12, event });
   }
 });
 
@@ -46,6 +47,7 @@ test('anything else exits quietly', () => {
 
 test('mode review forces a review of the event PR, and needs one', () => {
   expect(route('issue_comment', comment, { mode: 'review' })).toEqual({ mode: 'review', number: 12 });
+  expect(route('pull_request', { ...opened, action: 'labeled' }, { mode: 'review' })).toEqual({ mode: 'review', number: 12 });
   expect(route('workflow_dispatch', push, { mode: 'review' })).toMatchObject({ mode: 'skip', notice: true });
 });
 

@@ -65508,15 +65508,16 @@ ${clean(body)}`);
 }
 
 // src/services/route.service.ts
-var REVIEW_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_review"];
+var REVIEW_EVENTS = { opened: "opened", reopened: "opened", synchronize: "push", ready_for_review: "ready" };
 function route(eventName, payload, opts = {}) {
   const { mode = "auto" } = opts;
   const pr = payload.pull_request;
   const number = pr?.number ?? payload.issue?.number;
+  const event = eventName === "pull_request" ? REVIEW_EVENTS[payload.action] : undefined;
   if (mode === "review") {
     if (!pr && !payload.issue?.pull_request)
       return { mode: "skip", reason: "mode is review, but this event has no pull request.", notice: true };
-    return { mode: "review", number };
+    return { mode: "review", number, event };
   }
   if (mode === "task") {
     if (!number)
@@ -65524,7 +65525,7 @@ function route(eventName, payload, opts = {}) {
     return { mode: "task", number, actor: payload.sender?.login };
   }
   if (eventName === "pull_request") {
-    if (!REVIEW_ACTIONS.includes(payload.action))
+    if (!event)
       return { mode: "skip", reason: `pull_request ${payload.action} is not reviewed.` };
     if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
       return {
@@ -65533,7 +65534,7 @@ function route(eventName, payload, opts = {}) {
         notice: true
       };
     }
-    return { mode: "review", number: pr.number };
+    return { mode: "review", number: pr.number, event };
   }
   const text = eventName === "issue_comment" || eventName === "pull_request_review_comment" ? payload.action === "created" && payload.comment?.body : eventName === "pull_request_review" ? payload.action === "submitted" && payload.review?.body : undefined;
   if (typeof text !== "string" || !text.includes(APP_MENTION))
