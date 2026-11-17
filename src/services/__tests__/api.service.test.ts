@@ -29,43 +29,75 @@ beforeEach(() => {
   process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
 });
 
-test('POST /v1/token with the OIDC token, and both tokens masked', async () => {
-  answer(Response.json({ github_token: 'ghs_shaft', claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' }, settings: {} }));
-  const g = await fetchGrant();
-  expect(g.github_token).toBe('ghs_shaft');
+const review = { job: 'review', event: 'push' } as const;
+const job = { type: 'review', version: 1, options: { on: ['opened', 'push'], depth: 'deep', nits: 'off' }, instructions: '1. **Verify.**' };
+
+test('POST /v1/token sends the job and event with the OIDC token, and masks both tokens', async () => {
+  const run = { run: true, github_token: 'ghs_shaft', claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' }, settings: { model: 'opus' }, job };
+  answer(Response.json(run));
+  expect(await fetchGrant(review)).toEqual(run);
   expect(audiences).toEqual(['https://api-shaft.axonpack.dev']);
   expect(requests[0].url).toBe('https://api-shaft.axonpack.dev/v1/token');
   expect(requests[0].init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer oidc-1' } });
+  expect(JSON.parse(requests[0].init.body as string)).toEqual(review);
   expect(masked).toEqual(['ghs_shaft', 'sk-ant-oat-shaft']);
+});
+
+test('a task sends no event, and a run with no saved Claude token masks only the GitHub token', async () => {
+  answer(Response.json({ run: true, github_token: 'ghs_shaft', claude_token: null, settings: {}, job }));
+  await fetchGrant({ job: 'task' });
+  expect(JSON.parse(requests[0].init.body as string)).toEqual({ job: 'task' });
+  expect(masked).toEqual(['ghs_shaft']);
+});
+
+test('run: false comes back with its reason, and nothing is masked', async () => {
+  answer(Response.json({ run: false, reason: 'Code review is off for this repo.' }));
+  expect(await fetchGrant(review)).toEqual({ run: false, reason: 'Code review is off for this repo.' });
+  expect(masked).toEqual([]);
+});
+
+test('run: true without a github_token fails', async () => {
+  answer(Response.json({ run: true, claude_token: null, settings: {}, job }));
+  await expect(fetchGrant(review)).rejects.toThrow('sent no github_token');
 });
 
 test('a missing id-token permission says which line to add', async () => {
   delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   answer(Response.json({}));
-  await expect(fetchGrant()).rejects.toThrow('Add `permissions: id-token: write` to the workflow');
+  await expect(fetchGrant(review)).rejects.toThrow('Add `permissions: id-token: write` to the workflow');
   expect(requests).toEqual([]);
 });
 
-test('404 links the app install page', async () => {
+test('404 not_installed links the install page the API sends', async () => {
+  answer(Response.json({ error: 'not_installed', url: 'https://github.com/apps/axonshaft/installations/new?x=1' }, { status: 404 }));
+  await expect(fetchGrant(review)).rejects.toThrow("isn't installed on this repo. Install it: https://github.com/apps/axonshaft/installations/new?x=1");
+});
+
+test('404 not_a_project links the dashboard page the API sends', async () => {
+  answer(Response.json({ error: 'not_a_project', url: 'https://shaft.axonpack.dev/acme' }, { status: 404 }));
+  await expect(fetchGrant(review)).rejects.toThrow("This repo isn't a project on Axon Shaft yet. Add it: https://shaft.axonpack.dev/acme");
+});
+
+test('a 404 without a body still links the install page', async () => {
   answer(new Response('', { status: 404 }));
-  await expect(fetchGrant()).rejects.toThrow("isn't installed on this repo. Install it: https://github.com/apps/axonshaft/installations/new");
+  await expect(fetchGrant(review)).rejects.toThrow('Install it: https://github.com/apps/axonshaft/installations/new');
 });
 
 test('401 and 403 say the token was refused', async () => {
   answer(new Response('bad audience', { status: 401 }));
-  await expect(fetchGrant()).rejects.toThrow("refused this run's OIDC token (401): bad audience");
+  await expect(fetchGrant(review)).rejects.toThrow("refused this run's OIDC token (401): bad audience");
   answer(new Response('', { status: 403 }));
-  await expect(fetchGrant()).rejects.toThrow('(403)');
+  await expect(fetchGrant(review)).rejects.toThrow('(403)');
 });
 
 test('429 gives the Retry-After value', async () => {
   answer(new Response('', { status: 429, headers: { 'retry-after': '42' } }));
-  await expect(fetchGrant()).rejects.toThrow('rate-limited this repo. Retry-After: 42.');
+  await expect(fetchGrant(review)).rejects.toThrow('rate-limited this repo. Retry-After: 42.');
 });
 
 test('a network error names the API', async () => {
   answer(new TypeError('fetch failed'));
-  await expect(fetchGrant()).rejects.toThrow("Couldn't reach the Axon Shaft API at https://api-shaft.axonpack.dev: fetch failed");
+  await expect(fetchGrant(review)).rejects.toThrow("Couldn't reach the Axon Shaft API at https://api-shaft.axonpack.dev: fetch failed");
 });
 
 const summary = { verdict: 'looks-good', model: 'sonnet', effort: 'medium', findings: { blocking: 0, should_fix: 1, nit: 2 }, duration_ms: 1000 };

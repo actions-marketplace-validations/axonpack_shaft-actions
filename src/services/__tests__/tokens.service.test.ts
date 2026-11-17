@@ -30,16 +30,22 @@ vi.doMock('@actions/github', () => ({
   }),
 }));
 const { resolveTokens } = await import('../tokens.service');
+type Tokens = import('../tokens.service').Tokens;
 
 const repo = { owner: 'acme', repo: 'widgets' };
+const job = { type: 'review', version: 1, options: { depth: 'standard' }, instructions: '1. **Verify.**' };
 const grant = {
+  run: true,
   github_token: 'ghs_shaft',
   claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' },
   settings: { model: 'opus' },
+  job,
 };
+const sent: unknown[] = [];
 /** The Axon Shaft API answers with this grant, or fails to answer when given an Error. */
 const api = (answer: object | Error) =>
-  vi.stubGlobal('fetch', async () => {
+  vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+    sent.push(JSON.parse(init.body as string));
     if (answer instanceof Error) throw answer;
     return Response.json(answer);
   });
@@ -47,36 +53,47 @@ const api = (answer: object | Error) =>
 beforeEach(() => {
   masked.length = 0;
   calls.length = 0;
+  sent.length = 0;
   process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
   api(grant);
 });
 
-test('with no inputs, both tokens and the settings come from the Axon Shaft API', async () => {
-  const t = await resolveTokens({ githubToken: 'ghs_run' }, repo);
+const review = { job: 'review', event: 'opened' } as const;
+const resolve = async (input: Parameters<typeof resolveTokens>[0]) => (await resolveTokens(input, repo, review)) as Tokens;
+
+test('with no inputs, both tokens, the settings and the job come from the Axon Shaft API', async () => {
+  const t = await resolve({ githubToken: 'ghs_run' });
+  expect(sent).toEqual([review]);
   expect(t).toEqual({
     claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-shaft' },
     github: 'ghs_shaft',
     via: 'shaft',
     settings: { model: 'opus' },
+    job,
   });
   expect(masked).toEqual(expect.arrayContaining(['sk-ant-oat-shaft', 'ghs_shaft']));
 });
 
+test("run: false gives the API's reason and no tokens", async () => {
+  api({ run: false, reason: 'Code review is off for this repo.' });
+  expect(await resolveTokens({}, repo, review)).toEqual({ reason: 'Code review is off for this repo.' });
+});
+
 test("the API's api_key token goes in ANTHROPIC_API_KEY", async () => {
   api({ ...grant, claude_token: { kind: 'api_key', value: 'sk-ant-api-shaft' } });
-  const t = await resolveTokens({}, repo);
+  const t = await resolve({});
   expect(t.claude).toEqual({ env: 'ANTHROPIC_API_KEY', value: 'sk-ant-api-shaft' });
 });
 
 test("a Claude input beats the API's token", async () => {
-  const oauth = await resolveTokens({ claudeCodeOauthToken: 'sk-ant-oat-1' }, repo);
+  const oauth = await resolve({ claudeCodeOauthToken: 'sk-ant-oat-1' });
   expect(oauth).toMatchObject({ claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-1' }, github: 'ghs_shaft' });
-  const key = await resolveTokens({ anthropicApiKey: 'sk-ant-api-1' }, repo);
+  const key = await resolve({ anthropicApiKey: 'sk-ant-api-1' });
   expect(key.claude).toEqual({ env: 'ANTHROPIC_API_KEY', value: 'sk-ant-api-1' });
 });
 
 test("the app inputs beat the API's GitHub token, with an installation token scoped to this repo", async () => {
-  const t = await resolveTokens({ appId: '123', privateKey: 'PEM', githubToken: 'ghs_run' }, repo);
+  const t = await resolve({ appId: '123', privateKey: 'PEM', githubToken: 'ghs_run' });
   expect(t).toMatchObject({ github: 'ghs_installation', via: 'app', settings: { model: 'opus' } });
   expect(calls).toEqual([
     { appId: '123', privateKey: 'PEM' },
@@ -88,22 +105,22 @@ test("the app inputs beat the API's GitHub token, with an installation token sco
 
 test('without the API, a Claude input and github_token still run', async () => {
   api(new TypeError('fetch failed'));
-  const t = await resolveTokens({ claudeCodeOauthToken: 'sk-ant-oat-1', githubToken: 'ghs_run' }, repo);
-  expect(t).toEqual({ claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-1' }, github: 'ghs_run', via: 'github_token', settings: undefined });
+  const t = await resolve({ claudeCodeOauthToken: 'sk-ant-oat-1', githubToken: 'ghs_run' });
+  expect(t).toEqual({ claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-1' }, github: 'ghs_run', via: 'github_token' });
   expect(masked).toEqual(['sk-ant-oat-1', 'ghs_run']);
 });
 
 test("without the API and with no Claude input, the API's error fails the run", async () => {
   api(new TypeError('fetch failed'));
-  await expect(resolveTokens({ githubToken: 'ghs_run' }, repo)).rejects.toThrow("Couldn't reach the Axon Shaft API");
+  await expect(resolve({ githubToken: 'ghs_run' })).rejects.toThrow("Couldn't reach the Axon Shaft API");
 });
 
 test('no Claude token anywhere fails with a link to the dashboard', async () => {
   api({ ...grant, claude_token: null });
-  await expect(resolveTokens({ githubToken: 'ghs_run' }, repo)).rejects.toThrow('save one on https://shaft.axonpack.dev');
+  await expect(resolve({ githubToken: 'ghs_run' })).rejects.toThrow('save one on https://shaft.axonpack.dev');
 });
 
 test('both Claude inputs, or only one app input, fail', async () => {
-  await expect(resolveTokens({ claudeCodeOauthToken: 'a', anthropicApiKey: 'b' }, repo)).rejects.toThrow('only one');
-  await expect(resolveTokens({ anthropicApiKey: 'k', appId: '123' }, repo)).rejects.toThrow('both app_id and private_key');
+  await expect(resolve({ claudeCodeOauthToken: 'a', anthropicApiKey: 'b' })).rejects.toThrow('only one');
+  await expect(resolve({ anthropicApiKey: 'k', appId: '123' })).rejects.toThrow('both app_id and private_key');
 });

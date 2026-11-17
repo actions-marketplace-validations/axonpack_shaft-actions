@@ -34,7 +34,9 @@ async function run(): Promise<void> {
       githubToken: input('github_token'),
     },
     context.repo,
+    { job: r.mode, event: r.mode === 'review' ? r.event : undefined },
   );
+  if ('reason' in tokens) return core.notice(tokens.reason);
   const octokit = getOctokit(tokens.github);
 
   if (r.mode === 'task') {

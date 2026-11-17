@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import { getOctokit } from '@actions/github';
 import { createAppAuth } from '@octokit/auth-app';
 import { DASHBOARD_URL } from '../consts/api.const';
-import { fetchGrant, type Grant } from './api.service';
+import { fetchGrant, type Grant, type GrantJob, type GrantRequest } from './api.service';
 
 export type TokenInputs = {
   claudeCodeOauthToken?: string;
@@ -21,20 +21,29 @@ export type Tokens = {
   via: 'app' | 'shaft' | 'github_token';
   /** The dashboard's settings; undefined when the Axon Shaft API wasn't used. */
   settings?: Record<string, unknown>;
+  /** The project's job from the Axon Shaft API; undefined when it wasn't used. */
+  job?: GrantJob;
 };
 
 /**
  * Each token comes from the first source that has it. Claude: the inputs, then the Axon Shaft API.
- * GitHub: the app inputs, then the Axon Shaft API, then `github_token`.
+ * GitHub: the app inputs, then the Axon Shaft API, then `github_token`. When the API says not to
+ * run, its reason comes back instead.
  */
-export async function resolveTokens(input: TokenInputs, repo: { owner: string; repo: string }): Promise<Tokens> {
+export async function resolveTokens(
+  input: TokenInputs,
+  repo: { owner: string; repo: string },
+  request: GrantRequest,
+): Promise<Tokens | { reason: string }> {
   const { claudeCodeOauthToken: oauth, anthropicApiKey: apiKey, appId, privateKey } = input;
   if (oauth && apiKey) throw new Error('Set only one of claude_code_oauth_token and anthropic_api_key, not both.');
   if (!appId !== !privateKey) throw new Error('Set both app_id and private_key, or neither.');
 
-  let grant: Grant | undefined;
+  let grant: Extract<Grant, { run: true }> | undefined;
   try {
-    grant = await fetchGrant();
+    const answer = await fetchGrant(request);
+    if (!answer.run) return { reason: answer.reason };
+    grant = answer;
   } catch (e) {
     if (!oauth && !apiKey) throw e; // nothing else has a Claude token
     core.info(`Not using the Axon Shaft API: ${(e as Error).message}`);
@@ -71,5 +80,5 @@ export async function resolveTokens(input: TokenInputs, repo: { owner: string; r
     via = 'github_token';
   }
   core.setSecret(github);
-  return { claude, github, via, settings: grant && (grant.settings ?? {}) };
+  return { claude, github, via, settings: grant && (grant.settings ?? {}), job: grant?.job };
 }

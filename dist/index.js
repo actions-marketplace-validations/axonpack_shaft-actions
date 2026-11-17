@@ -30699,10 +30699,14 @@ async function post(path, body) {
     throw new Error(`Couldn't reach the Axon Shaft API at ${API_URL}: ${e.message}`);
   }
 }
-async function fetchGrant() {
-  const res = await post("/v1/token", {});
-  if (res.status === 404)
-    throw new Error(`The AxonShaft app isn't installed on this repo. Install it: ${INSTALL_URL}`);
+async function fetchGrant(request) {
+  const res = await post("/v1/token", request);
+  if (res.status === 404) {
+    const { error, url } = await res.json().catch(() => ({}));
+    if (error === "not_a_project")
+      throw new Error(`This repo isn't a project on Axon Shaft yet. Add it: ${url ?? DASHBOARD_URL}`);
+    throw new Error(`The AxonShaft app isn't installed on this repo. Install it: ${url ?? INSTALL_URL}`);
+  }
   if (res.status === 429)
     throw new Error(`The Axon Shaft API rate-limited this repo. Retry-After: ${res.headers.get("retry-after") ?? "not given"}.`);
   if (!res.ok) {
@@ -30710,6 +30714,8 @@ async function fetchGrant() {
     throw new Error(`The Axon Shaft API ${why} (${res.status}): ${(await res.text()).slice(0, 200)}`);
   }
   const grant = await res.json();
+  if (grant?.run === false)
+    return grant;
   if (typeof grant?.github_token !== "string")
     throw new Error("The Axon Shaft API sent no github_token.");
   setSecret(grant.github_token);
@@ -66728,7 +66734,7 @@ function createAppAuth(options) {
 }
 
 // src/services/tokens.service.ts
-async function resolveTokens(input, repo) {
+async function resolveTokens(input, repo, request) {
   const { claudeCodeOauthToken: oauth, anthropicApiKey: apiKey, appId, privateKey } = input;
   if (oauth && apiKey)
     throw new Error("Set only one of claude_code_oauth_token and anthropic_api_key, not both.");
@@ -66736,7 +66742,10 @@ async function resolveTokens(input, repo) {
     throw new Error("Set both app_id and private_key, or neither.");
   let grant;
   try {
-    grant = await fetchGrant();
+    const answer = await fetchGrant(request);
+    if (!answer.run)
+      return { reason: answer.reason };
+    grant = answer;
   } catch (e) {
     if (!oauth && !apiKey)
       throw e;
@@ -66775,7 +66784,7 @@ async function resolveTokens(input, repo) {
     via = "github_token";
   }
   setSecret(github);
-  return { claude, github, via, settings: grant && (grant.settings ?? {}) };
+  return { claude, github, via, settings: grant && (grant.settings ?? {}), job: grant?.job };
 }
 
 // src/main.ts
@@ -66803,7 +66812,9 @@ async function run() {
     appId: input("app_id"),
     privateKey: input("private_key"),
     githubToken: input("github_token")
-  }, context2.repo);
+  }, context2.repo, { job: r.mode, event: r.mode === "review" ? r.event : undefined });
+  if ("reason" in tokens)
+    return notice(tokens.reason);
   const octokit = getOctokit(tokens.github);
   if (r.mode === "task") {
     if (!await hasWriteAccess(octokit, owner, repo, r.actor))
