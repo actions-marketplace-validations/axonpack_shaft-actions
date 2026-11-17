@@ -62,7 +62,7 @@ const review = { job: 'review', event: 'opened' } as const;
 const resolve = async (input: Parameters<typeof resolveTokens>[0]) => (await resolveTokens(input, repo, review)) as Tokens;
 
 test('with no inputs, both tokens, the settings and the job come from the Axon Shaft API', async () => {
-  const t = await resolve({ githubToken: 'ghs_run' });
+  const t = await resolve({});
   expect(sent).toEqual([review]);
   expect(t).toEqual({
     claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-shaft' },
@@ -72,6 +72,10 @@ test('with no inputs, both tokens, the settings and the job come from the Axon S
     job,
   });
   expect(masked).toEqual(expect.arrayContaining(['sk-ant-oat-shaft', 'ghs_shaft']));
+});
+
+test("github_token beats the API's GitHub token; the Claude token and settings still come from the API", async () => {
+  expect(await resolve({ githubToken: 'ghs_run' })).toMatchObject({ github: 'ghs_run', via: 'github_token', claude: { value: 'sk-ant-oat-shaft' }, job });
 });
 
 test("run: false gives the API's reason and no tokens", async () => {

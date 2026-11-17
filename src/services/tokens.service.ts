@@ -69,12 +69,12 @@ export async function resolveTokens(
     });
     github = data.token;
     via = 'app';
-  } else if (grant) {
-    github = grant.github_token;
-    via = 'shaft';
-  } else {
-    github = input.githubToken!; // standalone without app inputs
+  } else if (input.githubToken) {
+    github = input.githubToken;
     via = 'github_token';
+  } else {
+    github = grant!.github_token; // the API was called: no input set this token
+    via = 'shaft';
   }
   core.setSecret(github);
   return { claude, github, via, settings: grant && (grant.settings ?? {}), job: grant?.job };

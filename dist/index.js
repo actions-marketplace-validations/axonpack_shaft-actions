@@ -66750,12 +66750,12 @@ async function resolveTokens(input, repo, request) {
     });
     github = data.token;
     via = "app";
-  } else if (grant) {
-    github = grant.github_token;
-    via = "shaft";
-  } else {
+  } else if (input.githubToken) {
     github = input.githubToken;
     via = "github_token";
+  } else {
+    github = grant.github_token;
+    via = "shaft";
   }
   setSecret(github);
   return { claude, github, via, settings: grant && (grant.settings ?? {}), job: grant?.job };
