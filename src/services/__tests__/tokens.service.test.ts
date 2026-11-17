@@ -103,16 +103,23 @@ test("the app inputs beat the API's GitHub token, with an installation token sco
   expect(masked).toContain('ghs_installation');
 });
 
-test('without the API, a Claude input and github_token still run', async () => {
-  api(new TypeError('fetch failed'));
+test('standalone: a Claude input and github_token never call the API', async () => {
   const t = await resolve({ claudeCodeOauthToken: 'sk-ant-oat-1', githubToken: 'ghs_run' });
+  expect(sent).toEqual([]);
   expect(t).toEqual({ claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-1' }, github: 'ghs_run', via: 'github_token' });
   expect(masked).toEqual(['sk-ant-oat-1', 'ghs_run']);
 });
 
-test("without the API and with no Claude input, the API's error fails the run", async () => {
+test('standalone: a Claude input and the app inputs never call the API', async () => {
+  const t = await resolve({ anthropicApiKey: 'sk-ant-api-1', appId: '123', privateKey: 'PEM' });
+  expect(sent).toEqual([]);
+  expect(t).toEqual({ claude: { env: 'ANTHROPIC_API_KEY', value: 'sk-ant-api-1' }, github: 'ghs_installation', via: 'app' });
+});
+
+test("with a token missing from the inputs, the API's error fails the run", async () => {
   api(new TypeError('fetch failed'));
   await expect(resolve({ githubToken: 'ghs_run' })).rejects.toThrow("Couldn't reach the Axon Shaft API");
+  await expect(resolve({ claudeCodeOauthToken: 'sk-ant-oat-1' })).rejects.toThrow("Couldn't reach the Axon Shaft API");
 });
 
 test('no Claude token anywhere fails with a link to the dashboard', async () => {

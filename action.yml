@@ -16,9 +16,8 @@ inputs:
     description: The private key of the GitHub App in app_id.
     required: false
   github_token:
-    description: Used when there are no app inputs and the Axon Shaft API can't be reached. Comments then come from github-actions[bot].
+    description: "Post with this token instead of the one from shaft.axonpack.dev, such as the run's own `github.token`; comments then come from github-actions[bot]. With a Claude token input too, the action never calls the Axon Shaft API."
     required: false
-    default: ${{ github.token }}
   model:
     description: "`auto` picks per run. Or any Claude model ID or alias (opus, sonnet, haiku). Default: auto, unless set on shaft.axonpack.dev."
     required: false

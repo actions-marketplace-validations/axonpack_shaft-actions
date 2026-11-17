@@ -66721,15 +66721,11 @@ async function resolveTokens(input, repo, request) {
   if (!appId !== !privateKey)
     throw new Error("Set both app_id and private_key, or neither.");
   let grant;
-  try {
+  if (!((oauth || apiKey) && (appId && privateKey || input.githubToken))) {
     const answer = await fetchGrant(request);
     if (!answer.run)
       return { reason: answer.reason };
     grant = answer;
-  } catch (e) {
-    if (!oauth && !apiKey)
-      throw e;
-    info(`Not using the Axon Shaft API: ${e.message}`);
   }
   let claude;
   if (oauth)
@@ -66758,8 +66754,6 @@ async function resolveTokens(input, repo, request) {
     github = grant.github_token;
     via = "shaft";
   } else {
-    if (!input.githubToken)
-      throw new Error("No GitHub token: set github_token, or app_id and private_key.");
     github = input.githubToken;
     via = "github_token";
   }

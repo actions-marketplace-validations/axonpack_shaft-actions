@@ -27,8 +27,9 @@ export type Tokens = {
 
 /**
  * Each token comes from the first source that has it. Claude: the inputs, then the Axon Shaft API.
- * GitHub: the app inputs, then the Axon Shaft API, then `github_token`. When the API says not to
- * run, its reason comes back instead.
+ * GitHub: the app inputs, then `github_token`, then the Axon Shaft API. With every token given as an
+ * input the API isn't called (standalone); otherwise it is, and when it says not to run, its reason
+ * comes back instead.
  */
 export async function resolveTokens(
   input: TokenInputs,
@@ -40,13 +41,10 @@ export async function resolveTokens(
   if (!appId !== !privateKey) throw new Error('Set both app_id and private_key, or neither.');
 
   let grant: Extract<Grant, { run: true }> | undefined;
-  try {
+  if (!((oauth || apiKey) && ((appId && privateKey) || input.githubToken))) {
     const answer = await fetchGrant(request);
     if (!answer.run) return { reason: answer.reason };
     grant = answer;
-  } catch (e) {
-    if (!oauth && !apiKey) throw e; // nothing else has a Claude token
-    core.info(`Not using the Axon Shaft API: ${(e as Error).message}`);
   }
 
   let claude: ClaudeToken;
@@ -75,8 +73,7 @@ export async function resolveTokens(
     github = grant.github_token;
     via = 'shaft';
   } else {
-    if (!input.githubToken) throw new Error('No GitHub token: set github_token, or app_id and private_key.');
-    github = input.githubToken;
+    github = input.githubToken!; // standalone without app inputs
     via = 'github_token';
   }
   core.setSecret(github);
