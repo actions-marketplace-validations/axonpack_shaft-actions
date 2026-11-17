@@ -64932,7 +64932,7 @@ import { createHash } from "node:crypto";
 var SUMMARY_MARKER = "<!-- shaft:summary -->";
 var VERDICTS = ["blocking", "needs-changes", "looks-good"];
 var SEVERITIES = ["blocking", "should-fix", "nit"];
-var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security"];
+var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security", "rules"];
 var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
 function diffLines(patch) {
   const lines = new Map;
@@ -65123,9 +65123,9 @@ function cliEnv(claude) {
   return { ...env, [claude.env]: claude.value, CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}` };
 }
 var deepAgents = (model, effort) => Object.fromEntries([
-  ["correctness", "step 3: logic errors, wrong conditions, missing await, off-by-one, null and empty cases, swallowed errors, races, leaks"],
-  ["breakage", "step 4: callers and users of every changed function, type, export, config key, CLI flag or schema, across the repo"],
-  ["security", "step 8: secrets, injection, unchecked input at a trust boundary, weakened auth, unsafe workflow changes"]
+  ["correctness", "logic errors, wrong conditions, missing await, off-by-one, null and empty cases, swallowed errors, races, leaks"],
+  ["breakage", "callers and users of every changed function, type, export, config key, CLI flag or schema, across the repo"],
+  ["security", "secrets, injection, unchecked input at a trust boundary, weakened auth, unsafe workflow changes"]
 ].map(([name, focus]) => [
   name,
   {
@@ -65139,8 +65139,8 @@ var deepAgents = (model, effort) => Object.fromEntries([
 var DEEP_NOTE = `## Depth: deep
 
 Run the \`correctness\`, \`breakage\` and \`security\` subagents in parallel, each given the diff and
-the PR text. Then act as the verifier: do steps 1, 2, 5, 6 and 7 yourself, and step 9 over their
-findings and yours, before you reply.`;
+the PR text. Then act as the verifier: do the other steps yourself, and the last step, Verify, over
+their findings and yours, before you reply.`;
 async function once(prompt, o, controller) {
   const deep = !!o.subagentModel;
   let result;
@@ -65278,41 +65278,14 @@ as it should read.
 
 Each step can add findings.
 
-1. **Learn the repo's rules.** Read whichever of these exist: \`CLAUDE.md\`, \`AGENTS.md\`,
-   \`CONTRIBUTING.md\`, \`CONVENTIONS.md\`, \`STYLE.md\`, \`.github/pull_request_template.md\`, the lint
-   and format configs, and the repo's review rules (under "The repo's review rules" below; never
-   read the rules file from the checkout). Note the test command, the package manager, the
-   changelog and docs rules. Nothing is reported from this step.
-2. **Understand the PR.** Title, body, linked issue, commit messages. Write down in one line what
-   the PR claims to do (\`claim\`). A diff that does something else, or more, is a finding.
-3. **Correctness of the diff.** For each changed hunk: logic errors, wrong conditions, missing
-   \`await\`, off-by-one, null and empty cases, error handling that swallows failures, races,
-   resource leaks.
-4. **What else it can break.** For each changed function, type, export, config key, CLI flag or
-   schema: find its callers and users across the repo (\`Grep\`), including other packages in a
-   monorepo. Look for a changed signature or behaviour that a caller didn't get updated for, a
-   breaking change to a public API with no major bump or note, a migration that old data won't
-   survive.
-5. **The repo's standards.** Against what step 1 found: naming, file layout, the patterns the repo
-   already uses. Code that rewrites a helper the repo already has is a finding (name the helper).
-   Unneeded complexity, dead code, leftover debug output.
-6. **Tests.** Is the changed behaviour covered? A bug fix with no test that would have caught it,
-   or a test that can't fail, is a finding. Name the case that's missing.
-7. **Docs and release notes.** A change users can see with no docs, README, changelog or changeset
-   update, when the repo's rules ask for one.
-8. **Security.** Secrets in the diff, injection (SQL, shell, HTML), unchecked input at a trust
-   boundary, weakened auth or permissions, unsafe workflow changes (\`pull_request_target\`,
-   untrusted input in \`run:\`).
-9. **Verify.** Re-read every finding against the code once more and drop the ones that don't
-   hold, are style preferences the repo doesn't state, or repeat a comment already on the PR.
-   Then set the verdict: \`blocking\` (a bug, a break or a security issue), \`needs-changes\`
-   (missing tests, docs or a standards issue), \`looks-good\` (nothing left).
+{{steps}}
 
 ## Severity
 
 Each finding is \`blocking\`, \`should-fix\` or \`nit\`. \`step\` names the step that found it:
-\`correctness\` (3), \`breakage\` (4), \`standards\` (2 and 5), \`tests\` (6), \`docs\` (7), \`security\` (8).
-\`title\` is a short label, under 60 characters.
+\`correctness\`, \`breakage\`, \`standards\` (also a PR that does something other than it claims),
+\`tests\`, \`docs\`, \`security\`, or \`rules\` for a check the repo added. \`title\` is a short label,
+under 60 characters.
 
 ## The previous review
 
@@ -65330,6 +65303,9 @@ When "The previous review" below lists findings, check each one against the curr
 - \`scope\`: packages, platforms and code paths touched.
 - \`not_checked\`: what you couldn't verify, e.g. no tests or builds were run.
 `;
+
+// src/consts/review-steps.md
+var review_steps_default = "1. **Learn the repo's rules.** Read whichever of these exist: `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `CONVENTIONS.md`, `STYLE.md`, `.github/pull_request_template.md`, the lint and format configs, and the repo's review rules. Note the test command, the package manager, the changelog and docs rules. Nothing is reported from this step.\n2. **Understand the PR.** Title, body, linked issue, commit messages. Write down in one line what the PR claims to do (`claim`). A diff that does something else, or more, is a finding.\n3. **Correctness of the diff.** For each changed hunk: logic errors, wrong conditions, missing `await`, off-by-one, null and empty cases, error handling that swallows failures, races, resource leaks.\n4. **What else it can break.** For each changed function, type, export, config key, CLI flag or schema: find its callers and users across the repo, including other packages in a monorepo. Look for a changed signature or behaviour that a caller didn't get updated for, a breaking change to a public API with no major bump or note, a migration that old data won't survive.\n5. **The repo's standards.** Against the repo's rules: naming, file layout, the patterns the repo already uses. Code that rewrites a helper the repo already has is a finding (name the helper). Unneeded complexity, dead code, leftover debug output.\n6. **Tests.** Is the changed behaviour covered? A bug fix with no test that would have caught it, or a test that can't fail, is a finding. Name the case that's missing.\n7. **Docs and release notes.** A change users can see with no docs, README, changelog or changeset update, when the repo's rules ask for one.\n8. **Security.** Secrets in the diff, injection (SQL, shell, HTML), unchecked input at a trust boundary, weakened auth or permissions, unsafe workflow changes (`pull_request_target`, untrusted input in `run:`).\n9. **Verify.** Re-read every finding against the code once more and drop the ones that don't hold, are style preferences the repo doesn't state, or repeat a comment already on the PR. Then set the verdict: `blocking` (a bug, a break or a security issue), `needs-changes` (missing tests, docs or a standards issue), `looks-good` (nothing left).\n";
 
 // src/services/review.service.ts
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
@@ -65350,7 +65326,7 @@ ${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
 ${prior.findings.map((f) => `- ${f.fp} ${f.severity} \`${f.file}:${f.line}\` ${f.title}`).join(`
 `)}` : "None.";
   return [
-    procedure_default,
+    procedure_default.replace("{{steps}}", () => (o.instructions || review_steps_default).trim()),
     o.depth === "deep" ? DEEP_NOTE : "",
     [
       `## This run
@@ -66841,6 +66817,7 @@ async function run() {
     timeoutMinutes: number("timeout_minutes", settings.timeLimit),
     configPath: input("config_path"),
     dashboard: tokens.settings,
+    instructions: tokens.job?.instructions,
     dryRun: getBooleanInput("dry_run"),
     runUrl: `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`,
     cwd: process.env.GITHUB_WORKSPACE ?? process.cwd()

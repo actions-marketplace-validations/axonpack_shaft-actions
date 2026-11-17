@@ -6,6 +6,7 @@ import type { ClaudeToken } from './tokens.service';
 import { DEEP_NOTE, runAgent } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import procedure from '../consts/procedure.md' with { type: 'text' };
+import reviewSteps from '../consts/review-steps.md' with { type: 'text' };
 import {
   failedSummary,
   inlineBody,
@@ -33,6 +34,8 @@ export type ReviewOptions = {
   configPath: string;
   /** The Axon Shaft API's settings, for `rules`, `skip` and `focus`; undefined when the API wasn't used. */
   dashboard?: Record<string, unknown>;
+  /** The job's numbered steps from the Axon Shaft API; without them, the built-in steps (the catalog's defaults). */
+  instructions?: string;
   dryRun: boolean;
   runUrl?: string;
   cwd: string;
@@ -56,7 +59,7 @@ const MAX_DIFF = 200_000; // ponytail: a bigger diff is cut; the model reads the
 export function buildPrompt(
   ctx: Context,
   prior: State | undefined,
-  o: Pick<ReviewOptions, 'configPath' | 'depth'> & ReviewRules & { skipped: number },
+  o: Pick<ReviewOptions, 'configPath' | 'depth' | 'instructions'> & ReviewRules & { skipped: number },
 ): string {
   const { pr } = ctx;
   const focused = (f: { filename: string }) => matches(f.filename, o.focus);
@@ -76,7 +79,8 @@ export function buildPrompt(
         .join('\n')}`
     : 'None.';
   return [
-    procedure,
+    // A function, so a `$` in the steps is never read as a replacement pattern.
+    procedure.replace('{{steps}}', () => (o.instructions || reviewSteps).trim()),
     o.depth === 'deep' ? DEEP_NOTE : '',
     [
       '## This run\n',

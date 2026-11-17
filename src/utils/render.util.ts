@@ -4,7 +4,8 @@ export const SUMMARY_MARKER = '<!-- shaft:summary -->';
 
 export const VERDICTS = ['blocking', 'needs-changes', 'looks-good'] as const;
 export const SEVERITIES = ['blocking', 'should-fix', 'nit'] as const;
-export const STEPS = ['correctness', 'breakage', 'standards', 'tests', 'docs', 'security'] as const;
+/** `rules` is a check the repo added on the dashboard. */
+export const STEPS = ['correctness', 'breakage', 'standards', 'tests', 'docs', 'security', 'rules'] as const;
 export const TYPES = ['bug-fix', 'feature', 'refactor', 'docs', 'chore', 'mixed'] as const;
 
 export type Severity = (typeof SEVERITIES)[number];

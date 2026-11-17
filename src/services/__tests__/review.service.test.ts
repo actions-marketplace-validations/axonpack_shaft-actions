@@ -12,8 +12,9 @@ vi.doMock('../agent.service', () => ({
     return { review, models: [o.model], costUsd: 0 };
   },
 }));
-// Bun inlines the procedure as text; Vite can't load a .md module, and the test doesn't need it.
-vi.doMock('../../consts/procedure.md', () => ({ default: '# Review this pull request' }));
+// Bun inlines the procedure and the steps as text; Vite can't load a .md module, so stand-ins.
+vi.doMock('../../consts/procedure.md', () => ({ default: '# Review this pull request\n\n## The steps\n\n{{steps}}\n\n## Severity' }));
+vi.doMock('../../consts/review-steps.md', () => ({ default: '1. **Built-in step.**\n' }));
 const { collectContext } = await import('../context.service');
 const { reviewContext } = await import('../review.service');
 
@@ -52,7 +53,10 @@ function octokit(files: ReturnType<typeof file>[], config: string | null) {
   };
 }
 
-async function review(files: ReturnType<typeof file>[], extra: { dashboard?: Record<string, unknown>; config?: string | null } = {}) {
+async function review(
+  files: ReturnType<typeof file>[],
+  extra: { dashboard?: Record<string, unknown>; config?: string | null; instructions?: string } = {},
+) {
   const fake = octokit(files, extra.config === undefined ? BASE_CONFIG : extra.config);
   const ctx = await collectContext(fake as any, 'o', 'r', 7, '.github/shaft.yml');
   await reviewContext(ctx, {
@@ -67,6 +71,7 @@ async function review(files: ReturnType<typeof file>[], extra: { dashboard?: Rec
     timeoutMinutes: 1,
     configPath: '.github/shaft.yml',
     dashboard: extra.dashboard,
+    instructions: extra.instructions,
     dryRun: true,
     cwd: '.',
   });
@@ -128,4 +133,16 @@ test('without focus files: no marking, and sonnet', async () => {
 test('unknown keys in the file are ignored with a warning', async () => {
   await review([file('src/a.ts')], { config: 'rules: x\nmodel: opus\n' });
   expect(warnings).toEqual(['.github/shaft.yml: ignoring model. It can set rules, skip and focus.']);
+});
+
+test('without the API, the built-in steps sit between the fixed parts', async () => {
+  const { prompt } = await review([file('src/a.ts')]);
+  expect(prompt).toContain('## The steps\n\n1. **Built-in step.**\n\n## Severity');
+});
+
+test("the job's instructions from the API replace the built-in steps, taken as written", async () => {
+  const instructions = '1. **Learn the repo.**\n2. **Prices.** Every `$&` amount has a currency. Findings from this check use step `rules`.';
+  const { prompt } = await review([file('src/a.ts')], { instructions });
+  expect(prompt).toContain(`## The steps\n\n${instructions}\n\n## Severity`);
+  expect(prompt).not.toContain('Built-in step');
 });

@@ -95,9 +95,9 @@ function cliEnv(claude: ClaudeToken): Record<string, string | undefined> {
 const deepAgents = (model: string, effort: EffortLevel): Record<string, AgentDefinition> =>
   Object.fromEntries(
     [
-      ['correctness', 'step 3: logic errors, wrong conditions, missing await, off-by-one, null and empty cases, swallowed errors, races, leaks'],
-      ['breakage', 'step 4: callers and users of every changed function, type, export, config key, CLI flag or schema, across the repo'],
-      ['security', 'step 8: secrets, injection, unchecked input at a trust boundary, weakened auth, unsafe workflow changes'],
+      ['correctness', 'logic errors, wrong conditions, missing await, off-by-one, null and empty cases, swallowed errors, races, leaks'],
+      ['breakage', 'callers and users of every changed function, type, export, config key, CLI flag or schema, across the repo'],
+      ['security', 'secrets, injection, unchecked input at a trust boundary, weakened auth, unsafe workflow changes'],
     ].map(([name, focus]) => [
       name,
       {
@@ -113,8 +113,8 @@ const deepAgents = (model: string, effort: EffortLevel): Record<string, AgentDef
 export const DEEP_NOTE = `## Depth: deep
 
 Run the \`correctness\`, \`breakage\` and \`security\` subagents in parallel, each given the diff and
-the PR text. Then act as the verifier: do steps 1, 2, 5, 6 and 7 yourself, and step 9 over their
-findings and yours, before you reply.`;
+the PR text. Then act as the verifier: do the other steps yourself, and the last step, Verify, over
+their findings and yours, before you reply.`;
 
 export type AgentOptions = {
   claude: ClaudeToken;
