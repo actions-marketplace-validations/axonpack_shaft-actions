@@ -14,7 +14,7 @@ import { toolDenial } from '../utils/tool-guard.util';
 export const SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['verdict', 'type', 'confidence', 'headline', 'claim', 'impact', 'scope', 'findings', 'resolved', 'not_checked'],
+  required: ['verdict', 'type', 'confidence', 'headline', 'claim', 'impact', 'scope', 'findings', 'resolved', 'checked', 'not_checked'],
   properties: {
     verdict: { enum: VERDICTS },
     type: { enum: TYPES },
@@ -42,6 +42,7 @@ export const SCHEMA = {
       },
     },
     resolved: { type: 'array', items: { type: 'string' } },
+    checked: { type: 'array', items: { enum: STEPS } },
     not_checked: { type: 'string' },
   },
 };
@@ -59,7 +60,12 @@ export function parseReview(x: unknown): Review | undefined {
       typeof f.body === 'string',
   );
   if (!ok) return;
-  return { ...r, resolved: Array.isArray(r.resolved) ? r.resolved : [], not_checked: r.not_checked ?? '' };
+  return {
+    ...r,
+    resolved: Array.isArray(r.resolved) ? r.resolved : [],
+    checked: Array.isArray(r.checked) ? r.checked.filter((c) => typeof c === 'string') : [],
+    not_checked: r.not_checked ?? '',
+  };
 }
 
 const READ_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];

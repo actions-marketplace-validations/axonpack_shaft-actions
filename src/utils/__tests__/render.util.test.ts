@@ -44,6 +44,7 @@ const review: Review = {
     finding({ severity: 'nit', line: 43, title: 'loop could be a for' }),
   ],
   resolved: ['aaaaaa'],
+  checked: ['correctness', 'breakage', 'standards', 'tests', 'docs', 'security'],
   not_checked: 'no tests or builds were run.',
 };
 
@@ -238,7 +239,15 @@ test('redact replaces every secret', () => {
 
 test('parseReview accepts the schema and rejects a bad reply', () => {
   expect(parseReview(review)).toEqual(review);
+  const { checked: _, ...older } = review;
+  expect(parseReview(older)).toEqual({ ...review, checked: [] });
   expect(parseReview({ ...review, verdict: 'great' })).toBeUndefined();
   expect(parseReview({ ...review, findings: [{ ...review.findings[0], line: '41' }] })).toBeUndefined();
   expect(parseReview('not json')).toBeUndefined();
+});
+
+test('a check the model left out of checked shows ⬜, not ✅', () => {
+  const placed = place([finding({ step: 'tests' })], files, 'summary');
+  const body = renderSummary({ ...review, checked: ['correctness', 'tests'] }, placed, undefined, { ...info, checks: ['correctness', 'breakage', 'tests', 'docs', 'security'] });
+  expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>⬜ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>⬜ Docs</kbd> <kbd>⬜ Security</kbd>');
 });

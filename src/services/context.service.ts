@@ -1,5 +1,6 @@
 import type { ChangedFile } from '../utils/auto-pick.util';
 import type { Octokit } from '../types/octokit.type';
+import { GUIDE_FILES } from '../consts/settings.const';
 import { SUMMARY_MARKER } from '../utils/render.util';
 
 export type Comment = {
@@ -26,6 +27,8 @@ export type Context = {
   summary?: Comment;
   /** The review rules file's text on the base branch; undefined when it has none. */
   config?: string;
+  /** The repo's guides (`GUIDE_FILES`) the base branch has, in that order. */
+  guides: { path: string; text: string }[];
 };
 
 const comment = (c: any): Comment => ({
@@ -39,11 +42,11 @@ const comment = (c: any): Comment => ({
 });
 
 /**
- * The review rules file as the base branch has it, through the API. Never the checkout's copy: on
- * `pull_request` the checkout is the merge commit, so a PR could edit the file to switch its own
- * rules off.
+ * A file as the base branch has it, through the API; undefined when it has none. Never the
+ * checkout's copy: on `pull_request` the checkout is the merge commit, so a PR could edit the
+ * review rules or the repo's guides to change its own review.
  */
-async function baseConfig(octokit: Octokit, owner: string, repo: string, ref: string, path: string): Promise<string | undefined> {
+async function baseFile(octokit: Octokit, owner: string, repo: string, ref: string, path: string): Promise<string | undefined> {
   try {
     const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ref, mediaType: { format: 'raw' } });
     return data as unknown as string;
@@ -90,6 +93,9 @@ export async function collectContext(
     comments: comments.filter((c) => c !== summary),
     reviewComments: reviewComments.map(comment),
     summary,
-    config: await baseConfig(octokit, owner, repo, pr.base.ref, configPath),
+    config: await baseFile(octokit, owner, repo, pr.base.ref, configPath),
+    guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter(
+      (g): g is { path: string; text: string } => typeof g.text === 'string' && !!g.text.trim(),
+    ),
   };
 }

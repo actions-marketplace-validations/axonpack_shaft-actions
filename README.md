@@ -119,6 +119,8 @@ Setting `model` or `effort` turns `auto` off for that one only. If the Claude pl
 
 The steps the review walks come from the repo's Code review job on the dashboard, where a check can be turned off and the repo can add checks of its own. Findings from an added check are labelled `rules`. In standalone mode the action uses its built-in steps, which match the job's defaults. The safety rules (never run the PR's code, never post a secret) and the shape of the reply are part of the action and apply either way.
 
+The model also gets the repo's guides as the base branch has them: `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CONVENTIONS.md`, `.github/pull_request_template.md` and the root `README.md`, whichever exist. Each is cut at 8,000 characters and all of them at 30,000. They set the standards the review checks against, such as needing a test or a README line for each change, and a PR can't change the copies its own review reads.
+
 ## Review rules (`.github/shaft.yml`)
 
 A repo can add its own review rules in `.github/shaft.yml`:
@@ -169,7 +171,7 @@ If recording the run afterwards fails, the action logs a warning and the run sti
 
 Axon Shaft keeps one summary comment on the PR and edits it on every push. From the top:
 
-- A card in a GitHub alert: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. It holds the verdict, the headline, chips with the number of blocking, should-fix and nit findings and how many earlier findings this push fixed, and a chip per check: ✅ nothing found, ⚠️ only should-fix or nit findings, ❌ a blocking finding, ➖ turned off on the dashboard. Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something. The last line gives the kind of change, the model's confidence and the reviewed commit.
+- A card in a GitHub alert: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. It holds the verdict, the headline, chips with the number of blocking, should-fix and nit findings and how many earlier findings this push fixed, and a chip per check: ✅ checked with nothing found, ⚠️ only should-fix or nit findings, ❌ a blocking finding, ⬜ not checked (the model says it didn't do that check, and "What this PR does" says why), ➖ turned off on the dashboard. Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something. The last line gives the kind of change, the model's confidence and the reviewed commit.
 - A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit. A finding with an inline comment says "inline"; a finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
 - The nits, folded.
 - The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.

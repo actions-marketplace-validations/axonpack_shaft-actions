@@ -51,4 +51,7 @@ When "The previous review" below lists findings, check each one against the curr
 - `headline`: one sentence, the most important thing a reviewer should know.
 - `impact`: what changes for users of the code, one or two lines.
 - `scope`: packages, platforms and code paths touched.
+- `checked`: the keys of the checks you actually did: `correctness`, `breakage`, `standards`,
+  `tests`, `docs`, `security`, and `rules` for the repo's own checks. List only checks you did. A
+  check you skipped, or couldn't finish, stays out, and `not_checked` says why.
 - `not_checked`: what you couldn't verify, e.g. no tests or builds were run.

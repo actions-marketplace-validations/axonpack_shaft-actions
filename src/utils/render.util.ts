@@ -33,6 +33,8 @@ export type Review = {
   scope: string;
   findings: Finding[];
   resolved: string[];
+  /** The checks the model says it did; a check it didn't do shows as not checked, never as passed. */
+  checked: string[];
   not_checked: string;
 };
 
@@ -155,7 +157,7 @@ const chip = (text: string) => `<kbd>${text}</kbd>`;
 
 /**
  * The card at the top: the verdict as a GitHub alert, the headline, chips for the counts and for
- * each check (❌ a blocking finding, ⚠️ any other, ✅ none, ➖ turned off), and the PR's type.
+ * each check (❌ a blocking finding, ⚠️ any other, ✅ checked with none, ⬜ not checked, ➖ turned off), and the PR's type.
  * The headline is model text, so `<` and `>` are escaped and every line stays in the alert.
  */
 function card(review: Review, placed: Placed[], fixed: number, f: Footer): string {
@@ -177,7 +179,9 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
         ? '⚠️'
         : f.checks && !f.checks.includes(step)
           ? '➖'
-          : '✅';
+          : review.checked.includes(step)
+            ? '✅'
+            : '⬜';
     return [chip(`${mark} ${CHECK_LABEL[step]}`)];
   });
   const headline = html(review.headline).split(/\r?\n/);
