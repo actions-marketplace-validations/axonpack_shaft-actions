@@ -32,10 +32,6 @@ inputs:
     description: "`auto` picks from the event. `review` or `task` forces one."
     required: false
     default: auto
-  trigger_phrase:
-    description: What a comment must contain to start a task.
-    required: false
-    default: "@axonshaft"
   max_turns:
     description: Agent SDK turn limit per run.
     required: false

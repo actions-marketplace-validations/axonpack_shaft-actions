@@ -1,3 +1,4 @@
+import { APP_MENTION } from '../consts/api.const';
 import type { Octokit } from '../types/octokit.type';
 
 export type Route =
@@ -11,9 +12,9 @@ const REVIEW_ACTIONS = ['opened', 'synchronize', 'reopened', 'ready_for_review']
 export function route(
   eventName: string,
   payload: any,
-  opts: { mode?: string; triggerPhrase?: string } = {},
+  opts: { mode?: string } = {},
 ): Route {
-  const { mode = 'auto', triggerPhrase = '@axonshaft' } = opts;
+  const { mode = 'auto' } = opts;
   const pr = payload.pull_request;
   const number: number | undefined = pr?.number ?? payload.issue?.number;
 
@@ -31,7 +32,7 @@ export function route(
     if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
       return {
         mode: 'skip',
-        reason: `PR #${pr.number} is from a fork, which gets no secrets, so it was skipped. A maintainer can comment "${triggerPhrase} review" instead.`,
+        reason: `PR #${pr.number} is from a fork, which gets no secrets, so it was skipped. A maintainer can comment "${APP_MENTION} review" instead.`,
         notice: true,
       };
     }
@@ -44,7 +45,7 @@ export function route(
       : eventName === 'pull_request_review'
         ? payload.action === 'submitted' && payload.review?.body
         : undefined;
-  if (typeof text !== 'string' || !text.includes(triggerPhrase)) return { mode: 'skip', reason: `${eventName} has nothing for Axon Shaft.` };
+  if (typeof text !== 'string' || !text.includes(APP_MENTION)) return { mode: 'skip', reason: `${eventName} has nothing for Axon Shaft.` };
   if (payload.sender?.type === 'Bot') return { mode: 'skip', reason: 'Comments from bots never start a task.' };
   return { mode: 'task', number: number!, actor: payload.sender.login };
 }

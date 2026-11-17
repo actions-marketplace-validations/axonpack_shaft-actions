@@ -21,10 +21,7 @@ function number(name: string): number {
 
 async function run(): Promise<void> {
   const started = Date.now();
-  const r = route(context.eventName, context.payload, {
-    mode: oneOf('mode', ['auto', 'review', 'task']),
-    triggerPhrase: input('trigger_phrase'),
-  });
+  const r = route(context.eventName, context.payload, { mode: oneOf('mode', ['auto', 'review', 'task']) });
   if (r.mode === 'skip') return r.notice ? core.notice(r.reason) : core.info(r.reason);
 
   const { owner, repo } = context.repo;

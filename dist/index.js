@@ -30678,6 +30678,7 @@ function getOctokit(token, options, ...additionalPlugins) {
 // src/consts/api.const.ts
 var API_AUDIENCE = "https://api-shaft.axonpack.dev";
 var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
+var APP_MENTION = "@axonshaft";
 var INSTALL_URL = "https://github.com/apps/axonshaft/installations/new";
 var DASHBOARD_URL = "https://shaft.axonpack.dev";
 
@@ -65509,7 +65510,7 @@ ${clean(body)}`);
 // src/services/route.service.ts
 var REVIEW_ACTIONS = ["opened", "synchronize", "reopened", "ready_for_review"];
 function route(eventName, payload, opts = {}) {
-  const { mode = "auto", triggerPhrase = "@axonshaft" } = opts;
+  const { mode = "auto" } = opts;
   const pr = payload.pull_request;
   const number = pr?.number ?? payload.issue?.number;
   if (mode === "review") {
@@ -65528,14 +65529,14 @@ function route(eventName, payload, opts = {}) {
     if (pr.head.repo?.full_name !== pr.base.repo.full_name) {
       return {
         mode: "skip",
-        reason: `PR #${pr.number} is from a fork, which gets no secrets, so it was skipped. A maintainer can comment "${triggerPhrase} review" instead.`,
+        reason: `PR #${pr.number} is from a fork, which gets no secrets, so it was skipped. A maintainer can comment "${APP_MENTION} review" instead.`,
         notice: true
       };
     }
     return { mode: "review", number: pr.number };
   }
   const text = eventName === "issue_comment" || eventName === "pull_request_review_comment" ? payload.action === "created" && payload.comment?.body : eventName === "pull_request_review" ? payload.action === "submitted" && payload.review?.body : undefined;
-  if (typeof text !== "string" || !text.includes(triggerPhrase))
+  if (typeof text !== "string" || !text.includes(APP_MENTION))
     return { mode: "skip", reason: `${eventName} has nothing for Axon Shaft.` };
   if (payload.sender?.type === "Bot")
     return { mode: "skip", reason: "Comments from bots never start a task." };
@@ -66791,10 +66792,7 @@ function number(name) {
 }
 async function run() {
   const started = Date.now();
-  const r = route(context2.eventName, context2.payload, {
-    mode: oneOf("mode", ["auto", "review", "task"]),
-    triggerPhrase: input("trigger_phrase")
-  });
+  const r = route(context2.eventName, context2.payload, { mode: oneOf("mode", ["auto", "review", "task"]) });
   if (r.mode === "skip")
     return r.notice ? notice(r.reason) : info(r.reason);
   const { owner, repo } = context2.repo;

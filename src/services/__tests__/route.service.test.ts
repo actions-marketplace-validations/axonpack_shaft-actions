@@ -24,21 +24,20 @@ test('a PR from a fork is skipped with a notice', () => {
   expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true, reason: expect.stringContaining('"@axonshaft review"') });
 });
 
-test('comments and reviews with the trigger phrase: task', () => {
+test('comments and reviews that mention @axonshaft: task', () => {
   expect(route('issue_comment', comment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
   expect(route('pull_request_review_comment', reviewComment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
   expect(route('pull_request_review', review)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
 });
 
-test('a comment without the phrase, an edit, or a bot comment exits quietly', () => {
+test('a comment without the mention, an edit, or a bot comment exits quietly', () => {
   expect(quiet(route('issue_comment', { ...comment, comment: { ...comment.comment, body: 'thanks!' } }))).toBe(true);
   expect(quiet(route('issue_comment', { ...comment, action: 'edited' }))).toBe(true);
   expect(quiet(route('issue_comment', { ...comment, sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
 });
 
-test('trigger_phrase is configurable', () => {
-  expect(route('issue_comment', comment, { triggerPhrase: '/review' }).mode).toBe('skip');
-  expect(route('issue_comment', { ...comment, comment: { ...comment.comment, body: '/review' } }, { triggerPhrase: '/review' }).mode).toBe('task');
+test('only @axonshaft starts a task; another phrase such as /review is skipped', () => {
+  expect(quiet(route('issue_comment', { ...comment, comment: { ...comment.comment, body: '/review' } }))).toBe(true);
 });
 
 test('anything else exits quietly', () => {

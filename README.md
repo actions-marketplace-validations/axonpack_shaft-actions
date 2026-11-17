@@ -62,7 +62,6 @@ None are required. Each setting comes from the first place that sets it: the inp
 | `effort` | `auto` | `auto` picks from the diff. Or `low`, `medium`, `high`, `xhigh`, `max`. |
 | `depth` | `standard` | `standard` runs one session. `deep` runs correctness, breakage and security as separate subagents, then a verifier, for about 3x the cost. |
 | `mode` | `auto` | `auto` picks from the event. `review` or `task` forces one, for example in a `workflow_dispatch` run. |
-| `trigger_phrase` | `@axonshaft` | What a comment must contain to start a task. |
 | `max_turns` | `30` | The Agent SDK turn limit per run. |
 | `timeout_minutes` | `15` | The run stops after this long and says so in the summary. |
 | `nits` | `summary` | `summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. |
