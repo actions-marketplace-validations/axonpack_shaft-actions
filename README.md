@@ -176,7 +176,7 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. From 
 - The nits, folded.
 - The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
 - "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
-- A footer with the run link, the model, the effort and why `auto` picked them.
+- A footer with the run link, the model the review ran on (and the subagents' model on a deep review), the effort and why `auto` picked them.
 
 Inline comments go on the lines in the diff, one per blocking or should-fix finding, and nits too with `nits: inline`. A finding that already has an inline comment isn't posted again on the next push, and when a push fixes a finding, its thread is resolved.
 

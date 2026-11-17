@@ -4,19 +4,21 @@ const logs: string[] = [];
 const warnings: string[] = [];
 vi.doMock('@actions/core', () => ({ info: (s: string) => logs.push(s), warning: (s: string) => warnings.push(s) }));
 const runs: { prompt: string; model: string; effort: string; deepPasses?: string[] }[] = [];
+/** What the Agent SDK reports in modelUsage; empty means just the model asked for. */
+let usage: string[] = [];
 vi.doMock('../agent.service', async (actual) => ({
   ...(await actual<typeof import('../agent.service')>()),
   runAgent: async (prompt: string, o: { model: string; effort: string; deepPasses?: string[] }) => {
     runs.push({ prompt, model: o.model, effort: o.effort, deepPasses: o.deepPasses });
     const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: [], resolved: [], checked: [], not_checked: 'n' };
-    return { review, models: [o.model], costUsd: 0 };
+    return { review, models: usage.length ? usage : [o.model], costUsd: 0 };
   },
 }));
 // Bun inlines the procedure and the steps as text; Vite can't load a .md module, so stand-ins.
 vi.doMock('../../consts/procedure.md', () => ({ default: '# Review this pull request\n\n## The steps\n\n{{steps}}\n\n## Severity' }));
 vi.doMock('../../consts/review-steps.md', () => ({ default: '1. **Built-in step.**\n' }));
 const { collectContext } = await import('../context.service');
-const { guidesText, reviewContext } = await import('../review.service');
+const { chosenModels, guidesText, reviewContext } = await import('../review.service');
 
 const BASE_CONFIG = 'rules: Every user-facing change needs a changeset.\nfocus: ["src/core/**"]\n';
 const file = (filename: string, patch = '@@ -1 +1 @@\n-a\n+b') => ({ filename, status: 'modified', additions: 1, deletions: 1, patch });
@@ -68,7 +70,7 @@ async function review(
 ) {
   const fake = octokit(files, extra.config === undefined ? BASE_CONFIG : extra.config, extra.comments, extra.guides);
   const ctx = await collectContext(fake as any, 'o', 'r', 7, '.github/shaft.yml', 'axonshaft[bot]');
-  await reviewContext(ctx, {
+  const outcome = await reviewContext(ctx, {
     octokit: fake as any,
     claude: { env: 'ANTHROPIC_API_KEY', value: 'k' },
     secrets: [],
@@ -86,13 +88,14 @@ async function review(
     dryRun: true,
     cwd: '.',
   });
-  return { refs: fake.refs, prompt: runs.at(-1)!.prompt, run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))! };
+  return { refs: fake.refs, prompt: runs.at(-1)!.prompt, run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
 
 beforeEach(() => {
   logs.length = 0;
   warnings.length = 0;
   runs.length = 0;
+  usage = [];
 });
 
 test('the rules from the dashboard and the base branch file appear in the prompt, dashboard first', async () => {
@@ -226,4 +229,29 @@ test('each guide is cut at 8,000 characters and all of them at 30,000, saying so
   expect(shown).toBe(30_000);
   expect(text).toContain('<guide path="CONVENTIONS.md">\n' + 'b'.repeat(6_000) + '\n(cut here: 8,000 characters, the first 6,000 shown)');
   expect(text).toContain('<guide path="README.md">\n(left out: the guides reached 30,000 characters)\n</guide>');
+});
+
+test("the footer and /v1/runs name the review's model, not the CLI's own helper model", async () => {
+  usage = ['claude-haiku-5-5', 'claude-sonnet-5-5'];
+  const { summary, outcome } = await review([file('src/a.ts')], { config: null });
+  expect(summary).toContain(' · claude-sonnet-5-5 · medium · ');
+  expect(summary).not.toContain('haiku');
+  expect(outcome.model).toBe('claude-sonnet-5-5');
+});
+
+test('a deep review names its subagent model after the review model', async () => {
+  usage = ['claude-haiku-5-5', 'claude-opus-5', 'claude-sonnet-5-5'];
+  const { summary, outcome } = await review([file('src/a.ts')], { config: null, depth: 'deep' });
+  expect(summary).toContain(' · claude-opus-5 · subagents: claude-sonnet-5-5 · high · ');
+  expect(outcome.model).toBe('claude-opus-5, claude-sonnet-5-5');
+});
+
+test('chosenModels: aliases become the IDs the run reported, and a fallback says so', () => {
+  const choice = { model: 'opus', effort: 'high', reason: '', autoModel: true, subagentModel: 'sonnet' };
+  expect(chosenModels(['claude-sonnet-5-5', 'claude-haiku-5-5'], choice, false)).toEqual({ main: 'claude-sonnet-5-5', fellBack: true, subagents: [] });
+  expect(chosenModels(['claude-opus-5'], { ...choice, autoModel: false, model: 'claude-opus-5' }, true)).toEqual({
+    main: 'claude-opus-5',
+    fellBack: false,
+    subagents: ['sonnet'],
+  });
 });

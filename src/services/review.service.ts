@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { matches, pick } from '../utils/auto-pick.util';
+import { type Choice, matches, pick } from '../utils/auto-pick.util';
 import { mergeRules, parseConfig, type ReviewRules } from '../utils/settings.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
@@ -61,6 +61,20 @@ const FALLBACK: Record<string, string> = { opus: 'sonnet,haiku', sonnet: 'haiku'
 const MAX_DIFF = 200_000; // ponytail: a bigger diff is cut; the model reads the rest from the checkout
 /** Only these people's comments reach the prompt: anyone else could write instructions aimed at the model. */
 const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
+/**
+ * The models the action chose, named as the run reported them (an alias such as `sonnet` becomes
+ * its full ID): the review's, or the fallback the plan allowed, then the subagents' on a deep
+ * review. Models the CLI used for its own housekeeping aren't listed.
+ */
+export function chosenModels(used: string[], choice: Choice, deep: boolean): { main: string; fellBack: boolean; subagents: string[] } {
+  const named = (want: string) => used.find((m) => m === want || m.includes(want));
+  const fallbacks = choice.autoModel ? (FALLBACK[choice.model]?.split(',') ?? []) : [];
+  const picked = named(choice.model);
+  const main = picked ?? fallbacks.map(named).find(Boolean) ?? choice.model;
+  const subagents = deep && choice.subagentModel ? [named(choice.subagentModel) ?? choice.subagentModel] : [];
+  return { main, fellBack: !picked && fallbacks.length > 0, subagents };
+}
 
 /** The guides as prompt text: each cut at `GUIDE_CAP.file`, and all of them at `GUIDE_CAP.total`. */
 export function guidesText(guides: Context['guides']): string {
@@ -190,7 +204,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     throw e;
   }
   const { review } = result;
-  core.info(`Models ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
+  core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
 
   const placed = place(review.findings, files, o.nits);
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
@@ -223,13 +237,16 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     }
   }
 
-  const fellBack = choice.autoModel && !result.models.some((m) => m.includes(choice.model));
+  const models = chosenModels(result.models, choice, !!choice.subagentModel && deepPasses.length > 0);
   const body = renderSummary(review, placed, prior, {
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
     runUrl: o.runUrl,
-    models: result.models.join(', ') + (fellBack ? ` (${choice.model} unavailable)` : ''),
+    models:
+      models.main +
+      (models.fellBack ? ` (${choice.model} unavailable)` : '') +
+      (models.subagents.length ? ` · subagents: ${models.subagents.join(', ')}` : ''),
     effort: choice.effort,
     reason: choice.reason,
     skipped,
@@ -247,7 +264,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== 'nit').length,
     summaryUrl: o.dryRun ? '' : (summary?.html_url ?? ''),
-    model: result.models.join(', '),
+    model: [models.main, ...models.subagents].join(', '),
     effort: choice.effort,
     bySeverity: {
       blocking: placed.filter((p) => p.severity === 'blocking').length,

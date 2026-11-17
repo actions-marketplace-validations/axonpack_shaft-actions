@@ -65442,6 +65442,14 @@ var review_steps_default = "1. **Learn the repo's rules.** Read whichever of the
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
 var MAX_DIFF = 200000;
 var TRUSTED = ["OWNER", "MEMBER", "COLLABORATOR"];
+function chosenModels(used, choice, deep) {
+  const named = (want) => used.find((m) => m === want || m.includes(want));
+  const fallbacks = choice.autoModel ? FALLBACK[choice.model]?.split(",") ?? [] : [];
+  const picked = named(choice.model);
+  const main = picked ?? fallbacks.map(named).find(Boolean) ?? choice.model;
+  const subagents = deep && choice.subagentModel ? [named(choice.subagentModel) ?? choice.subagentModel] : [];
+  return { main, fellBack: !picked && fallbacks.length > 0, subagents };
+}
 function guidesText(guides) {
   let left = GUIDE_CAP.total;
   return guides.map(({ path, text }) => {
@@ -65583,7 +65591,7 @@ async function reviewContext(ctx, o) {
     throw e;
   }
   const { review } = result;
-  info(`Models ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
+  info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
   const placed = place(review.findings, files, o.nits);
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
@@ -65617,13 +65625,13 @@ ${c.body}`);
         p.inline = false;
     }
   }
-  const fellBack = choice.autoModel && !result.models.some((m) => m.includes(choice.model));
+  const models = chosenModels(result.models, choice, !!choice.subagentModel && deepPasses.length > 0);
   const body = renderSummary(review, placed, prior, {
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
     runUrl: o.runUrl,
-    models: result.models.join(", ") + (fellBack ? ` (${choice.model} unavailable)` : ""),
+    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
     effort: choice.effort,
     reason: choice.reason,
     skipped
@@ -65643,7 +65651,7 @@ ${clean(body)}`);
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== "nit").length,
     summaryUrl: o.dryRun ? "" : summary?.html_url ?? "",
-    model: result.models.join(", "),
+    model: [models.main, ...models.subagents].join(", "),
     effort: choice.effort,
     bySeverity: {
       blocking: placed.filter((p) => p.severity === "blocking").length,
