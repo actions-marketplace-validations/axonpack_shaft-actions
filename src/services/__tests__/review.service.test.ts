@@ -3,11 +3,11 @@ import { beforeEach, expect, test, vi } from 'vitest';
 const logs: string[] = [];
 const warnings: string[] = [];
 vi.doMock('@actions/core', () => ({ info: (s: string) => logs.push(s), warning: (s: string) => warnings.push(s) }));
-const runs: { prompt: string; model: string; effort: string }[] = [];
-vi.doMock('../agent.service', () => ({
-  DEEP_NOTE: '',
-  runAgent: async (prompt: string, o: { model: string; effort: string }) => {
-    runs.push({ prompt, model: o.model, effort: o.effort });
+const runs: { prompt: string; model: string; effort: string; deepPasses?: string[] }[] = [];
+vi.doMock('../agent.service', async (actual) => ({
+  ...(await actual<typeof import('../agent.service')>()),
+  runAgent: async (prompt: string, o: { model: string; effort: string; deepPasses?: string[] }) => {
+    runs.push({ prompt, model: o.model, effort: o.effort, deepPasses: o.deepPasses });
     const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: [], resolved: [], not_checked: 'n' };
     return { review, models: [o.model], costUsd: 0 };
   },
@@ -55,7 +55,7 @@ function octokit(files: ReturnType<typeof file>[], config: string | null) {
 
 async function review(
   files: ReturnType<typeof file>[],
-  extra: { dashboard?: Record<string, unknown>; config?: string | null; instructions?: string } = {},
+  extra: { dashboard?: Record<string, unknown>; config?: string | null; instructions?: string; depth?: string; checks?: string[] } = {},
 ) {
   const fake = octokit(files, extra.config === undefined ? BASE_CONFIG : extra.config);
   const ctx = await collectContext(fake as any, 'o', 'r', 7, '.github/shaft.yml');
@@ -65,13 +65,14 @@ async function review(
     secrets: [],
     model: 'auto',
     effort: 'auto',
-    depth: 'standard',
+    depth: extra.depth ?? 'standard',
     nits: 'summary',
     maxTurns: 1,
     timeoutMinutes: 1,
     configPath: '.github/shaft.yml',
     dashboard: extra.dashboard,
     instructions: extra.instructions,
+    checks: extra.checks,
     dryRun: true,
     cwd: '.',
   });
@@ -145,4 +146,17 @@ test("the job's instructions from the API replace the built-in steps, taken as w
   const { prompt } = await review([file('src/a.ts')], { instructions });
   expect(prompt).toContain(`## The steps\n\n${instructions}\n\n## Severity`);
   expect(prompt).not.toContain('Built-in step');
+});
+
+test('a deep review runs a pass only for a check the project keeps on', async () => {
+  const { prompt, run } = await review([file('src/a.ts')], { depth: 'deep', checks: ['correctness', 'breakage', 'tests'] });
+  expect(run.deepPasses).toEqual(['correctness', 'breakage']);
+  expect(prompt).toContain('each given the diff and the PR text: `correctness`, `breakage`.');
+  expect(prompt).not.toContain('`security`.');
+});
+
+test('without the API, a deep review runs every pass', async () => {
+  const { prompt, run } = await review([file('src/a.ts')], { depth: 'deep' });
+  expect(run.deepPasses).toEqual(['correctness', 'breakage', 'security']);
+  expect(prompt).toContain('`correctness`, `breakage`, `security`.');
 });

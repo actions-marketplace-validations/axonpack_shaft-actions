@@ -5,8 +5,11 @@ import type { ReviewEvent } from './route.service';
 /** What `POST /v1/token` takes: the job the event routed to and, for a pull request event, which one. */
 export type GrantRequest = { job: 'review' | 'task'; event?: ReviewEvent };
 
-/** The project's job: `options` filled in with the catalog's defaults, `instructions` its numbered steps. */
-export type GrantJob = { type: string; version: number; options: Record<string, unknown>; instructions: string };
+/**
+ * The project's job: `options` filled in with the catalog's defaults, `checks` the keys of the
+ * catalog checks it keeps on, `instructions` its numbered steps.
+ */
+export type GrantJob = { type: string; version: number; options: Record<string, unknown>; checks: string[]; instructions: string };
 
 /** What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's tokens. */
 export type Grant =

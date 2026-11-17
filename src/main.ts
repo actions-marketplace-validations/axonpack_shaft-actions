@@ -61,6 +61,7 @@ async function run(): Promise<void> {
     configPath: input('config_path'),
     dashboard: tokens.settings,
     instructions: tokens.job?.instructions,
+    checks: tokens.job?.checks,
     dryRun: core.getBooleanInput('dry_run'),
     runUrl: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
     cwd: process.env.GITHUB_WORKSPACE ?? process.cwd(),

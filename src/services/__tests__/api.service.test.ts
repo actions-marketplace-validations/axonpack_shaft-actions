@@ -30,7 +30,7 @@ beforeEach(() => {
 });
 
 const review = { job: 'review', event: 'push' } as const;
-const job = { type: 'review', version: 1, options: { on: ['opened', 'push'], depth: 'deep', nits: 'off' }, instructions: '1. **Verify.**' };
+const job = { type: 'review', version: 1, options: { on: ['opened', 'push'], depth: 'deep', nits: 'off' }, checks: ['correctness'], instructions: '1. **Verify.**' };
 
 test('POST /v1/token sends the job and event with the OIDC token, and masks both tokens', async () => {
   const run = { run: true, github_token: 'ghs_shaft', claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' }, settings: { model: 'opus' }, job };

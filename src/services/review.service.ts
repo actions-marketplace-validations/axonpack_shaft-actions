@@ -3,7 +3,7 @@ import { matches, pick } from '../utils/auto-pick.util';
 import { mergeRules, parseConfig, type ReviewRules } from '../utils/settings.util';
 import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken } from './tokens.service';
-import { DEEP_NOTE, runAgent } from './agent.service';
+import { DEEP_PASSES, deepNote, runAgent } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import procedure from '../consts/procedure.md' with { type: 'text' };
 import reviewSteps from '../consts/review-steps.md' with { type: 'text' };
@@ -36,6 +36,8 @@ export type ReviewOptions = {
   dashboard?: Record<string, unknown>;
   /** The job's numbered steps from the Axon Shaft API; without them, the built-in steps (the catalog's defaults). */
   instructions?: string;
+  /** The catalog checks the project keeps on, from the Axon Shaft API; undefined runs every deep pass. */
+  checks?: string[];
   dryRun: boolean;
   runUrl?: string;
   cwd: string;
@@ -59,7 +61,7 @@ const MAX_DIFF = 200_000; // ponytail: a bigger diff is cut; the model reads the
 export function buildPrompt(
   ctx: Context,
   prior: State | undefined,
-  o: Pick<ReviewOptions, 'configPath' | 'depth' | 'instructions'> & ReviewRules & { skipped: number },
+  o: Pick<ReviewOptions, 'configPath' | 'depth' | 'instructions'> & ReviewRules & { skipped: number; deepPasses: string[] },
 ): string {
   const { pr } = ctx;
   const focused = (f: { filename: string }) => matches(f.filename, o.focus);
@@ -81,7 +83,7 @@ export function buildPrompt(
   return [
     // A function, so a `$` in the steps is never read as a replacement pattern.
     procedure.replace('{{steps}}', () => (o.instructions || reviewSteps).trim()),
-    o.depth === 'deep' ? DEEP_NOTE : '',
+    o.depth === 'deep' ? deepNote(o.deepPasses) : '',
     [
       '## This run\n',
       `- ${ctx.owner}/${ctx.repo} PR #${pr.number}: \`${pr.head}\` into \`${pr.base}\`, head \`${pr.headSha}\`.`,
@@ -132,6 +134,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   const files = ctx.files.filter((f) => !matches(f.filename, rules.skip));
   const skipped = ctx.files.length - files.length;
   const choice = pick({ mode: 'review', depth: o.depth, files, focus: rules.focus, model: o.model, effort: o.effort });
+  const deepPasses = DEEP_PASSES.filter((p) => !o.checks || o.checks.includes(p));
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
 
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
@@ -147,12 +150,13 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   await writeSummary(startSummary(sha, prior));
   let result;
   try {
-    result = await runAgent(buildPrompt({ ...ctx, files }, prior, { ...o, ...rules, skipped }), {
+    result = await runAgent(buildPrompt({ ...ctx, files }, prior, { ...o, ...rules, skipped, deepPasses }), {
       claude: o.claude,
       model: choice.model,
       effort: choice.effort,
       fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
       subagentModel: choice.subagentModel,
+      deepPasses,
       maxTurns: o.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
