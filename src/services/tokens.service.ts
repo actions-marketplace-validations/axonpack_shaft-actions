@@ -19,13 +19,13 @@ export type Tokens = {
   claude: ClaudeToken;
   github: string;
   via: 'app' | 'shaft' | 'github_token';
-  /** The dashboard's settings; undefined when the Shaft API wasn't used. */
+  /** The dashboard's settings; undefined when the Axon Shaft API wasn't used. */
   settings?: Record<string, unknown>;
 };
 
 /**
- * Each token comes from the first source that has it. Claude: the inputs, then the Shaft API.
- * GitHub: the app inputs, then the Shaft API, then `github_token`.
+ * Each token comes from the first source that has it. Claude: the inputs, then the Axon Shaft API.
+ * GitHub: the app inputs, then the Axon Shaft API, then `github_token`.
  */
 export async function resolveTokens(input: TokenInputs, repo: { owner: string; repo: string }): Promise<Tokens> {
   const { claudeCodeOauthToken: oauth, anthropicApiKey: apiKey, appId, privateKey } = input;
@@ -37,7 +37,7 @@ export async function resolveTokens(input: TokenInputs, repo: { owner: string; r
     grant = await fetchGrant();
   } catch (e) {
     if (!oauth && !apiKey) throw e; // nothing else has a Claude token
-    core.info(`Not using the Shaft API: ${(e as Error).message}`);
+    core.info(`Not using the Axon Shaft API: ${(e as Error).message}`);
   }
 
   let claude: ClaudeToken;

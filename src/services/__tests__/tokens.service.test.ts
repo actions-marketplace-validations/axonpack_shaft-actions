@@ -37,7 +37,7 @@ const grant = {
   claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' },
   settings: { model: 'opus' },
 };
-/** The Shaft API answers with this grant, or fails to answer when given an Error. */
+/** The Axon Shaft API answers with this grant, or fails to answer when given an Error. */
 const api = (answer: object | Error) =>
   vi.stubGlobal('fetch', async () => {
     if (answer instanceof Error) throw answer;
@@ -51,7 +51,7 @@ beforeEach(() => {
   api(grant);
 });
 
-test('with no inputs, both tokens and the settings come from the Shaft API', async () => {
+test('with no inputs, both tokens and the settings come from the Axon Shaft API', async () => {
   const t = await resolveTokens({ githubToken: 'ghs_run' }, repo);
   expect(t).toEqual({
     claude: { env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-shaft' },
@@ -95,7 +95,7 @@ test('without the API, a Claude input and github_token still run', async () => {
 
 test("without the API and with no Claude input, the API's error fails the run", async () => {
   api(new TypeError('fetch failed'));
-  await expect(resolveTokens({ githubToken: 'ghs_run' }, repo)).rejects.toThrow("Couldn't reach the Shaft API");
+  await expect(resolveTokens({ githubToken: 'ghs_run' }, repo)).rejects.toThrow("Couldn't reach the Axon Shaft API");
 });
 
 test('no Claude token anywhere fails with a link to the dashboard', async () => {

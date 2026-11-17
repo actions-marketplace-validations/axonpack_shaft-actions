@@ -44,7 +44,7 @@ export function route(
       : eventName === 'pull_request_review'
         ? payload.action === 'submitted' && payload.review?.body
         : undefined;
-  if (typeof text !== 'string' || !text.includes(triggerPhrase)) return { mode: 'skip', reason: `${eventName} has nothing for Shaft.` };
+  if (typeof text !== 'string' || !text.includes(triggerPhrase)) return { mode: 'skip', reason: `${eventName} has nothing for Axon Shaft.` };
   if (payload.sender?.type === 'Bot') return { mode: 'skip', reason: 'Comments from bots never start a task.' };
   return { mode: 'task', number: number!, actor: payload.sender.login };
 }

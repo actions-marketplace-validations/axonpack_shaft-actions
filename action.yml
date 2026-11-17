@@ -1,4 +1,4 @@
-name: Shaft
+name: Axon Shaft
 description: Review pull requests with Claude, on your own runners. Needs `permissions: id-token: write` to fetch its tokens from shaft.axonpack.dev.
 author: axonpack
 
@@ -16,7 +16,7 @@ inputs:
     description: The private key of the GitHub App in app_id.
     required: false
   github_token:
-    description: Used when there are no app inputs and the Shaft API can't be reached. Comments then come from github-actions[bot].
+    description: Used when there are no app inputs and the Axon Shaft API can't be reached. Comments then come from github-actions[bot].
     required: false
     default: ${{ github.token }}
   model:

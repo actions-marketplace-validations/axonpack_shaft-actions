@@ -109,7 +109,7 @@ export type Footer = { sha: string; runUrl?: string; models: string; effort: str
 
 function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
-  return `<sub>Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  return `<sub>Axon Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
 }
 
 export function startSummary(sha: string, prior?: State): string {

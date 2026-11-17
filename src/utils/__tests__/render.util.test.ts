@@ -118,7 +118,7 @@ test('the summary format', () => {
 
 **Not checked:** no tests or builds were run.
 
-<sub>Shaft · reviewed \`a1b2c3d\` · [run](https://github.com/acme/widgets/actions/runs/1) · claude-sonnet-5 · medium · 412 lines</sub>`);
+<sub>Axon Shaft · reviewed \`a1b2c3d\` · [run](https://github.com/acme/widgets/actions/runs/1) · claude-sonnet-5 · medium · 412 lines</sub>`);
   expect(parseState(state)).toEqual({
     sha: 'a1b2c3d4e5f6',
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),

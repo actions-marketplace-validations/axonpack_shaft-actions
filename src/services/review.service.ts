@@ -31,7 +31,7 @@ export type ReviewOptions = {
   maxTurns: number;
   timeoutMinutes: number;
   configPath: string;
-  /** The Shaft API's settings, for `rules`, `skip` and `focus`; undefined when the API wasn't used. */
+  /** The Axon Shaft API's settings, for `rules`, `skip` and `focus`; undefined when the API wasn't used. */
   dashboard?: Record<string, unknown>;
   dryRun: boolean;
   runUrl?: string;
@@ -182,7 +182,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
         pull_number: ctx.pr.number,
         commit_id: sha,
         event: 'COMMENT',
-        body: `Shaft left ${comments.length} new comment${comments.length === 1 ? '' : 's'} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
+        body: `Axon Shaft left ${comments.length} new comment${comments.length === 1 ? '' : 's'} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
         comments,
       });
     } catch (e) {

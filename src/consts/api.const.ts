@@ -1,4 +1,4 @@
-/** The audience of the run's OIDC token, which the Shaft API checks. */
+/** The audience of the run's OIDC token, which the Axon Shaft API checks. */
 export const API_AUDIENCE = 'https://api-shaft.axonpack.dev';
 
 /** `SHAFT_API_URL` is for tests only; a workflow never sets it. */

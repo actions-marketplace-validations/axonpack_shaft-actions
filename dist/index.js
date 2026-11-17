@@ -30684,7 +30684,7 @@ var DASHBOARD_URL = "https://shaft.axonpack.dev";
 // src/services/api.service.ts
 async function post(path, body) {
   if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
-    throw new Error("Add `permissions: id-token: write` to the workflow, so Shaft can fetch its tokens from the Shaft API.");
+    throw new Error("Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.");
   }
   const oidc = await getIDToken(API_AUDIENCE);
   try {
@@ -30695,7 +30695,7 @@ async function post(path, body) {
       signal: AbortSignal.timeout(30000)
     });
   } catch (e) {
-    throw new Error(`Couldn't reach the Shaft API at ${API_URL}: ${e.message}`);
+    throw new Error(`Couldn't reach the Axon Shaft API at ${API_URL}: ${e.message}`);
   }
 }
 async function fetchGrant() {
@@ -30703,14 +30703,14 @@ async function fetchGrant() {
   if (res.status === 404)
     throw new Error(`The AxonShaft app isn't installed on this repo. Install it: ${INSTALL_URL}`);
   if (res.status === 429)
-    throw new Error(`The Shaft API rate-limited this repo. Retry-After: ${res.headers.get("retry-after") ?? "not given"}.`);
+    throw new Error(`The Axon Shaft API rate-limited this repo. Retry-After: ${res.headers.get("retry-after") ?? "not given"}.`);
   if (!res.ok) {
     const why = res.status === 401 || res.status === 403 ? "refused this run's OIDC token" : "failed";
-    throw new Error(`The Shaft API ${why} (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    throw new Error(`The Axon Shaft API ${why} (${res.status}): ${(await res.text()).slice(0, 200)}`);
   }
   const grant = await res.json();
   if (typeof grant?.github_token !== "string")
-    throw new Error("The Shaft API sent no github_token.");
+    throw new Error("The Axon Shaft API sent no github_token.");
   setSecret(grant.github_token);
   if (grant.claude_token)
     setSecret(grant.claude_token.value);
@@ -30722,7 +30722,7 @@ async function reportRun(summary) {
     if (!res.ok)
       throw new Error(`the API answered ${res.status}`);
   } catch (e) {
-    warning(`Couldn't record the run on the Shaft API: ${e.message}`);
+    warning(`Couldn't record the run on the Axon Shaft API: ${e.message}`);
   }
 }
 
@@ -64984,7 +64984,7 @@ function parseState(body) {
 }
 function footer(f) {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  return `<sub>Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  return `<sub>Axon Shaft · reviewed \`${f.sha.slice(0, 7)}\`${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
 }
 function startSummary(sha, prior) {
   return [SUMMARY_MARKER, `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
@@ -65239,7 +65239,7 @@ async function collectContext(octokit, owner, repo, number, configPath) {
 // src/consts/procedure.md
 var procedure_default = `# Review this pull request
 
-You are Shaft, reviewing one pull request. Walk the steps below in order. You only read: you
+You are Axon Shaft, reviewing one pull request. Walk the steps below in order. You only read: you
 never edit files, install anything or run the PR's code. Your reply is the JSON the output schema
 asks for, nothing else. Our code posts it to GitHub; you never call GitHub yourself.
 
@@ -65463,7 +65463,7 @@ ${c.body}`);
         pull_number: ctx.pr.number,
         commit_id: sha,
         event: "COMMENT",
-        body: `Shaft left ${comments.length} new comment${comments.length === 1 ? "" : "s"} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
+        body: `Axon Shaft left ${comments.length} new comment${comments.length === 1 ? "" : "s"} on \`${sha.slice(0, 7)}\`. The summary is in the PR conversation.`,
         comments
       });
     } catch (e) {
@@ -65536,7 +65536,7 @@ function route(eventName, payload, opts = {}) {
   }
   const text = eventName === "issue_comment" || eventName === "pull_request_review_comment" ? payload.action === "created" && payload.comment?.body : eventName === "pull_request_review" ? payload.action === "submitted" && payload.review?.body : undefined;
   if (typeof text !== "string" || !text.includes(triggerPhrase))
-    return { mode: "skip", reason: `${eventName} has nothing for Shaft.` };
+    return { mode: "skip", reason: `${eventName} has nothing for Axon Shaft.` };
   if (payload.sender?.type === "Bot")
     return { mode: "skip", reason: "Comments from bots never start a task." };
   return { mode: "task", number, actor: payload.sender.login };
@@ -66738,7 +66738,7 @@ async function resolveTokens(input, repo) {
   } catch (e) {
     if (!oauth && !apiKey)
       throw e;
-    info(`Not using the Shaft API: ${e.message}`);
+    info(`Not using the Axon Shaft API: ${e.message}`);
   }
   let claude;
   if (oauth)

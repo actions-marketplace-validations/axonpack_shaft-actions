@@ -65,7 +65,7 @@ test('429 gives the Retry-After value', async () => {
 
 test('a network error names the API', async () => {
   answer(new TypeError('fetch failed'));
-  await expect(fetchGrant()).rejects.toThrow("Couldn't reach the Shaft API at https://api-shaft.axonpack.dev: fetch failed");
+  await expect(fetchGrant()).rejects.toThrow("Couldn't reach the Axon Shaft API at https://api-shaft.axonpack.dev: fetch failed");
 });
 
 const summary = { verdict: 'looks-good', model: 'sonnet', effort: 'medium', findings: { blocking: 0, should_fix: 1, nit: 2 }, duration_ms: 1000 };
