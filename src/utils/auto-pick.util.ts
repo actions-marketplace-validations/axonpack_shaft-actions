@@ -17,7 +17,7 @@ export type PickInput = {
   mode: 'review' | 'task';
   depth?: string;
   files?: ChangedFile[];
-  /** From the dashboard or `.github/shaft.yml`. */
+  /** From the dashboard. */
   focus?: string[];
   skip?: string[];
   model?: string;

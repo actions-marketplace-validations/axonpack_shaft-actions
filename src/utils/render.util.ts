@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { DASHBOARD_URL } from '../consts/api.const';
+import { failureMarkdown, type ShaftFailure } from './failure.util';
 
 export const SUMMARY_MARKER = '<!-- shaft:summary -->';
 
@@ -219,11 +220,9 @@ export function startSummary(sha: string, prior?: State): string {
   return [SUMMARY_MARKER, `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
-export function failedSummary(sha: string, why: string, runUrl: string | undefined, prior?: State): string {
-  const run = runUrl ? ` See the [run](${runUrl}).` : '';
-  return [SUMMARY_MARKER, `The review of \`${sha.slice(0, 7)}\` stopped: ${why}.${run}`, prior ? stateLine(prior) : '']
-    .filter(Boolean)
-    .join('\n');
+/** The summary when the review failed: the failure's card, message and link, as the job summary has them. */
+export function failedSummary(failure: ShaftFailure, prior?: State): string {
+  return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
 export function renderSummary(raw: Review, placed: Placed[], prior: State | undefined, f: Footer): string {

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Octokit } from '../../types/octokit.type';
-import { forcedReviewDenial, hasWriteAccess, route } from '../route.service';
+import { commentOnce, hasWriteAccess, route } from '../route.service';
 import comment from './fixtures/issue_comment.created.json';
 import fork from './fixtures/pull_request.fork.json';
 import opened from './fixtures/pull_request.opened.json';
@@ -10,19 +10,49 @@ import push from './fixtures/push.json';
 
 const quiet = (r: ReturnType<typeof route>) => r.mode === 'skip' && !r.notice;
 
-test('pull_request opened, synchronize, reopened, ready_for_review: review, with the event the API gets', () => {
+test('pull_request and pull_request_target opened, synchronize, reopened, ready_for_review: review, with the event the API gets', () => {
   const events = { opened: 'opened', reopened: 'opened', synchronize: 'push', ready_for_review: 'ready' };
-  for (const [action, event] of Object.entries(events)) {
-    expect(route('pull_request', { ...opened, action })).toEqual({ mode: 'review', number: 12, event });
+  for (const name of ['pull_request', 'pull_request_target']) {
+    for (const [action, event] of Object.entries(events)) {
+      expect(route(name, { ...opened, action })).toEqual({ mode: 'review', number: 12, event, fork: false });
+    }
   }
 });
 
-test('other pull_request actions exit quietly', () => {
+test('other pull_request and pull_request_target actions exit quietly', () => {
   expect(quiet(route('pull_request', { ...opened, action: 'closed' }))).toBe(true);
+  expect(quiet(route('pull_request_target', { ...opened, action: 'closed' }))).toBe(true);
 });
 
-test('a PR from a fork is skipped with a notice', () => {
-  expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true, reason: 'PR #13 is from a fork, which gets no secrets, so it was skipped.' });
+test("on pull_request_target a fork's PR is reviewed, with fork: true for the API", () => {
+  expect(route('pull_request_target', fork)).toEqual({ mode: 'review', number: 13, event: 'push', fork: true });
+  const deleted = { ...fork, pull_request: { ...fork.pull_request, head: { ...fork.pull_request.head, repo: null } } };
+  expect(route('pull_request_target', deleted)).toMatchObject({ mode: 'review', fork: true });
+});
+
+test("on pull_request a fork's PR has no OIDC token, so it's skipped with a notice", () => {
+  expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true, reason: expect.stringContaining('run the workflow on pull_request_target') });
+});
+
+test('@axonshaft review in a comment on a PR: a review with no event, by the commenter', () => {
+  const asks = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
+  // An issue_comment's payload doesn't say where the PR's branch lives.
+  expect(route('issue_comment', asks('@axonshaft review please'))).toEqual({ mode: 'review', number: 12, fork: undefined, actor: 'maintainer' });
+  expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '@axonshaft review' } })).toEqual({
+    mode: 'review',
+    number: 12,
+    fork: false,
+    actor: 'maintainer',
+  });
+  expect(route('pull_request_review', { ...review, review: { ...review.review, body: 'Done, @axonshaft review' } })).toEqual({
+    mode: 'review',
+    number: 12,
+    fork: false,
+    actor: 'maintainer',
+  });
+  // On an issue there's no PR to review, so it's a task.
+  expect(route('issue_comment', { ...asks('@axonshaft review'), issue: { number: 3 } })).toMatchObject({ mode: 'task', number: 3 });
+  expect(quiet(route('issue_comment', { ...asks('@axonshaft review'), sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
 });
 
 test('comments and reviews that mention @axonshaft: task', () => {
@@ -45,34 +75,27 @@ test('anything else exits quietly', () => {
   expect(quiet(route('push', push))).toBe(true);
 });
 
-test('mode review forces a review of the event PR, and needs one', () => {
-  expect(route('issue_comment', comment, { mode: 'review' })).toEqual({ mode: 'review', number: 12, actor: 'maintainer' });
-  expect(route('pull_request', { ...opened, action: 'labeled' }, { mode: 'review' })).toMatchObject({ mode: 'review', number: 12 });
-  expect(route('workflow_dispatch', push, { mode: 'review' })).toMatchObject({ mode: 'skip', notice: true });
-});
-
-test('mode review refuses a PR from a fork, as auto does', () => {
-  expect(route('pull_request', fork, { mode: 'review' })).toEqual({ mode: 'skip', notice: true, reason: 'PR #13 is from a fork, which gets no secrets, so it was skipped.' });
-});
-
-test('a forced review needs write access from its sender, and a PR whose branch is in this repo', async () => {
-  const octokit = (permission: string, head: string) =>
-    ({
-      rest: {
-        repos: { getCollaboratorPermissionLevel: async () => ({ data: { permission } }) },
-        pulls: { get: async () => ({ data: { head: { repo: { full_name: head } }, base: { repo: { full_name: 'acme/widgets' } } } }) },
-      },
-    }) as unknown as Octokit;
-  const deny = (permission: string, head: string) => forcedReviewDenial(octokit(permission, head), 'acme', 'widgets', 12, 'someone');
-  expect(await deny('write', 'acme/widgets')).toBeUndefined();
-  expect(await deny('read', 'acme/widgets')).toBe('someone has no write access, so no review was started.');
-  expect(await deny('admin', 'stranger/widgets')).toBe('PR #12 is from a fork, so no review was started.');
-});
-
 test('write access: admin and write pass, the rest do not', async () => {
   const octokit = (permission: string) =>
     ({ rest: { repos: { getCollaboratorPermissionLevel: async () => ({ data: { permission } }) } } }) as unknown as Octokit;
   for (const [permission, ok] of [['admin', true], ['write', true], ['read', false], ['none', false]] as const) {
     expect(await hasWriteAccess(octokit(permission), 'acme', 'widgets', 'maintainer')).toBe(ok);
   }
+});
+
+test('commentOnce posts the comment, but not when our bot already posted its marker', async () => {
+  const body = 'Someone with write access can start the review by commenting `@axonshaft review`.\n\n<!-- shaft:ask -->';
+  const run = async (existing: { user: { login: string }; body: string }[]) => {
+    const posted: unknown[] = [];
+    const octokit = {
+      paginate: async () => existing,
+      rest: { issues: { listComments: {}, createComment: async (p: unknown) => posted.push(p) } },
+    } as unknown as Octokit;
+    await commentOnce(octokit, 'acme', 'widgets', 13, body, 'axonshaft[bot]');
+    return posted;
+  };
+  expect(await run([])).toEqual([{ owner: 'acme', repo: 'widgets', issue_number: 13, body }]);
+  expect(await run([{ user: { login: 'axonshaft[bot]' }, body: 'An older wording.\n\n<!-- shaft:ask -->' }])).toEqual([]);
+  // Someone else's copy of the marker doesn't stop it.
+  expect(await run([{ user: { login: 'stranger' }, body: '<!-- shaft:ask -->' }])).toHaveLength(1);
 });

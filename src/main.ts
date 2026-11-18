@@ -1,83 +1,92 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
-import { reportRun } from './services/api.service';
+import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
+import { fetchGrant, reportRun } from './services/api.service';
+import { checkoutHead } from './services/checkout.service';
 import { reviewPullRequest } from './services/review.service';
-import { forcedReviewDenial, hasWriteAccess, route } from './services/route.service';
-import { resolveTokens } from './services/tokens.service';
-import { mergeSettings } from './utils/settings.util';
+import { commentOnce, hasWriteAccess, REVIEW_COMMAND, route } from './services/route.service';
+import { failureMarkdown, ShaftFailure } from './utils/failure.util';
 
-const input = (name: string) => core.getInput(name);
-
-function oneOf(name: string, allowed: string[], value = input(name)): string {
-  if (!allowed.includes(value)) throw new Error(`${name} must be one of ${allowed.join(', ')}, not "${value}".`);
-  return value;
+/** A setting from the Axon Shaft API, checked before the review starts. */
+function oneOf(name: string, allowed: string[], value: unknown): string {
+  if (typeof value === 'string' && allowed.includes(value)) return value;
+  throw new ShaftFailure('api_error', `The Axon Shaft API sent ${name} "${value}", which isn't one of ${allowed.join(', ')}. Check the repo's settings on the dashboard.`, DASHBOARD_URL);
 }
 
-function number(name: string, text: string): number {
-  const value = Number(text);
-  if (!(value > 0)) throw new Error(`${name} must be a positive number, not "${text}".`);
-  return value;
+function positive(name: string, value: unknown): number {
+  const n = Number(value);
+  if (n > 0) return n;
+  throw new ShaftFailure('api_error', `The Axon Shaft API sent ${name} "${value}", which isn't a positive number. Check the repo's settings on the dashboard.`, DASHBOARD_URL);
 }
+
+const globs = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : []);
 
 async function run(): Promise<void> {
   const started = Date.now();
-  const r = route(context.eventName, context.payload, { mode: oneOf('mode', ['auto', 'review', 'task']) });
+  const r = route(context.eventName, context.payload);
   if (r.mode === 'skip') return r.notice ? core.notice(r.reason) : core.info(r.reason);
 
+  const dryRun = core.getBooleanInput('dry_run');
+  const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context.repo;
-  const tokens = await resolveTokens(
-    {
-      claudeCodeOauthToken: input('claude_code_oauth_token'),
-      anthropicApiKey: input('anthropic_api_key'),
-      appId: input('app_id'),
-      privateKey: input('private_key'),
-      githubToken: input('github_token'),
-    },
-    context.repo,
-    { job: r.mode, event: r.mode === 'review' ? r.event : undefined },
-  );
-  if ('reason' in tokens) return core.notice(tokens.reason);
-  const octokit = getOctokit(tokens.github);
+  const grant = await fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork } : { job: 'task' });
+  if (!grant.run) {
+    // A fork's PR on a job set to ask a maintainer first: the API's comment says how to start the review.
+    if (typeof grant.comment === 'string' && typeof grant.github_token === 'string') {
+      if (dryRun) core.info(`--- comment\n${grant.comment}`);
+      else await commentOnce(getOctokit(grant.github_token), owner, repo, r.number, grant.comment, APP_BOT);
+    }
+    return core.notice(grant.reason);
+  }
+  const octokit = getOctokit(grant.github_token);
 
   if (r.mode === 'task') {
     if (!(await hasWriteAccess(octokit, owner, repo, r.actor))) return core.notice(`${r.actor} has no write access, so no task was started.`);
     return core.notice('Task mode is not built yet.');
   }
-  if (r.actor) {
-    const why = await forcedReviewDenial(octokit, owner, repo, r.number, r.actor);
-    if (why) return core.notice(why);
+  if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
+    return core.notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);
   }
+  // On pull_request the checkout is the PR merged into its base; anywhere else it's the base branch.
+  if (context.eventName !== 'pull_request') checkoutHead(cwd, r.number, grant.github_token);
 
-  const settings = mergeSettings(input, tokens.settings, tokens.job?.options);
+  const { settings, job } = grant;
   const out = await reviewPullRequest({
     octokit,
     owner,
     repo,
     number: r.number,
-    claude: tokens.claude,
-    secrets: [tokens.claude.value, tokens.github, Buffer.from(`x-access-token:${tokens.github}`).toString('base64')],
-    model: settings.model,
+    claude: grant.claude_token,
+    secrets: [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64')],
+    model: String(settings.model ?? ''),
     effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
-    depth: oneOf('depth', ['standard', 'deep'], settings.depth),
-    nits: oneOf('nits', ['summary', 'inline', 'off'], settings.nits),
-    maxTurns: number('max_turns', settings.maxTurns),
-    timeoutMinutes: number('timeout_minutes', settings.timeLimit),
-    configPath: input('config_path'),
-    bot: tokens.bot,
-    dashboard: tokens.settings,
-    instructions: tokens.job?.instructions,
-    checks: tokens.job?.checks,
-    dryRun: core.getBooleanInput('dry_run'),
+    depth: oneOf('depth', ['standard', 'deep'], job.options.depth),
+    nits: oneOf('nits', ['summary', 'inline', 'off'], job.options.nits),
+    maxTurns: positive('maxTurns', settings.maxTurns),
+    timeoutMinutes: positive('timeLimit', settings.timeLimit),
+    skip: globs(settings.skip),
+    focus: globs(settings.focus),
+    bot: APP_BOT,
+    prompt: job.prompt,
+    checks: job.checks,
+    dryRun,
     runUrl: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
-    cwd: process.env.GITHUB_WORKSPACE ?? process.cwd(),
+    cwd,
   });
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
-  // Only when /v1/token answered, which opened the run on the dashboard.
-  if (tokens.settings) {
-    await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, duration_ms: Date.now() - started });
-  }
+  await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, duration_ms: Date.now() - started });
 }
 
-run().catch((e) => core.setFailed(e instanceof Error ? e.message : String(e)));
+/** Fail the step; a known failure also puts its card, message and link in the job summary. */
+async function fail(e: unknown): Promise<void> {
+  core.setFailed(e instanceof Error ? e.message : String(e));
+  if (!(e instanceof ShaftFailure)) return;
+  await core.summary
+    .addRaw(failureMarkdown(e))
+    .write()
+    .catch((w: Error) => core.warning(`Couldn't write the job summary: ${w.message}`));
+}
+
+run().catch(fail);

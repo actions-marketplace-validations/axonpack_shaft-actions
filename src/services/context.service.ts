@@ -25,8 +25,6 @@ export type Context = {
   reviewComments: Comment[];
   /** Our sticky summary comment, if an earlier run made one. */
   summary?: Comment;
-  /** The review rules file's text on the base branch; undefined when it has none. */
-  config?: string;
   /** The repo's guides (`GUIDE_FILES`) the base branch has, in that order. */
   guides: { path: string; text: string }[];
 };
@@ -44,7 +42,7 @@ const comment = (c: any): Comment => ({
 /**
  * A file as the base branch has it, through the API; undefined when it has none. Never the
  * checkout's copy: on `pull_request` the checkout is the merge commit, so a PR could edit the
- * review rules or the repo's guides to change its own review.
+ * repo's guides to change its own review.
  */
 async function baseFile(octokit: Octokit, owner: string, repo: string, ref: string, path: string): Promise<string | undefined> {
   try {
@@ -56,13 +54,12 @@ async function baseFile(octokit: Octokit, owner: string, repo: string, ref: stri
   }
 }
 
-/** Everything the review needs from GitHub: the PR text, the diff, the comments already posted and the base branch's review rules. */
+/** Everything the review needs from GitHub: the PR text, the diff, the comments already posted and the base branch's guides. */
 export async function collectContext(
   octokit: Octokit,
   owner: string,
   repo: string,
   number: number,
-  configPath: string,
   /** Our own login: the summary is the comment it wrote, never one someone else made to look like it. */
   bot: string,
 ): Promise<Context> {
@@ -93,7 +90,6 @@ export async function collectContext(
     comments: comments.filter((c) => c !== summary),
     reviewComments: reviewComments.map(comment),
     summary,
-    config: await baseFile(octokit, owner, repo, pr.base.ref, configPath),
     guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter(
       (g): g is { path: string; text: string } => typeof g.text === 'string' && !!g.text.trim(),
     ),
