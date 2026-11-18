@@ -23741,6 +23741,7 @@ var APP_MENTION = "@axonshaft";
 var APP_BOT = "axonshaft[bot]";
 var DASHBOARD_URL = "https://shaft.axonpack.dev";
 var ERROR_CARDS_URL = "https://shaft.axonpack.dev/errors";
+var STATUS_CARDS_URL = "https://shaft.axonpack.dev/status";
 
 // src/utils/failure.util.ts
 class ShaftFailure extends Error {
@@ -57967,7 +57968,8 @@ function place(findings, files, nits) {
 var SEVERITY_LABEL = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
 var SEVERITY_DOT = { blocking: "\uD83D\uDD34", "should-fix": "\uD83D\uDFE1", nit: "⚪" };
 var VERDICT_LABEL = { blocking: "Blocking", "needs-changes": "Needs changes", "looks-good": "Looks good" };
-var VERDICT_ALERT = { blocking: ["CAUTION", "\uD83D\uDD34"], "needs-changes": ["WARNING", "\uD83D\uDFE1"], "looks-good": ["TIP", "\uD83D\uDFE2"] };
+var VERDICT_ALERT = { blocking: "CAUTION", "needs-changes": "WARNING", "looks-good": "TIP" };
+var statusCard = (status, label) => `![${label}](${STATUS_CARDS_URL}/${status}.svg)`;
 var CHECK_LABEL = {
   correctness: "Correctness",
   breakage: "Breakage",
@@ -58032,10 +58034,10 @@ function card(review, placed, fixed, f) {
   });
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
-  const [alert, dot] = VERDICT_ALERT[review.verdict];
+  const alert = VERDICT_ALERT[review.verdict];
   return [
     `> [!${alert}]`,
-    `> ### ${dot} ${VERDICT_LABEL[review.verdict]}`,
+    `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
     ...headline.map((l) => `> ${l}`),
     ">",
     `> ${countChips.join(" ")}`,
@@ -58064,7 +58066,7 @@ ${body}
 
 </details>`;
 function startSummary(sha, prior) {
-  return [SUMMARY_MARKER, `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
+  return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
 `);
 }
 function failedSummary(failure, prior) {

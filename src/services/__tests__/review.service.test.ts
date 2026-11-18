@@ -186,7 +186,7 @@ test('a failed review puts its card, message and the run link in the PR summary 
   agentError = new ShaftFailure('review_invalid_reply', "The model's reply didn't match the review format twice.");
   await expect(review([file('src/a.ts')], { dryRun: false })).rejects.toBe(agentError);
   expect(fake.written).toEqual([
-    '<!-- shaft:summary -->\nReviewing `abc1234`…',
+    '<!-- shaft:summary -->\n![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)\nReviewing `abc1234`…',
     [
       '<!-- shaft:summary -->',
       "![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",

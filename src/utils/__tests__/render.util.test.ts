@@ -122,7 +122,7 @@ test('the summary format', () => {
   const [text, state] = [body.slice(0, body.lastIndexOf('\n')), body.slice(body.lastIndexOf('\n') + 1)];
   expect(text).toBe(`<!-- shaft:summary -->
 > [!WARNING]
-> ### 🟡 Needs changes
+> ![Needs changes](https://shaft.axonpack.dev/status/needs-changes.svg)
 > \`retry()\` never retries, so the fix this PR is for does not take effect.
 >
 > <kbd>🔴 1 blocking</kbd> <kbd>🟡 2 should fix</kbd> <kbd>⚪ 2 nits</kbd> <kbd>✅ 1 fixed</kbd>
@@ -168,7 +168,7 @@ const info = { sha: 'abc1234', repo: 'acme/widgets', models: 'claude-haiku-4', e
 
 test('a looks-good review with no findings: a TIP card with one chip, and no table', () => {
   const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info);
-  expect(body).toContain('> [!TIP]\n> ### 🟢 Looks good\n');
+  expect(body).toContain('> [!TIP]\n> ![Looks good](https://shaft.axonpack.dev/status/looks-good.svg)\n');
   expect(body).toContain('\n> <kbd>✅ No findings</kbd>\n');
   expect(body).not.toContain('| Severity |');
   expect(body).not.toContain('fixed</kbd>');
@@ -177,7 +177,7 @@ test('a looks-good review with no findings: a TIP card with one chip, and no tab
 test('blocking is a CAUTION card; a check the project turned off shows ➖', () => {
   const placed = place([finding({ severity: 'blocking', step: 'security' })], files, 'summary');
   const body = renderSummary({ ...review, verdict: 'blocking' }, placed, undefined, { ...info, checks: ['correctness', 'tests'] });
-  expect(body).toContain('> [!CAUTION]\n> ### 🔴 Blocking\n');
+  expect(body).toContain('> [!CAUTION]\n> ![Blocking](https://shaft.axonpack.dev/status/blocking.svg)\n');
   expect(body).toContain('> <kbd>🔴 1 blocking</kbd>\n');
   expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>➖ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>✅ Tests</kbd> <kbd>➖ Docs</kbd> <kbd>❌ Security</kbd>\n');
 });
@@ -201,7 +201,9 @@ test('images in model text are stripped before posting, so a URL in one carries 
   // The hidden state line keeps the raw title for matching; GitHub never renders it.
   const body = full.slice(0, full.lastIndexOf('\n<!-- shaft:state'));
   expect(body).not.toContain('evil.example');
-  expect(body).not.toContain('![');
+  // The only image left is our own status card, from the dashboard.
+  expect([...body.matchAll(/!\[[^\]]*\]\(([^)]*)\)/g)].map((m) => m[1])).toEqual(['https://shaft.axonpack.dev/status/needs-changes.svg']);
+  expect(body.match(/!\[/g)).toHaveLength(1);
   expect(body).toContain('See  and  and  and .');
   const [inline] = place([finding({ body: leak })], files, 'summary');
   expect(inlineBody(inline)).not.toContain('evil.example');
@@ -230,7 +232,7 @@ test('the state line survives a title with --> in it', () => {
 test('the start text keeps the previous state', () => {
   const prior = { sha: 'abc', findings: [] };
   expect(parseState(startSummary('a1b2c3d4e5', prior))).toEqual(prior);
-  expect(startSummary('a1b2c3d4e5')).toBe('<!-- shaft:summary -->\nReviewing `a1b2c3d`…');
+  expect(startSummary('a1b2c3d4e5')).toBe('<!-- shaft:summary -->\n![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)\nReviewing `a1b2c3d`…');
 });
 
 test('redact replaces every secret', () => {
