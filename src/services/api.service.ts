@@ -7,7 +7,8 @@ import type { ReviewEvent } from './route.service';
  * What `POST /v1/token` takes: the job the event routed to, for a pull request event which one, and
  * for a review whether the PR comes from a fork.
  */
-export type GrantRequest = { job: 'review' | 'task'; event?: ReviewEvent; fork?: boolean };
+/** `help` asks for the list of commands to post; the rest are a job kind. */
+export type GrantRequest = { job: 'review' | 'task' | 'reply' | 'help'; event?: ReviewEvent; fork?: boolean };
 
 /** One of the deep review's subagents, for a check the project keeps on. */
 export type Pass = { name: string; description: string; prompt: string };

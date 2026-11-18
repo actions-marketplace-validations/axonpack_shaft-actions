@@ -29,9 +29,9 @@ async function run(): Promise<void> {
   const dryRun = core.getBooleanInput('dry_run');
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context.repo;
-  const grant = await fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork } : { job: 'task' });
+  const grant = await fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork } : { job: r.mode });
   if (!grant.run) {
-    // A fork's PR on a job set to ask a maintainer first: the API's comment says how to start the review.
+    // The API's comment to post once: how to start a fork's review, or the list of commands for /help.
     if (typeof grant.comment === 'string' && typeof grant.github_token === 'string') {
       if (dryRun) core.info(`--- comment\n${grant.comment}`);
       else await commentOnce(getOctokit(grant.github_token), owner, repo, r.number, grant.comment, APP_BOT);
@@ -40,9 +40,9 @@ async function run(): Promise<void> {
   }
   const octokit = getOctokit(grant.github_token);
 
-  if (r.mode === 'task') {
-    if (!(await hasWriteAccess(octokit, owner, repo, r.actor))) return core.notice(`${r.actor} has no write access, so no task was started.`);
-    return core.notice('Task mode is not built yet.');
+  if (r.mode !== 'review') {
+    if (!(await hasWriteAccess(octokit, owner, repo, r.actor))) return core.notice(`${r.actor} has no write access, so nothing was started.`);
+    return core.notice(`${r.mode === 'reply' ? 'Reply' : 'Task'} mode is not built yet.`);
   }
   if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
     return core.notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);

@@ -35,11 +35,16 @@ Axon Shaft needs its dashboard. The action holds no settings and no prompt of it
      id-token: write
    jobs:
      axon-shaft:
-       # Skip comments that don't mention the app, and bots' comments (Axon Shaft's own included), so they don't start a runner.
+       # Skip comments with no @axonshaft and no command, and bots' comments (Axon Shaft's own included),
+       # so they don't start a runner. The action checks that a command starts a line.
        if: >-
          github.event_name == 'pull_request_target' ||
          (github.event.sender.type != 'Bot' &&
-         (contains(github.event.comment.body, '@axonshaft') || contains(github.event.review.body, '@axonshaft')))
+         (contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '@axonshaft') ||
+         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/review') ||
+         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/fix') ||
+         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/ask') ||
+         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/help')))
        runs-on: ubuntu-latest
        steps:
          - uses: actions/checkout@v7
@@ -51,7 +56,7 @@ Axon Shaft needs its dashboard. The action holds no settings and no prompt of it
 
 4. Open a pull request. To see the output in the job log before anything is posted, add `with: { dry_run: true }`.
 
-The workflow holds no secrets. With `id-token: write`, the action gets an OIDC token for the run and sends it to the Axon Shaft API with the job (`review` for a pull request event or an `@axonshaft review` comment, `task` for any other comment that mentions `@axonshaft`), which pull request event it was, and whether the pull request comes from a fork. When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt. Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`. After the review the action sends the verdict, model and finding counts to the dashboard's run history. If recording the run fails, the action logs a warning and the run still passes.
+The workflow holds no secrets. With `id-token: write`, the action gets an OIDC token for the run and sends it to the Axon Shaft API with the job (`review` for a pull request event, a `/review` or an `@axonshaft review` comment; `task` for `/fix` or any other comment that mentions `@axonshaft`; `reply` for `/ask`; `help` for `/help`), which pull request event it was, and whether the pull request comes from a fork. When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt. Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`. After the review the action sends the verdict, model and finding counts to the dashboard's run history. If recording the run fails, the action logs a warning and the run still passes.
 
 When the Code review job is off on the dashboard, or the event isn't one of its "When it runs" choices, the API says so and the run ends with a notice giving its reason. Nothing is posted.
 
@@ -72,6 +77,19 @@ On `pull_request_target`, and on a comment, the workflow's checkout holds the ba
 ## Starting a review from a comment
 
 Comment `@axonshaft review` on a pull request, in the conversation, on a line or in a review, and Axon Shaft reviews its latest commit. This works on any pull request, from a fork or not, whatever the "When it runs" and "Pull requests from forks" settings say. The commenter needs write access to the repo, which the action checks with GitHub. Anyone else's comment starts nothing, and the run ends with a notice that only people with write access can start a review. Any other mention of `@axonshaft` is for task mode, which isn't built yet.
+
+### Commands
+
+A comment can also start Axon Shaft with a command at the start of a line. GitHub doesn't suggest an app in `@` autocomplete, so these are quicker to type.
+
+| Command | What it does |
+|---|---|
+| `/review` | Reviews the pull request now, like `@axonshaft review`. On an issue it ends with a notice. |
+| `/fix` | Fixes what the last review found, or what follows the command. Not built yet: the run ends with a notice. |
+| `/ask <question>` | Answers a question about the code without changing it. Not built yet: the run ends with a notice. |
+| `/help` | `axonshaft[bot]` posts the list of commands on the pull request or issue, once. |
+
+A command in a quote, in inline code or in a code block doesn't count, and neither does a longer word such as `/reviewer`. Another bot that uses the same command will also start.
 
 ## Inputs
 
