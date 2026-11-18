@@ -1,4 +1,3 @@
-import { APP_MENTION } from '../consts/api.const';
 import type { Octokit } from '../types/octokit.type';
 
 /** The pull request event, as the Code review job's `on` choices name it. */
@@ -6,18 +5,38 @@ export type ReviewEvent = 'opened' | 'push' | 'ready';
 
 export type Route =
   /**
-   * `event` is set on a pull request event; a review someone asked for with `@axonshaft review` has
+   * `event` is set on a pull request event; a review someone asked for with `/review` has
    * none, and its `actor` needs write access. `fork` is undefined when the payload doesn't say.
    */
   | { mode: 'review'; number: number; event?: ReviewEvent; fork?: boolean; actor?: string }
   | { mode: 'task'; number: number; actor: string }
+  /** `/ask`: answer, never change code. */
+  | { mode: 'reply'; number: number; actor: string }
+  /** `/help`: post the list of commands. */
+  | { mode: 'help'; number: number; actor: string }
   | { mode: 'skip'; reason: string; notice?: boolean };
 
 /** The pull_request actions that start a review, and the event each one is for the Axon Shaft API. */
 const REVIEW_EVENTS: Record<string, ReviewEvent> = { opened: 'opened', reopened: 'opened', synchronize: 'push', ready_for_review: 'ready' };
 
 /** A comment with this in it starts a review of its pull request. */
-export const REVIEW_COMMAND = `${APP_MENTION} review`;
+export const REVIEW_COMMAND = '/review';
+
+/** `prompt` is `/axonshaft <prompt>`: anything, answered or done. */
+export type Command = 'review' | 'fix' | 'ask' | 'help' | 'prompt';
+
+/**
+ * The slash command a comment gives: `/review`, `/fix`, `/ask`, `/help` or `/axonshaft` at the start of a line.
+ * Lines in a quote or a code block don't count, so quoting someone's command doesn't run it again.
+ */
+export function commandIn(text: string): Command | undefined {
+  const lines = text.replace(/```[\s\S]*?(```|$)/g, '').replace(/`[^`\n]*`/g, '').split('\n');
+  for (const line of lines) {
+    const m = /^\s*\/(review|fix|ask|help|axonshaft)(?![\w-])/.exec(line);
+    if (m && !line.trimStart().startsWith('>')) return m[1] === 'axonshaft' ? 'prompt' : (m[1] as Command);
+  }
+  return undefined;
+}
 
 /** The PR's branch lives in another repo, or in one that was deleted. */
 const isFork = (pr: any): boolean => pr.head.repo?.full_name !== pr.base.repo.full_name;
@@ -43,13 +62,17 @@ export function route(eventName: string, payload: any): Route {
       : eventName === 'pull_request_review'
         ? payload.action === 'submitted' && payload.review?.body
         : undefined;
-  if (typeof text !== 'string' || !text.includes(APP_MENTION)) return { mode: 'skip', reason: `${eventName} has nothing for Axon Shaft.` };
+  const command = typeof text === 'string' ? commandIn(text) : undefined;
+  if (typeof text !== 'string' || !command) return { mode: 'skip', reason: `${eventName} has nothing for Axon Shaft.` };
   if (payload.sender?.type === 'Bot') return { mode: 'skip', reason: 'Comments from bots are ignored.' };
+  const actor: string = payload.sender.login;
+  const onPr = Boolean(pr || payload.issue?.pull_request);
   // An issue_comment's payload doesn't say where the PR's branch lives, so `fork` stays undefined there.
-  if (text.includes(REVIEW_COMMAND) && (pr || payload.issue?.pull_request)) {
-    return { mode: 'review', number: number!, fork: pr ? isFork(pr) : undefined, actor: payload.sender.login };
-  }
-  return { mode: 'task', number: number!, actor: payload.sender.login };
+  if (command === 'review' && onPr) return { mode: 'review', number: number!, fork: pr ? isFork(pr) : undefined, actor };
+  if (command === 'review') return { mode: 'skip', reason: '/review works on a pull request, not an issue.', notice: true };
+  if (command === 'help') return { mode: 'help', number: number!, actor };
+  if (command === 'ask') return { mode: 'reply', number: number!, actor };
+  return { mode: 'task', number: number!, actor };
 }
 
 /** Only people with write access may start a review or a task from a comment. */

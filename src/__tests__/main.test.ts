@@ -150,7 +150,7 @@ test("pull_request_target is a review too: a fork's PR sends fork: true, and its
 const ask = {
   run: false,
   reason: 'This pull request comes from a fork, so a maintainer has to start its review.',
-  comment: 'Someone with write access can start the review by commenting `@axonshaft review`.\n\n<!-- shaft:ask -->',
+  comment: 'Someone with write access can start the review by commenting `/review`.\n\n<!-- shaft:ask -->',
   github_token: 'ghs_ask',
 };
 
@@ -177,16 +177,16 @@ test("ask: the API's comment is posted once on the PR, and the step ends with a 
 test('mention, or any other run: false, posts nothing and ends with a notice', async () => {
   context.eventName = 'pull_request_target';
   context.payload = fork;
-  api(Response.json({ run: false, reason: 'A maintainer has to mention @axonshaft to review a fork.' }));
+  api(Response.json({ run: false, reason: 'A maintainer has to comment /review to review a fork.' }));
   await main();
   expect(posted).toEqual([]);
-  expect(notices).toEqual(['A maintainer has to mention @axonshaft to review a fork.']);
+  expect(notices).toEqual(['A maintainer has to comment /review to review a fork.']);
   expect(failed).toEqual([]);
 });
 
-const asks = { ...comment, comment: { ...comment.comment, body: '@axonshaft review' } };
+const asks = { ...comment, comment: { ...comment.comment, body: '/review' } };
 
-test('@axonshaft review by someone with write access reviews the PR, with no event, at its head commit', async () => {
+test('/review by someone with write access reviews the PR, with no event, at its head commit', async () => {
   context.eventName = 'issue_comment';
   context.payload = asks;
   api(Response.json(grant));
@@ -197,13 +197,13 @@ test('@axonshaft review by someone with write access reviews the PR, with no eve
   expect(reviewed).toMatchObject({ number: 12 });
 });
 
-test("@axonshaft review by someone without write access starts nothing, and the notice says who can", async () => {
+test("/review by someone without write access starts nothing, and the notice says who can", async () => {
   context.eventName = 'issue_comment';
   context.payload = asks;
   permission = 'read';
   api(Response.json(grant));
   await main();
-  expect(notices).toEqual(['maintainer has no write access, so no review was started. Only people with write access can start one with @axonshaft review.']);
+  expect(notices).toEqual(['maintainer has no write access, so no review was started. Only people with write access can start one with /review.']);
   expect(checkedOut).toEqual([]);
   expect(reviewed).toBeUndefined();
 });

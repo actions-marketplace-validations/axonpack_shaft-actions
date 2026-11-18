@@ -4,8 +4,6 @@ export const API_AUDIENCE = 'https://api-shaft.axonpack.dev';
 /** `SHAFT_API_URL` is for tests only; a workflow never sets it. */
 export const API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
 
-/** Mentioning the GitHub App in a comment is the one way to start a task. */
-export const APP_MENTION = '@axonshaft';
 
 /** Who the AxonShaft app's comments come from. */
 export const APP_BOT = 'axonshaft[bot]';

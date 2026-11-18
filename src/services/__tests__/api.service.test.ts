@@ -75,7 +75,7 @@ test('run: false comes back with its reason, and nothing is masked', async () =>
 });
 
 test("ask: run: false comes back with the comment to post, and its GitHub token is masked", async () => {
-  const ask = { run: false, reason: 'A maintainer has to start the review of this fork.', comment: 'Comment `@axonshaft review`.\n\n<!-- shaft:ask -->', github_token: 'ghs_ask' };
+  const ask = { run: false, reason: 'A maintainer has to start the review of this fork.', comment: 'Comment `/review`.\n\n<!-- shaft:ask -->', github_token: 'ghs_ask' };
   answer(Response.json(ask));
   expect(await fetchGrant({ job: 'review', event: 'opened', fork: true })).toEqual(ask);
   expect(masked).toEqual(['ghs_ask']);

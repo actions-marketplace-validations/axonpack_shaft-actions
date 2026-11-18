@@ -34,28 +34,30 @@ test("on pull_request a fork's PR has no OIDC token, so it's skipped with a noti
   expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true, reason: expect.stringContaining('run the workflow on pull_request_target') });
 });
 
-test('@axonshaft review in a comment on a PR: a review with no event, by the commenter', () => {
+test('/review in a comment on a PR: a review with no event, by the commenter', () => {
   const asks = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
   // An issue_comment's payload doesn't say where the PR's branch lives.
-  expect(route('issue_comment', asks('@axonshaft review please'))).toEqual({ mode: 'review', number: 12, fork: undefined, actor: 'maintainer' });
-  expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '@axonshaft review' } })).toEqual({
+  expect(route('issue_comment', asks('/review please'))).toEqual({ mode: 'review', number: 12, fork: undefined, actor: 'maintainer' });
+  expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '/review' } })).toEqual({
     mode: 'review',
     number: 12,
     fork: false,
     actor: 'maintainer',
   });
-  expect(route('pull_request_review', { ...review, review: { ...review.review, body: 'Done, @axonshaft review' } })).toEqual({
+  expect(route('pull_request_review', { ...review, review: { ...review.review, body: 'Done.\n/review' } })).toEqual({
     mode: 'review',
     number: 12,
     fork: false,
     actor: 'maintainer',
   });
-  // On an issue there's no PR to review, so it's a task.
-  expect(route('issue_comment', { ...asks('@axonshaft review'), issue: { number: 3 } })).toMatchObject({ mode: 'task', number: 3 });
-  expect(quiet(route('issue_comment', { ...asks('@axonshaft review'), sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
+  // On an issue there's no PR to review: it ends with a notice.
+  expect(route('issue_comment', { ...asks('/review'), issue: { number: 3 } })).toMatchObject({ mode: 'skip', notice: true });
+  // @axonshaft alone starts nothing any more.
+  expect(quiet(route('issue_comment', asks('@axonshaft review')))).toBe(true);
+  expect(quiet(route('issue_comment', { ...asks('/review'), sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
 });
 
-test('comments and reviews that mention @axonshaft: task', () => {
+test('comments and reviews with /fix or /axonshaft: task', () => {
   expect(route('issue_comment', comment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
   expect(route('pull_request_review_comment', reviewComment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
   expect(route('pull_request_review', review)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
@@ -67,8 +69,9 @@ test('a comment without the mention, an edit, or a bot comment exits quietly', (
   expect(quiet(route('issue_comment', { ...comment, sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
 });
 
-test('only @axonshaft starts a task; another phrase such as /review is skipped', () => {
-  expect(quiet(route('issue_comment', { ...comment, comment: { ...comment.comment, body: '/review' } }))).toBe(true);
+test('a slash word that is not one of the commands, such as /deploy, starts nothing', () => {
+  for (const body of ['/deploy', '/approve', 'review please'])
+    expect(quiet(route('issue_comment', { ...comment, comment: { ...comment.comment, body } })), body).toBe(true);
 });
 
 test('anything else exits quietly', () => {
@@ -84,7 +87,7 @@ test('write access: admin and write pass, the rest do not', async () => {
 });
 
 test('commentOnce posts the comment, but not when our bot already posted its marker', async () => {
-  const body = 'Someone with write access can start the review by commenting `@axonshaft review`.\n\n<!-- shaft:ask -->';
+  const body = 'Someone with write access can start the review by commenting `/review`.\n\n<!-- shaft:ask -->';
   const run = async (existing: { user: { login: string }; body: string }[]) => {
     const posted: unknown[] = [];
     const octokit = {
@@ -98,4 +101,28 @@ test('commentOnce posts the comment, but not when our bot already posted its mar
   expect(await run([{ user: { login: 'axonshaft[bot]' }, body: 'An older wording.\n\n<!-- shaft:ask -->' }])).toEqual([]);
   // Someone else's copy of the marker doesn't stop it.
   expect(await run([{ user: { login: 'stranger' }, body: '<!-- shaft:ask -->' }])).toHaveLength(1);
+});
+
+test('a slash command at the start of a line: /review on a PR reviews; /fix is a task, /ask a reply, /help the list', () => {
+  const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
+  expect(route('issue_comment', says('/review'))).toEqual({ mode: 'review', number: 12, fork: undefined, actor: 'maintainer' });
+  expect(route('issue_comment', says('Thanks!\n  /review please'))).toMatchObject({ mode: 'review' });
+  expect(route('issue_comment', says('/fix the null check'))).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
+  expect(route('issue_comment', says('/ask why is this async?'))).toEqual({ mode: 'reply', number: 12, actor: 'maintainer' });
+  expect(route('issue_comment', says('/help'))).toEqual({ mode: 'help', number: 12, actor: 'maintainer' });
+  expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '/review' } })).toMatchObject({ mode: 'review' });
+  // /review on an issue has no pull request to review.
+  const onIssue = { ...says('/review'), issue: { ...comment.issue, pull_request: undefined } };
+  expect(route('issue_comment', onIssue)).toMatchObject({ mode: 'skip', notice: true });
+});
+
+test('a command inside a sentence, a quote, inline code or a code block, or a longer word, starts nothing', () => {
+  const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
+  for (const body of ['please /review this', '> /review', 'run `/review` later', '```\n/review\n```', '/reviewer', '/fix-it', 'see /help/me'])
+    expect(quiet(route('issue_comment', says(body))), body).toBe(true);
+});
+
+test("a bot's slash command is ignored", () => {
+  const bot = { ...comment, comment: { ...comment.comment, body: '/review' }, sender: { ...comment.sender, type: 'Bot' } };
+  expect(route('issue_comment', bot)).toMatchObject({ mode: 'skip' });
 });
