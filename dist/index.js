@@ -23737,7 +23737,6 @@ function getOctokit(token, options, ...additionalPlugins) {
 // src/consts/api.const.ts
 var API_AUDIENCE = "https://api-shaft.axonpack.dev";
 var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
-var APP_MENTION = "@axonshaft";
 var APP_BOT = "axonshaft[bot]";
 var DASHBOARD_URL = "https://shaft.axonpack.dev";
 var ERROR_CARDS_URL = "https://shaft.axonpack.dev/errors";
@@ -57900,7 +57899,7 @@ qe();
 // package.json
 var package_default = {
   name: "shaft",
-  version: "1.1.0",
+  version: "1.2.0",
   private: true,
   description: "A GitHub Action that reviews pull requests with Claude through the Claude Agent SDK.",
   license: "MIT",
@@ -58550,7 +58549,17 @@ ${clean(body)}`);
 
 // src/services/route.service.ts
 var REVIEW_EVENTS = { opened: "opened", reopened: "opened", synchronize: "push", ready_for_review: "ready" };
-var REVIEW_COMMAND = `${APP_MENTION} review`;
+var REVIEW_COMMAND = "/review";
+function commandIn(text) {
+  const lines = text.replace(/```[\s\S]*?(```|$)/g, "").replace(/`[^`\n]*`/g, "").split(`
+`);
+  for (const line of lines) {
+    const m = /^\s*\/(review|fix|ask|help|axonshaft)(?![\w-])/.exec(line);
+    if (m && !line.trimStart().startsWith(">"))
+      return m[1] === "axonshaft" ? "prompt" : m[1];
+  }
+  return;
+}
 var isFork = (pr) => pr.head.repo?.full_name !== pr.base.repo.full_name;
 function route(eventName, payload) {
   const pr = payload.pull_request;
@@ -58565,14 +58574,22 @@ function route(eventName, payload) {
     return { mode: "review", number: pr.number, event, fork: isFork(pr) };
   }
   const text = eventName === "issue_comment" || eventName === "pull_request_review_comment" ? payload.action === "created" && payload.comment?.body : eventName === "pull_request_review" ? payload.action === "submitted" && payload.review?.body : undefined;
-  if (typeof text !== "string" || !text.includes(APP_MENTION))
+  const command = typeof text === "string" ? commandIn(text) : undefined;
+  if (typeof text !== "string" || !command)
     return { mode: "skip", reason: `${eventName} has nothing for Axon Shaft.` };
   if (payload.sender?.type === "Bot")
     return { mode: "skip", reason: "Comments from bots are ignored." };
-  if (text.includes(REVIEW_COMMAND) && (pr || payload.issue?.pull_request)) {
-    return { mode: "review", number, fork: pr ? isFork(pr) : undefined, actor: payload.sender.login };
-  }
-  return { mode: "task", number, actor: payload.sender.login };
+  const actor = payload.sender.login;
+  const onPr = Boolean(pr || payload.issue?.pull_request);
+  if (command === "review" && onPr)
+    return { mode: "review", number, fork: pr ? isFork(pr) : undefined, actor };
+  if (command === "review")
+    return { mode: "skip", reason: "/review works on a pull request, not an issue.", notice: true };
+  if (command === "help")
+    return { mode: "help", number, actor };
+  if (command === "ask")
+    return { mode: "reply", number, actor };
+  return { mode: "task", number, actor };
 }
 async function hasWriteAccess(octokit, owner, repo, username) {
   const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
@@ -58607,7 +58624,7 @@ async function run() {
   const dryRun = getBooleanInput("dry_run");
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context2.repo;
-  const grant = await fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork } : { job: "task" });
+  const grant = await fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork } : { job: r.mode });
   if (!grant.run) {
     if (typeof grant.comment === "string" && typeof grant.github_token === "string") {
       if (dryRun)
@@ -58619,10 +58636,10 @@ ${grant.comment}`);
     return notice(grant.reason);
   }
   const octokit = getOctokit(grant.github_token);
-  if (r.mode === "task") {
+  if (r.mode !== "review") {
     if (!await hasWriteAccess(octokit, owner, repo, r.actor))
-      return notice(`${r.actor} has no write access, so no task was started.`);
-    return notice("Task mode is not built yet.");
+      return notice(`${r.actor} has no write access, so nothing was started.`);
+    return notice(`${r.mode === "reply" ? "Reply" : "Task"} mode is not built yet.`);
   }
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
     return notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);
