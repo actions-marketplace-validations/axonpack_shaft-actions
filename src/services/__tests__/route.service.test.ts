@@ -34,28 +34,30 @@ test("on pull_request a fork's PR has no OIDC token, so it's skipped with a noti
   expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true, reason: expect.stringContaining('run the workflow on pull_request_target') });
 });
 
-test('@axonshaft review in a comment on a PR: a review with no event, by the commenter', () => {
+test('/review in a comment on a PR: a review with no event, by the commenter', () => {
   const asks = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
   // An issue_comment's payload doesn't say where the PR's branch lives.
-  expect(route('issue_comment', asks('@axonshaft review please'))).toEqual({ mode: 'review', number: 12, fork: undefined, actor: 'maintainer' });
-  expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '@axonshaft review' } })).toEqual({
+  expect(route('issue_comment', asks('/review please'))).toEqual({ mode: 'review', number: 12, fork: undefined, actor: 'maintainer' });
+  expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '/review' } })).toEqual({
     mode: 'review',
     number: 12,
     fork: false,
     actor: 'maintainer',
   });
-  expect(route('pull_request_review', { ...review, review: { ...review.review, body: 'Done, @axonshaft review' } })).toEqual({
+  expect(route('pull_request_review', { ...review, review: { ...review.review, body: 'Done.\n/review' } })).toEqual({
     mode: 'review',
     number: 12,
     fork: false,
     actor: 'maintainer',
   });
-  // On an issue there's no PR to review, so it's a task.
-  expect(route('issue_comment', { ...asks('@axonshaft review'), issue: { number: 3 } })).toMatchObject({ mode: 'task', number: 3 });
-  expect(quiet(route('issue_comment', { ...asks('@axonshaft review'), sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
+  // On an issue there's no PR to review: it ends with a notice.
+  expect(route('issue_comment', { ...asks('/review'), issue: { number: 3 } })).toMatchObject({ mode: 'skip', notice: true });
+  // @axonshaft alone starts nothing any more.
+  expect(quiet(route('issue_comment', asks('@axonshaft review')))).toBe(true);
+  expect(quiet(route('issue_comment', { ...asks('/review'), sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
 });
 
-test('comments and reviews that mention @axonshaft: task', () => {
+test('comments and reviews with /fix or /axonshaft: task', () => {
   expect(route('issue_comment', comment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
   expect(route('pull_request_review_comment', reviewComment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
   expect(route('pull_request_review', review)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
@@ -85,7 +87,7 @@ test('write access: admin and write pass, the rest do not', async () => {
 });
 
 test('commentOnce posts the comment, but not when our bot already posted its marker', async () => {
-  const body = 'Someone with write access can start the review by commenting `@axonshaft review`.\n\n<!-- shaft:ask -->';
+  const body = 'Someone with write access can start the review by commenting `/review`.\n\n<!-- shaft:ask -->';
   const run = async (existing: { user: { login: string }; body: string }[]) => {
     const posted: unknown[] = [];
     const octokit = {
