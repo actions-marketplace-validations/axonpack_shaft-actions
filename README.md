@@ -35,16 +35,13 @@ Axon Shaft needs its dashboard. The action holds no settings and no prompt of it
      id-token: write
    jobs:
      axon-shaft:
-       # Skip comments with no @axonshaft and no command, and bots' comments (Axon Shaft's own included),
-       # so they don't start a runner. The action checks that a command starts a line.
+       # Skip comments with no @axonshaft and no line that starts with /, and bots' comments (Axon
+       # Shaft's own included), so they don't start a runner. The action picks out the command.
        if: >-
          github.event_name == 'pull_request_target' ||
          (github.event.sender.type != 'Bot' &&
-         (contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '@axonshaft') ||
-         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/review') ||
-         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/fix') ||
-         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/ask') ||
-         contains(format('{0} {1}', github.event.comment.body, github.event.review.body), '/help')))
+         (contains(format('{0}{1}', github.event.comment.body, github.event.review.body), '@axonshaft') ||
+         contains(format('{0}{1}{0}{2}', fromJSON('"\n"'), github.event.comment.body, github.event.review.body), format('{0}/', fromJSON('"\n"')))))
        runs-on: ubuntu-latest
        steps:
          - uses: actions/checkout@v7
