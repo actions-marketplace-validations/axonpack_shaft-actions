@@ -30,10 +30,21 @@ beforeEach(() => {
 });
 
 const review = { job: 'review', event: 'push' } as const;
-const job = { type: 'review', version: 1, options: { on: ['opened', 'push'], depth: 'deep', nits: 'off' }, checks: ['correctness'], instructions: '1. **Verify.**' };
+const job = {
+  type: 'review',
+  version: 2,
+  options: { on: ['opened', 'push'], depth: 'deep', nits: 'off' },
+  checks: ['correctness'],
+  prompt: { template: '# Review {{repo}}', passes: [{ name: 'correctness', description: 'd', prompt: 'p' }] },
+};
+const run = { run: true, github_token: 'ghs_shaft', claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' }, settings: { model: 'opus' }, job };
+/** The failure `fetchGrant` threw, as its code, message and url. */
+const failure = (p: Promise<unknown>) => p.then(
+  () => expect.unreachable(),
+  (e) => ({ code: e.code, message: e.message, url: e.url }),
+);
 
 test('POST /v1/token sends the job and event with the OIDC token, and masks both tokens', async () => {
-  const run = { run: true, github_token: 'ghs_shaft', claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' }, settings: { model: 'opus' }, job };
   answer(Response.json(run));
   expect(await fetchGrant(review)).toEqual(run);
   expect(audiences).toEqual(['https://api-shaft.axonpack.dev']);
@@ -43,11 +54,18 @@ test('POST /v1/token sends the job and event with the OIDC token, and masks both
   expect(masked).toEqual(['ghs_shaft', 'sk-ant-oat-shaft']);
 });
 
-test('a task sends no event, and a run with no saved Claude token masks only the GitHub token', async () => {
-  answer(Response.json({ run: true, github_token: 'ghs_shaft', claude_token: null, settings: {}, job }));
+test('a review sends whether the PR comes from a fork; one started from a comment has no event', async () => {
+  answer(Response.json(run));
+  await fetchGrant({ job: 'review', event: 'opened', fork: true });
+  answer(Response.json(run));
+  await fetchGrant({ job: 'review', fork: false });
+  expect(requests.map((r) => JSON.parse(r.init.body as string))).toEqual([{ job: 'review', event: 'opened', fork: true }, { job: 'review', fork: false }]);
+});
+
+test('a task sends no event', async () => {
+  answer(Response.json(run));
   await fetchGrant({ job: 'task' });
   expect(JSON.parse(requests[0].init.body as string)).toEqual({ job: 'task' });
-  expect(masked).toEqual(['ghs_shaft']);
 });
 
 test('run: false comes back with its reason, and nothing is masked', async () => {
@@ -56,48 +74,61 @@ test('run: false comes back with its reason, and nothing is masked', async () =>
   expect(masked).toEqual([]);
 });
 
-test('run: true without a github_token fails', async () => {
-  answer(Response.json({ run: true, claude_token: null, settings: {}, job }));
-  await expect(fetchGrant(review)).rejects.toThrow('sent no github_token');
+test("ask: run: false comes back with the comment to post, and its GitHub token is masked", async () => {
+  const ask = { run: false, reason: 'A maintainer has to start the review of this fork.', comment: 'Comment `@axonshaft review`.\n\n<!-- shaft:ask -->', github_token: 'ghs_ask' };
+  answer(Response.json(ask));
+  expect(await fetchGrant({ job: 'review', event: 'opened', fork: true })).toEqual(ask);
+  expect(masked).toEqual(['ghs_ask']);
 });
 
-test('a missing id-token permission says which line to add', async () => {
+test('run: true without a token or the prompt is an api_error', async () => {
+  for (const bad of [{ github_token: undefined }, { claude_token: null }, { job: { ...job, prompt: undefined } }, { job: { ...job, prompt: { template: 't' } } }]) {
+    answer(Response.json({ ...run, ...bad }));
+    expect(await failure(fetchGrant(review))).toEqual({
+      code: 'api_error',
+      message: 'The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.',
+      url: undefined,
+    });
+  }
+});
+
+test('a missing id-token permission is missing_id_token and says which line to add', async () => {
   delete process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
   answer(Response.json({}));
-  await expect(fetchGrant(review)).rejects.toThrow('Add `permissions: id-token: write` to the workflow');
+  expect(await failure(fetchGrant(review))).toMatchObject({ code: 'missing_id_token', message: expect.stringContaining('Add `permissions: id-token: write` to the workflow') });
   expect(requests).toEqual([]);
 });
 
-test('404 not_installed links the install page the API sends', async () => {
-  answer(Response.json({ error: 'not_installed', url: 'https://github.com/apps/axonshaft/installations/new?x=1' }, { status: 404 }));
-  await expect(fetchGrant(review)).rejects.toThrow("isn't installed on this repo. Install it: https://github.com/apps/axonshaft/installations/new?x=1");
+test("each API error keeps the API's code, message and url as given", async () => {
+  const errors = [
+    [404, { error: 'not_installed', message: 'Install AxonShaft on this repo.', url: 'https://github.com/apps/axonshaft/installations/new' }],
+    [404, { error: 'not_a_project', message: 'Add this repo on the dashboard.', url: 'https://shaft.axonpack.dev/console/acme' }],
+    [409, { error: 'no_claude_token', message: 'Save a Claude token.', url: 'https://shaft.axonpack.dev/console/acme/settings' }],
+    [401, { error: 'oidc_invalid', message: 'Rerun the job.' }],
+    [403, { error: 'event_not_allowed', message: 'Run it from a pull request.' }],
+    [429, { error: 'rate_limited', message: 'Wait a minute and rerun the job.' }],
+    [500, { error: 'api_error', message: 'Rerun the job.' }],
+  ] as const;
+  for (const [status, body] of errors) {
+    answer(Response.json(body, { status }));
+    expect(await failure(fetchGrant(review))).toEqual({ code: body.error, message: body.message, url: 'url' in body ? body.url : undefined });
+  }
 });
 
-test('404 not_a_project links the dashboard page the API sends', async () => {
-  answer(Response.json({ error: 'not_a_project', url: 'https://shaft.axonpack.dev/acme' }, { status: 404 }));
-  await expect(fetchGrant(review)).rejects.toThrow("This repo isn't a project on Axon Shaft yet. Add it: https://shaft.axonpack.dev/acme");
+test("an error that isn't the API's JSON is an api_error with the status", async () => {
+  answer(new Response('<html>Bad gateway</html>', { status: 502 }));
+  expect(await failure(fetchGrant(review))).toEqual({ code: 'api_error', message: 'The Axon Shaft API answered 502. Rerun the job in a few minutes.', url: undefined });
+  answer(Response.json({ error: 'not_installed' }, { status: 404 }));
+  expect(await failure(fetchGrant(review))).toMatchObject({ code: 'api_error', message: 'The Axon Shaft API answered 404. Rerun the job in a few minutes.' });
 });
 
-test('a 404 without a body still links the install page', async () => {
-  answer(new Response('', { status: 404 }));
-  await expect(fetchGrant(review)).rejects.toThrow('Install it: https://github.com/apps/axonshaft/installations/new');
-});
-
-test('401 and 403 say the token was refused', async () => {
-  answer(new Response('bad audience', { status: 401 }));
-  await expect(fetchGrant(review)).rejects.toThrow("refused this run's OIDC token (401): bad audience");
-  answer(new Response('', { status: 403 }));
-  await expect(fetchGrant(review)).rejects.toThrow('(403)');
-});
-
-test('429 gives the Retry-After value', async () => {
-  answer(new Response('', { status: 429, headers: { 'retry-after': '42' } }));
-  await expect(fetchGrant(review)).rejects.toThrow('rate-limited this repo. Retry-After: 42.');
-});
-
-test('a network error names the API', async () => {
+test('a network error is api_unreachable and names the API', async () => {
   answer(new TypeError('fetch failed'));
-  await expect(fetchGrant(review)).rejects.toThrow("Couldn't reach the Axon Shaft API at https://api-shaft.axonpack.dev: fetch failed");
+  expect(await failure(fetchGrant(review))).toEqual({
+    code: 'api_unreachable',
+    message: "Couldn't reach the Axon Shaft API at https://api-shaft.axonpack.dev (fetch failed). Rerun the job in a few minutes.",
+    url: undefined,
+  });
 });
 
 const summary = { verdict: 'looks-good', model: 'sonnet', effort: 'medium', findings: { blocking: 0, should_fix: 1, nit: 2 }, duration_ms: 1000 };

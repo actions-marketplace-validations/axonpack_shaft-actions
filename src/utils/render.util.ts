@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { DASHBOARD_URL } from '../consts/api.const';
+import { DASHBOARD_URL, STATUS_CARDS_URL } from '../consts/api.const';
+import { failureMarkdown, type ShaftFailure } from './failure.util';
 
 export const SUMMARY_MARKER = '<!-- shaft:summary -->';
 
@@ -86,7 +87,9 @@ const SEVERITY_LABEL: Record<Severity, string> = { blocking: 'Blocking', 'should
 const SEVERITY_DOT: Record<Severity, string> = { blocking: '🔴', 'should-fix': '🟡', nit: '⚪' };
 const VERDICT_LABEL: Record<string, string> = { blocking: 'Blocking', 'needs-changes': 'Needs changes', 'looks-good': 'Looks good' };
 /** Each verdict's GitHub alert and the dot in front of its heading. */
-const VERDICT_ALERT: Record<string, [string, string]> = { blocking: ['CAUTION', '🔴'], 'needs-changes': ['WARNING', '🟡'], 'looks-good': ['TIP', '🟢'] };
+const VERDICT_ALERT: Record<string, string> = { blocking: 'CAUTION', 'needs-changes': 'WARNING', 'looks-good': 'TIP' };
+/** The status card at the top of the summary, an SVG from the dashboard that GitHub renders: `reviewing` or the verdict. */
+const statusCard = (status: string, label: string) => `![${label}](${STATUS_CARDS_URL}/${status}.svg)`;
 const CHECK_LABEL: Record<string, string> = {
   correctness: 'Correctness',
   breakage: 'Breakage',
@@ -186,10 +189,10 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
   });
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, ' ');
-  const [alert, dot] = VERDICT_ALERT[review.verdict];
+  const alert = VERDICT_ALERT[review.verdict];
   return [
     `> [!${alert}]`,
-    `> ### ${dot} ${VERDICT_LABEL[review.verdict]}`,
+    `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict]!)}`,
     ...headline.map((l) => `> ${l}`),
     '>',
     `> ${countChips.join(' ')}`,
@@ -216,14 +219,12 @@ function table(rows: Placed[], f: Footer): string {
 const details = (summary: string, body: string) => `<details><summary>${summary}</summary>\n\n${body}\n\n</details>`;
 
 export function startSummary(sha: string, prior?: State): string {
-  return [SUMMARY_MARKER, `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
+  return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
-export function failedSummary(sha: string, why: string, runUrl: string | undefined, prior?: State): string {
-  const run = runUrl ? ` See the [run](${runUrl}).` : '';
-  return [SUMMARY_MARKER, `The review of \`${sha.slice(0, 7)}\` stopped: ${why}.${run}`, prior ? stateLine(prior) : '']
-    .filter(Boolean)
-    .join('\n');
+/** The summary when the review failed: the failure's card, message and link, as the job summary has them. */
+export function failedSummary(failure: ShaftFailure, prior?: State): string {
+  return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
 export function renderSummary(raw: Review, placed: Placed[], prior: State | undefined, f: Footer): string {

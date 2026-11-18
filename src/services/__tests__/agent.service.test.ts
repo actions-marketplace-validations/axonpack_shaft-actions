@@ -1,5 +1,24 @@
-import { expect, test } from 'vitest';
-import { cliEnv } from '../agent.service';
+import { beforeEach, expect, test, vi } from 'vitest';
+
+vi.doMock('@actions/core', () => ({ info: () => {}, warning: () => {} }));
+/** What the mocked Agent SDK does on each `query`: yield these messages, throw, or wait for the abort. */
+let reply: 'hang' | Error | object[] = [];
+const asked: { options: { agents?: unknown; abortController: AbortController } }[] = [];
+vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
+  async *query(args: (typeof asked)[number]) {
+    asked.push(args);
+    if (reply instanceof Error) throw reply;
+    if (reply === 'hang') {
+      await new Promise((_, reject) => args.options.abortController.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+    } else yield* reply;
+  },
+}));
+const { cliEnv, deepAgents, runAgent } = await import('../agent.service');
+
+beforeEach(() => {
+  reply = [];
+  asked.length = 0;
+});
 
 test('the CLI gets PATH, HOME and the Claude token, and nothing else the runner holds', () => {
   Object.assign(process.env, {
@@ -10,8 +29,66 @@ test('the CLI gets PATH, HOME and the Claude token, and nothing else the runner 
     GITHUB_TOKEN: 'ghs_env',
     ANTHROPIC_API_KEY: 'sk-ant-api-other',
   });
-  const env = cliEnv({ env: 'CLAUDE_CODE_OAUTH_TOKEN', value: 'sk-ant-oat-1' });
+  const env = cliEnv({ kind: 'oauth', value: 'sk-ant-oat-1' });
   expect(Object.keys(env).sort()).toEqual(['CLAUDE_AGENT_SDK_CLIENT_APP', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'HOME', 'PATH']);
   expect(env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-1', CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1', PATH: process.env.PATH, HOME: process.env.HOME });
   expect(JSON.stringify(env)).not.toMatch(/oidc|runtime-secret|ghs_|sk-ant-api/);
+  expect(cliEnv({ kind: 'api_key', value: 'sk-ant-api-1' })).toMatchObject({ ANTHROPIC_API_KEY: 'sk-ant-api-1' });
+});
+
+test("the deep review's subagents are the dashboard's passes, with read-only tools on the subagent model", () => {
+  const passes = [
+    { name: 'correctness', description: 'Finds logic errors.', prompt: 'You review for correctness.' },
+    { name: 'security', description: 'Finds security problems.', prompt: 'You review for security.' },
+  ];
+  expect(deepAgents('sonnet', 'high', passes)).toEqual({
+    correctness: { description: 'Finds logic errors.', prompt: 'You review for correctness.', tools: ['Read', 'Grep', 'Glob'], model: 'sonnet', effort: 'high' },
+    security: { description: 'Finds security problems.', prompt: 'You review for security.', tools: ['Read', 'Grep', 'Glob'], model: 'sonnet', effort: 'high' },
+  });
+});
+
+const options = { claude: { kind: 'oauth', value: 'k' }, model: 'sonnet', effort: 'medium', maxTurns: 1, timeoutMinutes: 1, cwd: '.' } as const;
+const failure = (p: Promise<unknown>) =>
+  p.then(
+    () => expect.unreachable(),
+    (e) => ({ code: e.code, message: e.message, url: e.url }),
+  );
+
+test('a deep run gives the SDK the passes as agents; a standard one gives none', async () => {
+  const review = { verdict: 'looks-good', headline: 'h', findings: [] };
+  reply = [{ type: 'result', subtype: 'success', structured_output: review, modelUsage: {}, total_cost_usd: 0 }];
+  const pass = { name: 'breakage', description: 'd', prompt: 'p' };
+  await runAgent('prompt', { ...options, subagentModel: 'sonnet', passes: [pass] });
+  await runAgent('prompt', options);
+  expect(Object.keys(asked[0].options.agents as object)).toEqual(['breakage']);
+  expect(asked[1].options.agents).toBeUndefined();
+});
+
+test('a run past the time limit is review_timed_out, linking the dashboard', async () => {
+  reply = 'hang';
+  expect(await failure(runAgent('prompt', { ...options, timeoutMinutes: 0.0005 }))).toEqual({
+    code: 'review_timed_out',
+    message: 'The review ran past its 0.0005-minute time limit. Raise the time limit on the dashboard, or rerun the job.',
+    url: 'https://shaft.axonpack.dev',
+  });
+});
+
+test('a reply that misses the schema twice is review_invalid_reply', async () => {
+  reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'maybe' }, result: '', modelUsage: {}, total_cost_usd: 0 }];
+  expect(await failure(runAgent('prompt', options))).toMatchObject({ code: 'review_invalid_reply', url: undefined });
+  expect(asked).toHaveLength(2);
+});
+
+test('an SDK error, or anything else that breaks the run, is review_failed', async () => {
+  reply = [{ type: 'result', subtype: 'error_max_turns', errors: ['Reached the turn limit.'] }];
+  expect(await failure(runAgent('prompt', options))).toEqual({
+    code: 'review_failed',
+    message: 'The review failed: The Agent SDK run ended with error_max_turns: Reached the turn limit. Rerun the job; the job log has the details.',
+    url: undefined,
+  });
+  reply = new Error('Claude Code process exited with code 1.');
+  expect(await failure(runAgent('prompt', options))).toMatchObject({
+    code: 'review_failed',
+    message: 'The review failed: Claude Code process exited with code 1. Rerun the job; the job log has the details.',
+  });
 });

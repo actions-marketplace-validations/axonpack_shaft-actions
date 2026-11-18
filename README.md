@@ -6,6 +6,8 @@ Task mode (`@axonshaft fix ...` in a comment) is not built yet.
 
 ## Setup
 
+Axon Shaft needs its dashboard. The action holds no settings and no prompt of its own: each run gets its tokens, its settings and the whole review prompt from the Axon Shaft API.
+
 1. Install the [AxonShaft app](https://github.com/apps/axonshaft/installations/new) on the repo.
 2. Sign in on [shaft.axonpack.dev](https://shaft.axonpack.dev), add the repo as a project, and save a Claude token for the repo or its account. With a Pro or Max plan, that is the output of `claude setup-token`; with Console billing, an API key. An OAuth token belongs to one person's plan, so a repo that several people use is better on an API key.
 3. Add `.github/workflows/shaft.yml`:
@@ -13,7 +15,8 @@ Task mode (`@axonshaft fix ...` in a comment) is not built yet.
    ```yaml
    name: Axon Shaft
    on:
-     pull_request:
+     # pull_request_target, so a fork's pull request gets an OIDC token too. The action never runs the PR's code.
+     pull_request_target:
        types: [opened, synchronize, reopened, ready_for_review]
      issue_comment:
        types: [created]
@@ -23,141 +26,108 @@ Task mode (`@axonshaft fix ...` in a comment) is not built yet.
        types: [submitted]
    # A new push cancels the review of the commit before it. Comments each run on their own.
    concurrency:
-     group: axon-shaft-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+     group: axon-shaft-${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.run_id }}
      cancel-in-progress: true
    permissions:
      contents: read
      # The run's OIDC token is how the action signs in to Axon Shaft, which answers with
-     # a GitHub token for this repo, the Claude token and the settings from the dashboard.
+     # a GitHub token for this repo, the Claude token, the settings and the review prompt.
      id-token: write
    jobs:
      axon-shaft:
-       # Skip comments that don't mention the app, so they don't start a runner.
+       # Skip comments that don't mention the app, and bots' comments (Axon Shaft's own included), so they don't start a runner.
        if: >-
-         github.event_name == 'pull_request' ||
-         contains(github.event.comment.body, '@axonshaft') ||
-         contains(github.event.review.body, '@axonshaft')
+         github.event_name == 'pull_request_target' ||
+         (github.event.sender.type != 'Bot' &&
+         (contains(github.event.comment.body, '@axonshaft') || contains(github.event.review.body, '@axonshaft')))
        runs-on: ubuntu-latest
        steps:
          - uses: actions/checkout@v7
+           with:
+             # Leaves no token in .git/config for the model to read.
+             persist-credentials: false
          - uses: axonpack/shaft-actions@v1
    ```
 
 4. Open a pull request. To see the output in the job log before anything is posted, add `with: { dry_run: true }`.
 
-The workflow holds no secrets. With `id-token: write`, the action gets an OIDC token for the run and sends it to the Axon Shaft API with the job (`review` for a pull request event, `task` for a comment that mentions `@axonshaft`) and, for a pull request, which event it was. When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review steps from the dashboard. Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`. After the review the action sends the verdict, model and finding counts to the dashboard's run history.
+The workflow holds no secrets. With `id-token: write`, the action gets an OIDC token for the run and sends it to the Axon Shaft API with the job (`review` for a pull request event or an `@axonshaft review` comment, `task` for any other comment that mentions `@axonshaft`), which pull request event it was, and whether the pull request comes from a fork. When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt. Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`. After the review the action sends the verdict, model and finding counts to the dashboard's run history. If recording the run fails, the action logs a warning and the run still passes.
 
 When the Code review job is off on the dashboard, or the event isn't one of its "When it runs" choices, the API says so and the run ends with a notice giving its reason. Nothing is posted.
 
-### Using your own tokens
+## Pull requests from forks
 
-Any input you set wins over the dashboard:
+A fork's pull request is reviewed as the Code review job's "Pull requests from forks" setting on the dashboard says:
 
-- `claude_code_oauth_token` or `anthropic_api_key` (from a repo secret) replaces the saved Claude token.
-- `app_id` and `private_key` post as your own GitHub App instead of AxonShaft. Give the app contents, pull requests and issues (write) and metadata (read), and install it on the repo.
-- `github_token` posts with that token instead. With the run's own `${{ github.token }}`, comments come from `github-actions[bot]`, and the workflow needs `pull-requests: write` and `issues: write`.
-- `model`, `effort`, `depth`, `nits`, `max_turns` and `timeout_minutes` replace the dashboard's settings.
+| Setting | What happens |
+|---|---|
+| Review automatically (the default) | The review runs as it does for any other pull request. |
+| Ask a maintainer first | `axonshaft[bot]` comments on the pull request that someone with write access can start the review by commenting `@axonshaft review`, and the run ends with a notice. Later pushes don't post it again. |
+| Only when a maintainer mentions @axonshaft | Nothing is posted and the run ends with a notice. A review starts only from an `@axonshaft review` comment. |
 
-A pull request from a fork gets no secrets and no OIDC token, so Axon Shaft skips it and leaves a notice in the log.
+This needs the workflow on `pull_request_target`, as in the setup above. On `pull_request`, GitHub gives a fork's run no OIDC token, so Axon Shaft skips it with a notice.
 
-### Standalone mode
+On `pull_request_target`, and on a comment, the workflow's checkout holds the base branch. The action fetches the pull request's head commit with the GitHub token from the API and checks it out detached for the model to read. The token goes on that one `git fetch` command and is never saved in `.git/config`, and the PR's code is never run. The fetch is as deep as the checkout: one commit with the default checkout, or the whole history with `fetch-depth: 0`, which lets the model run `git log` and `git diff` against the base branch. Keep `persist-credentials: false` on the checkout, so the workflow's own token isn't left in `.git/config` either.
 
-With a Claude token input and either `github_token` or `app_id` and `private_key`, the action never calls the Axon Shaft API, and the repo needs neither the app nor a project on the dashboard. Settings come from the inputs, then `.github/shaft.yml`, then the defaults, and the review runs its built-in steps, the same ones the dashboard's Code review job starts with. Nothing is recorded in a run history.
+## Starting a review from a comment
 
-Comments posted with `github_token` come from `github-actions[bot]`, so the workflow's token needs write access to pull requests and issues. Keep the `on`, `concurrency` and `if` from the workflow above and change the rest:
-
-```yaml
-permissions:
-  contents: read
-  pull-requests: write
-  issues: write
-jobs:
-  axon-shaft:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: axonpack/shaft-actions@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ github.token }}
-```
+Comment `@axonshaft review` on a pull request, in the conversation, on a line or in a review, and Axon Shaft reviews its latest commit. This works on any pull request, from a fork or not, whatever the "When it runs" and "Pull requests from forks" settings say. The commenter needs write access to the repo, which the action checks with GitHub. Anyone else's comment starts nothing, and the run ends with a notice that only people with write access can start a review. Any other mention of `@axonshaft` is for task mode, which isn't built yet.
 
 ## Inputs
 
-None are required. Each setting comes from the first place that sets it: the input, then the dashboard, then `.github/shaft.yml`, then the default. The second column says where the value comes from when the input is empty.
-
-| Input | When it's empty | What it does |
+| Input | Default | What it does |
 |---|---|---|
-| `claude_code_oauth_token` | the dashboard's Claude token | A Pro or Max plan token from `claude setup-token`. Set this or `anthropic_api_key`, not both. |
-| `anthropic_api_key` | the dashboard's Claude token | A Console API key. |
-| `app_id`, `private_key` | the dashboard's GitHub token | Post as this GitHub App instead of AxonShaft. Set both or neither. |
-| `github_token` | the dashboard's GitHub token | Post as `github-actions[bot]` with this token, such as `${{ github.token }}`. |
-| `model` | the dashboard's, else `auto` | `auto` picks a model from the diff. Or any Claude model ID or alias (`opus`, `sonnet`, `haiku`). |
-| `effort` | the dashboard's, else `auto` | `auto` picks from the diff. Or `low`, `medium`, `high`, `xhigh`, `max`. |
-| `depth` | the Code review job's, else `standard` | `standard` runs one session. `deep` also runs the correctness, breakage and security checks as separate subagents, then a verifier, for about 3x the cost. A check turned off in the Code review job gets no subagent. |
-| `nits` | the Code review job's, else `summary` | `summary` counts nits in the summary, `inline` posts them as inline comments too, `off` drops them. |
-| `max_turns` | the dashboard's, else `30` | The Agent SDK turn limit per run. |
-| `timeout_minutes` | the dashboard's, else `15` | The run stops after this many minutes and says so in the summary. |
-| `mode` | `auto` | `auto` picks from the event. `review` forces a review of the event's pull request, for example from a comment. `task` forces task mode, which isn't built yet. |
-| `task_tools` | none | Extra tools for task mode, such as `Bash(bun test:*)`. Task mode isn't built yet, so this does nothing for now. Review mode never gets them. |
-| `config_path` | `.github/shaft.yml` | Where the repo's review rules live. Axon Shaft reads the base branch's copy. |
 | `dry_run` | `false` | Print the summary and inline comments to the job log instead of posting them. |
 
-With `model` and `effort` on `auto`, the first row that matches the diff (after `skip`) picks both:
+Everything else is set on the dashboard: the model, the effort, the depth, how nits are shown, the turn limit, the time limit, the repo's review rules, the `skip` globs (files to leave out of the review) and the `focus` globs (files that get a closer look).
+
+With the model and effort on `auto`, the action picks both from the diff, after `skip`. The first row that matches wins:
 
 | The diff | Model | Effort |
 |---|---|---|
 | Touches a `focus` path or a sensitive one: auth, crypto, payments, billing, workflows, migrations, or dependencies in `package.json` | `opus` | `high` |
-| Any diff with `depth: deep` (the subagents run on `sonnet`) | `opus` | `high` |
+| Any diff on a deep review (the subagents run on `sonnet`) | `opus` | `high` |
 | Over 1,000 changed lines or over 30 files | `opus` | `medium` |
 | Only docs, comments, lockfiles or config | `haiku` | `low` |
 | Anything else | `sonnet` | `medium` |
 
-Setting `model` or `effort` turns `auto` off for that one only. If the Claude plan can't use the picked model, the review falls back to the next smaller one and the footer says so. The footer always shows the model, the effort and the reason.
+A model or effort set on the dashboard turns `auto` off for that one only. If the Claude plan can't use the picked model, the review falls back to the next smaller one and the footer says so. The footer always shows the model, the effort and the reason.
 
-## Review steps
+## The review prompt
 
-The steps the review walks come from the repo's Code review job on the dashboard, where a check can be turned off and the repo can add checks of its own. Findings from an added check are labelled `rules`. In standalone mode the action uses its built-in steps, which match the job's defaults. The safety rules (never run the PR's code, never post a secret) and the shape of the reply are part of the action and apply either way.
+The whole prompt comes from the repo's Code review job on the dashboard: the steps the review walks, the safety rules, the shape of the reply, the repo's review rules, and on a deep review the subagents for the correctness, breakage and security checks. A check can be turned off there, and the repo can add checks of its own. Findings from an added check are labelled `rules`.
 
-The model also gets the repo's guides as the base branch has them: `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CONVENTIONS.md`, `.github/pull_request_template.md` and the root `README.md`, whichever exist. Each is cut at 8,000 characters and all of them at 30,000. They set the standards the review checks against, such as needing a test or a README line for each change, and a PR can't change the copies its own review reads.
+The action fills the prompt's slots with the run's data and changes nothing else: the repo and pull request number, the branches and head commit, the title, author, body and commits, the comments of the repo's owners, members and collaborators, the previous review's findings, how many files `skip` left out, and the diff, with each `focus` file marked.
 
-## Review rules (`.github/shaft.yml`)
+It also fills in the repo's guides as the base branch has them: `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CONVENTIONS.md`, `.github/pull_request_template.md` and the root `README.md`, whichever exist. Each is cut at 8,000 characters and all of them at 30,000. They set the standards the review checks against, such as needing a test or a README line for each change, and a PR can't change the copies its own review reads.
 
-A repo can add its own review rules in `.github/shaft.yml`:
+## When a run fails
 
-```yaml
-rules: |
-  Every user-facing change needs a changeset.
-  New API routes need a test for the 401 case.
-skip:
-  - "**/generated/**"
-  - "**/*.snap"
-focus:
-  - "src/billing/**"
-```
+The step fails with a message that says what to do. The job summary shows a card for the failure, the same message and, when there is one, a link to where to fix it. The card is an image of the failure's code from `https://shaft.axonpack.dev/errors/<code>.svg`. When the review itself fails, the PR's summary comment shows the same card, message and link, so the PR says what happened too.
 
-- `rules` is free text the model applies along with its own review steps. Its safety rules (it never runs the PR's code or posts a secret) still win.
-- `skip` lists globs for changed files to leave out of the review. The summary says how many files were skipped. When neither the dashboard nor this file sets `skip`, Axon Shaft skips lockfiles and generated files: `**/*.lock`, `**/package-lock.json`, `**/pnpm-lock.yaml`, `**/dist/**`, `**/*.min.js` and `**/*.snap`. Setting `skip` replaces that list, and `skip: []` reviews everything.
-- `focus` lists globs for files that get a closer look. The model is told which changed files match, and with `model: auto` a match picks `opus` with `high` effort.
+These codes come from the Axon Shaft API, with its message and link:
 
-Globs match the whole path from the repo root, so `*.snap` only matches at the root and `**/*.snap` matches in any folder.
+| Code | What it means |
+|---|---|
+| `not_installed` | The AxonShaft app isn't installed on the repo. The link opens the install page. |
+| `not_a_project` | The app is installed, but the repo isn't a project on the dashboard yet. The link opens the page to add it. |
+| `no_claude_token` | Neither the project nor its account has a Claude token saved. |
+| `oidc_invalid` | The API refused the run's OIDC token because it was bad, expired or already used. |
+| `event_not_allowed` | The API doesn't take runs started by this workflow event. |
+| `rate_limited` | The repo is over its rate limit. Wait a little and rerun the job. |
+| `api_error` | The API failed, or its answer couldn't be used: a setting the action can't run with, or an error page from something in front of the API. |
 
-Axon Shaft reads the file from the PR's base branch, so a PR can't change the rules its own review uses. A change to the file applies once it is merged.
+These come from the action:
 
-Rules saved on the dashboard come first and the file's rules are added after them. For `skip` and `focus`, a list set on the dashboard replaces the file's. Other keys in the file are ignored with a warning in the log, and a file that isn't valid YAML, or a key with the wrong type, fails the run with a message naming the problem.
+| Code | What it means |
+|---|---|
+| `missing_id_token` | The workflow has no `permissions: id-token: write`, so the action can't sign in to the API. |
+| `api_unreachable` | The action couldn't reach the API, or the API took over 30 seconds to answer. |
+| `review_timed_out` | The review ran past the time limit set on the dashboard. The link opens the dashboard. |
+| `review_invalid_reply` | The model's reply didn't match the review format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
+| `review_failed` | The review stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
 
-### Errors from the Axon Shaft API
-
-When the action calls the API (some token isn't given as an input), the run fails if the API can't answer:
-
-- Without `id-token: write`, the log says to add `permissions: id-token: write`.
-- When AxonShaft isn't installed on the repo, the log links the install page.
-- When the app is installed but the repo isn't a project on the dashboard yet, the log links the page to add it.
-- When the API refuses the OIDC token (401 or 403), the log shows its answer.
-- When the repo is over its rate limit (429), the log shows the `Retry-After` value.
-- When neither an input nor the dashboard has a Claude token, the log links shaft.axonpack.dev.
-
-If recording the run afterwards fails, the action logs a warning and the run still passes.
+A fork's pull request on `pull_request`, a job that's off for the event, a fork's pull request the dashboard holds back, or an `@axonshaft review` from someone without write access ends with a notice, and the step passes. Any other error, such as GitHub's API failing, fails the step with that error's message.
 
 ## Outputs
 
@@ -171,14 +141,14 @@ If recording the run afterwards fails, the action logs a warning and the run sti
 
 Axon Shaft keeps one summary comment on the PR and edits it on every push. From the top:
 
-- A card in a GitHub alert: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. It holds the verdict, the headline, chips with the number of blocking, should-fix and nit findings and how many earlier findings this push fixed, and a chip per check: ✅ checked with nothing found, ⚠️ only should-fix or nit findings, ❌ a blocking finding, ⬜ not checked (the model says it didn't do that check, and "What this PR does" says why), ➖ turned off on the dashboard. Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something. The last line gives the kind of change, the model's confidence and the reviewed commit.
+- A card in a GitHub alert: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. It opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg` (while the review runs, the comment shows `reviewing.svg`), then holds the headline, chips with the number of blocking, should-fix and nit findings and how many earlier findings this push fixed, and a chip per check: ✅ checked with nothing found, ⚠️ only should-fix or nit findings, ❌ a blocking finding, ⬜ not checked (the model says it didn't do that check, and "What this PR does" names it), ➖ turned off on the dashboard. Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something. The last line gives the kind of change, the model's confidence and the reviewed commit.
 - A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit. A finding with an inline comment says "inline"; a finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
 - The nits, folded.
 - The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
 - "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
 - A footer with the run link, the model the review ran on (and the subagents' model on a deep review), the effort and why `auto` picked them.
 
-Inline comments go on the lines in the diff, one per blocking or should-fix finding, and nits too with `nits: inline`. A finding that already has an inline comment isn't posted again on the next push, and when a push fixes a finding, its thread is resolved.
+Inline comments go on the lines in the diff, one per blocking or should-fix finding, and nits too when the dashboard says to post them inline. A finding that already has an inline comment isn't posted again on the next push, and when a push fixes a finding, its thread is resolved.
 
 A dry run prints the same text to the job log.
 
@@ -193,10 +163,8 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 - It runs with only `PATH`, `HOME` and the Claude token in its environment. The OIDC request token, the action's inputs and `GITHUB_TOKEN` aren't there, and the commands it runs don't get the Claude token either.
 - The prompt has the PR's title, body, commits and diff, and only the comments of the repo's owners, members and collaborators. Comments from anyone else are left out.
 - Images are stripped from everything the model writes before it's posted, so an image URL can't carry data out.
-- The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments its own bot wrote (`axonshaft[bot]`, your app's bot, or `github-actions[bot]` with `github_token`), so a copy posted by someone else is ignored.
+- The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments `axonshaft[bot]` wrote, so a copy posted by someone else is ignored.
 - Before anything is posted, the action replaces the tokens it holds with `***`, and it masks every token in the job log.
-
-With `mode: review`, the person whose event started the run needs write access, and a PR from a fork is skipped, as it is with `mode: auto`.
 
 ## Development
 
@@ -216,9 +184,9 @@ Versions are kept with [Changesets](https://github.com/changesets/changesets), a
 
 1. A PR that changes something users would notice adds a changeset: run `bun run changeset`, pick the bump, and describe the change in a line or two.
 2. Each push to `main` with changesets pending opens or refreshes the Version Packages PR. It raises the version in `package.json`, adds the changes to `CHANGELOG.md` and rebuilds `dist/index.js`.
-3. Merging that PR releases the version, for example `1.2.3`: the release workflow tags the merge commit `v1.2.3`, moves the `v1` tag to the same commit, and creates a GitHub Release with that version's changelog.
+3. Merging that PR releases the version, for example `2.1.3`: the release workflow tags the merge commit `v2.1.3`, moves the `v2` tag to the same commit, and creates a GitHub Release with that version's changelog.
 
-Workflows that use `axonpack/shaft-actions@v1` get every 1.x release. To stay on one version, use `@v1.2.3`.
+Workflows that use `axonpack/shaft-actions@v1` get every 1.x release. To stay on one version, use `@v1.1.0`.
 
 ## License
 

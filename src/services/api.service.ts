@@ -1,24 +1,45 @@
 import * as core from '@actions/core';
-import { API_AUDIENCE, API_URL, DASHBOARD_URL, INSTALL_URL } from '../consts/api.const';
+import { API_AUDIENCE, API_URL } from '../consts/api.const';
+import { ShaftFailure } from '../utils/failure.util';
 import type { ReviewEvent } from './route.service';
 
-/** What `POST /v1/token` takes: the job the event routed to and, for a pull request event, which one. */
-export type GrantRequest = { job: 'review' | 'task'; event?: ReviewEvent };
+/**
+ * What `POST /v1/token` takes: the job the event routed to, for a pull request event which one, and
+ * for a review whether the PR comes from a fork.
+ */
+export type GrantRequest = { job: 'review' | 'task'; event?: ReviewEvent; fork?: boolean };
+
+/** One of the deep review's subagents, for a check the project keeps on. */
+export type Pass = { name: string; description: string; prompt: string };
 
 /**
  * The project's job: `options` filled in with the catalog's defaults, `checks` the keys of the
- * catalog checks it keeps on, `instructions` its numbered steps.
+ * catalog checks it keeps on, and `prompt` the whole review prompt, whose `{{slots}}` the action
+ * fills with the run's data, plus the deep review's `passes`.
  */
-export type GrantJob = { type: string; version: number; options: Record<string, unknown>; checks: string[]; instructions: string };
+export type GrantJob = {
+  type: string;
+  version: number;
+  options: Record<string, unknown>;
+  checks: string[];
+  prompt: { template: string; passes: Pass[] };
+};
 
-/** What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's tokens. */
+/** The project's Claude token, from the dashboard. */
+export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
+
+/**
+ * What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's
+ * tokens. A fork's PR on a job set to ask a maintainer first also gets the `comment` to post, and the
+ * GitHub token to post it with.
+ */
 export type Grant =
-  | { run: false; reason: string }
+  | { run: false; reason: string; comment?: string; github_token?: string }
   | {
       run: true;
       github_token: string;
-      claude_token: { kind: 'oauth' | 'api_key'; value: string } | null;
-      /** The dashboard's settings for this repo; a field that isn't set there is null or missing. */
+      claude_token: ClaudeToken;
+      /** The dashboard's settings for this repo, already merged with the account's and the defaults. */
       settings: Record<string, unknown>;
       job: GrantJob;
     };
@@ -35,7 +56,7 @@ export type RunSummary = {
 /** POST to the Axon Shaft API with a fresh OIDC token: the API refuses a token it has already seen. */
 async function post(path: string, body: unknown): Promise<Response> {
   if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
-    throw new Error('Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.');
+    throw new ShaftFailure('missing_id_token', 'Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.');
   }
   const oidc = await core.getIDToken(API_AUDIENCE);
   try {
@@ -46,28 +67,31 @@ async function post(path: string, body: unknown): Promise<Response> {
       signal: AbortSignal.timeout(30_000),
     });
   } catch (e) {
-    throw new Error(`Couldn't reach the Axon Shaft API at ${API_URL}: ${(e as Error).message}`);
+    throw new ShaftFailure('api_unreachable', `Couldn't reach the Axon Shaft API at ${API_URL} (${(e as Error).message}). Rerun the job in a few minutes.`);
   }
 }
 
 /** Whether to run, and this repo's GitHub token, Claude token, settings and job from the Axon Shaft API. Both tokens are masked. */
 export async function fetchGrant(request: GrantRequest): Promise<Grant> {
   const res = await post('/v1/token', request);
-  if (res.status === 404) {
-    const { error, url } = await res.json().catch(() => ({}));
-    if (error === 'not_a_project') throw new Error(`This repo isn't a project on Axon Shaft yet. Add it: ${url ?? DASHBOARD_URL}`);
-    throw new Error(`The AxonShaft app isn't installed on this repo. Install it: ${url ?? INSTALL_URL}`);
-  }
-  if (res.status === 429) throw new Error(`The Axon Shaft API rate-limited this repo. Retry-After: ${res.headers.get('retry-after') ?? 'not given'}.`);
+  const body = await res.json().catch(() => undefined);
   if (!res.ok) {
-    const why = res.status === 401 || res.status === 403 ? "refused this run's OIDC token" : 'failed';
-    throw new Error(`The Axon Shaft API ${why} (${res.status}): ${(await res.text()).slice(0, 200)}`);
+    // The API's errors are `{ error, message, url? }`; anything else came from something in front of it.
+    if (typeof body?.error === 'string' && typeof body.message === 'string') {
+      throw new ShaftFailure(body.error, body.message, typeof body.url === 'string' ? body.url : undefined);
+    }
+    throw new ShaftFailure('api_error', `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
   }
-  const grant = (await res.json()) as Grant;
-  if (grant?.run === false) return grant;
-  if (typeof grant?.github_token !== 'string') throw new Error('The Axon Shaft API sent no github_token.');
+  const grant = body as Grant | undefined;
+  if (grant?.run === false) {
+    if (typeof grant.github_token === 'string') core.setSecret(grant.github_token);
+    return grant;
+  }
+  if (typeof grant?.github_token !== 'string' || typeof grant.claude_token?.value !== 'string' || typeof grant.job?.prompt?.template !== 'string' || !Array.isArray(grant.job.prompt.passes)) {
+    throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.');
+  }
   core.setSecret(grant.github_token);
-  if (grant.claude_token) core.setSecret(grant.claude_token.value);
+  core.setSecret(grant.claude_token.value);
   return grant;
 }
 

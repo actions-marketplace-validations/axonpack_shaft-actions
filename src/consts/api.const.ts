@@ -10,9 +10,9 @@ export const APP_MENTION = '@axonshaft';
 /** Who the AxonShaft app's comments come from. */
 export const APP_BOT = 'axonshaft[bot]';
 
-/** Who comments made with a run's own `github.token` come from. */
-export const ACTIONS_BOT = 'github-actions[bot]';
-
-export const INSTALL_URL = 'https://github.com/apps/axonshaft/installations/new';
-
 export const DASHBOARD_URL = 'https://shaft.axonpack.dev';
+
+/** Each failure code's card is `<ERROR_CARDS_URL>/<code>.svg`. */
+export const ERROR_CARDS_URL = 'https://shaft.axonpack.dev/errors';
+/** The summary comment's status card: `<STATUS_CARDS_URL>/<status>.svg`, `reviewing` or a verdict. */
+export const STATUS_CARDS_URL = 'https://shaft.axonpack.dev/status';
