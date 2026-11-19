@@ -1,6 +1,9 @@
 name: Axon Shaft
-description: "Review pull requests with Claude, on your own runners. The repo needs a project on shaft.axonpack.dev, and the workflow needs `permissions: id-token: write`."
+description: Review pull requests with Claude on your own runners, with settings from shaft.axonpack.dev.
 author: axonpack
+branding:
+  icon: check-circle
+  color: blue
 
 inputs:
   dry_run:
