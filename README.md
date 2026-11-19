@@ -163,6 +163,7 @@ Everything else is set on the dashboard:
 | `skip` globs | Files to leave out of the review. |
 | `focus` globs | Files that get a closer look. |
 | Environment variables | Extra runner variables the model's environment gets, by name. See [what the review can do](#what-the-review-can-do). |
+| Merge gates | Up to 10 requirements every pull request must meet, in plain words. See [the merge gates check](#the-merge-gates-check). |
 
 ### Model and effort on auto
 
@@ -202,14 +203,15 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 Axon Shaft keeps one summary comment on the PR and edits it on every push. From the top, it holds:
 
 1. A card in a GitHub alert, colored by verdict: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. See [the card](#the-card) below.
-2. A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit.
+2. "Merge gates", when the project has any: each gate with ✓ (met), ✗ (not met) or – (doesn't apply), and the review's reason.
+3. A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit.
    A finding with an inline comment says "inline". A finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
-3. The nits, folded.
-4. The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
-5. "Walkthrough", folded, for a pull request that changes three or more files: a table of the changed files grouped by area, with one line on what changed in each, and a Mermaid flow diagram when the pull request changes how its parts call each other.
+4. The nits, folded.
+5. The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
+6. "Walkthrough", folded, for a pull request that changes three or more files: a table of the changed files grouped by area, with one line on what changed in each, and a Mermaid flow diagram when the pull request changes how its parts call each other.
    It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
-6. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
-7. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
+7. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
+8. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
    On an API key the tokens show as the cost and the total, such as `$0.38 · 759k tokens`.
    On a subscription they show as the cache-weighted count with the total in brackets, such as `≈220k billed (759k with cache)`. A cache write counts 1.25 times, a cache read a tenth, and input and output as they are. Every turn reads the cached prompt again, so the total can be several times what was billed.
    "Axon Shaft" in the footer links to the run's page on the dashboard. With an API that doesn't send the run's page, it links to the dashboard.
@@ -233,6 +235,15 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
 - Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
 
 The card's last line gives the kind of change, the model's confidence and the reviewed commit.
+
+### The merge gates check
+
+When the project has merge gates, the action also posts a check run named `Axon Shaft / gates` on the reviewed commit, with the gates' table as its summary.
+
+- It fails when a gate isn't met, or when the review didn't report on one. A gate that doesn't apply passes.
+- To block merging until every gate is met, add `Axon Shaft / gates` to the required status checks in the branch's protection rule or ruleset.
+- The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation. Until it is, the review still posts, and the job log warns that the check couldn't be posted.
+- A dry run logs the conclusion and posts nothing.
 
 ### Inline comments
 

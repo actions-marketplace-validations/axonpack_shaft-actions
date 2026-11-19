@@ -82,6 +82,7 @@ async function run(): Promise<void> {
     skip: globs(settings.skip),
     focus: globs(settings.focus),
     env: globs(settings.env),
+    gates: globs(settings.gates),
     bot: APP_BOT,
     prompt: job.prompt,
     checks: job.checks,

@@ -9,7 +9,7 @@ import pkg from '../../package.json' with { type: 'json' };
 import { DASHBOARD_URL } from '../consts/api.const';
 import type { ClaudeToken, Pass } from './api.service';
 import { ShaftFailure } from '../utils/failure.util';
-import { type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
+import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
 
@@ -69,6 +69,16 @@ export const SCHEMA = {
         diagram: { type: 'string', maxLength: WALKTHROUGH_MAX.diagram },
       },
     },
+    gates: {
+      type: 'array',
+      maxItems: GATES_MAX,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['gate', 'status', 'reason'],
+        properties: { gate: { type: 'string' }, status: { enum: GATE_STATUSES }, reason: { type: 'string' } },
+      },
+    },
   },
 };
 
@@ -90,6 +100,14 @@ export function parseWalkthrough(x: unknown): Walkthrough | undefined {
   return { areas: w.areas.map(({ name, files, summary }) => ({ name, files, summary })), ...(diagram && { diagram: d }) };
 }
 
+/** The well-formed gates of the reply; a malformed one is dropped, and the gates check counts it as not reported. */
+export function parseGates(x: unknown): Gate[] | undefined {
+  if (!Array.isArray(x)) return;
+  return x
+    .filter((g) => typeof g?.gate === 'string' && GATE_STATUSES.includes(g.status) && typeof g.reason === 'string')
+    .map(({ gate, status, reason }) => ({ gate, status, reason }));
+}
+
 /** Our own check of the reply, so a bad one is retried instead of posted. */
 export function parseReview(x: unknown): Review | undefined {
   const r = x as Review;
@@ -103,11 +121,13 @@ export function parseReview(x: unknown): Review | undefined {
       typeof f.body === 'string',
   );
   if (!ok) return;
-  const { walkthrough: _, ...rest } = r;
+  const { walkthrough: _, gates: __, ...rest } = r;
   const walkthrough = parseWalkthrough(r.walkthrough);
+  const gates = parseGates(r.gates);
   return {
     ...rest,
     ...(walkthrough && { walkthrough }),
+    ...(gates && { gates }),
     resolved: Array.isArray(r.resolved) ? r.resolved : [],
     checked: Array.isArray(r.checked) ? r.checked.filter((c) => typeof c === 'string') : [],
     not_checked: r.not_checked ?? '',
