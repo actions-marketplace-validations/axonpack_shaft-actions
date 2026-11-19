@@ -24,6 +24,20 @@ export type Finding = {
   suggestion?: string;
 };
 
+/** The most a walkthrough may hold; a bigger one is dropped, and the review posts without it. */
+export const WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
+
+/** The changed files grouped by area, and a Mermaid flowchart when the PR changes a flow. Optional. */
+export type Walkthrough = { areas: { name: string; files: string[]; summary: string }[]; diagram?: string };
+
+/** How the review judged one merge gate. */
+export const GATE_STATUSES = ['met', 'not_met', 'not_applicable'] as const;
+/** The most gates a project keeps, as the API limits them. */
+export const GATES_MAX = 10;
+
+/** One merge gate from the dashboard, as the review judged it. Optional. */
+export type Gate = { gate: string; status: (typeof GATE_STATUSES)[number]; reason: string };
+
 /** What the model returns (the plan's JSON). */
 export type Review = {
   verdict: (typeof VERDICTS)[number];
@@ -38,6 +52,8 @@ export type Review = {
   /** The checks the model says it did; a check it didn't do shows as not checked, never as passed. */
   checked: string[];
   not_checked: string;
+  walkthrough?: Walkthrough;
+  gates?: Gate[];
 };
 
 /** The review memory kept in the summary comment's hidden state line. */
@@ -248,6 +264,21 @@ function table(rows: Placed[], f: Footer): string {
 
 const details = (summary: string, body: string) => `<details><summary>${summary}</summary>\n\n${body}\n\n</details>`;
 
+const GATE_MARK: Record<Gate['status'], string> = { met: '✓', not_met: '✗', not_applicable: '–' };
+
+/** The merge gates as a table, one row each with its mark and reason: in the summary and in the gates check. */
+export function gatesTable(gates: Gate[]): string {
+  const rows = gates.map((g) => `| ${GATE_MARK[g.status]} | ${cell(prose(g.gate))} | ${cell(prose(g.reason))} |`);
+  return ['| | Gate | Why |', '|---|---|---|', ...rows].join('\n');
+}
+
+/** The walkthrough, folded: one table row per area, then the diagram GitHub draws from a mermaid block. */
+function walkthrough(w: Walkthrough): string {
+  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ''))}\``).join('<br>')} | ${cell(prose(a.summary))} |`);
+  const diagram = w.diagram ? ['', fence(prose(w.diagram), 'mermaid')] : [];
+  return details('Walkthrough', ['| Area | Files | What changed |', '|---|---|---|', ...rows, ...diagram].join('\n'));
+}
+
 export function startSummary(sha: string, prior?: State): string {
   return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
@@ -263,6 +294,10 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
   const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
+  if (raw.gates?.length) {
+    const met = raw.gates.filter((g) => g.status !== 'not_met').length;
+    out.push('', `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, '', gatesTable(raw.gates));
+  }
 
   const main = shown.filter((p) => p.severity !== 'nit');
   const nits = shown.filter((p) => p.severity === 'nit');
@@ -275,6 +310,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
+  if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
   out.push(
     '',
     details(

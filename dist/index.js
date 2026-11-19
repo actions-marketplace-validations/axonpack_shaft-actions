@@ -57970,6 +57970,9 @@ var VERDICTS = ["blocking", "needs-changes", "looks-good"];
 var SEVERITIES = ["blocking", "should-fix", "nit"];
 var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security", "rules"];
 var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
+var WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
+var GATE_STATUSES = ["met", "not_met", "not_applicable"];
+var GATES_MAX = 10;
 function diffLines(patch) {
   const lines = new Map;
   let right = 0;
@@ -58112,6 +58115,18 @@ var details = (summary, body) => `<details><summary>${summary}</summary>
 ${body}
 
 </details>`;
+var GATE_MARK = { met: "✓", not_met: "✗", not_applicable: "–" };
+function gatesTable(gates) {
+  const rows = gates.map((g) => `| ${GATE_MARK[g.status]} | ${cell(prose(g.gate))} | ${cell(prose(g.reason))} |`);
+  return ["| | Gate | Why |", "|---|---|---|", ...rows].join(`
+`);
+}
+function walkthrough(w) {
+  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ""))}\``).join("<br>")} | ${cell(prose(a.summary))} |`);
+  const diagram = w.diagram ? ["", fence(prose(w.diagram), "mermaid")] : [];
+  return details("Walkthrough", ["| Area | Files | What changed |", "|---|---|---|", ...rows, ...diagram].join(`
+`));
+}
 function startSummary(sha, prior) {
   return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
 `);
@@ -58126,6 +58141,10 @@ function renderSummary(raw, placed, prior, f) {
   const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
   const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
+  if (raw.gates?.length) {
+    const met = raw.gates.filter((g) => g.status !== "not_met").length;
+    out.push("", `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, "", gatesTable(raw.gates));
+  }
   const main = shown.filter((p) => p.severity !== "nit");
   const nits = shown.filter((p) => p.severity === "nit");
   if (main.length)
@@ -58139,6 +58158,8 @@ function renderSummary(raw, placed, prior, f) {
     out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
   if (f.skipped)
     out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
+  if (raw.walkthrough?.areas.length)
+    out.push("", walkthrough(raw.walkthrough));
   out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
 `)), "", footer(f));
   const state = {
@@ -58264,9 +58285,56 @@ var SCHEMA = {
     },
     resolved: { type: "array", items: { type: "string" } },
     checked: { type: "array", items: { enum: STEPS } },
-    not_checked: { type: "string" }
+    not_checked: { type: "string" },
+    walkthrough: {
+      type: "object",
+      additionalProperties: false,
+      required: ["areas"],
+      properties: {
+        areas: {
+          type: "array",
+          maxItems: WALKTHROUGH_MAX.areas,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "files", "summary"],
+            properties: {
+              name: { type: "string" },
+              files: { type: "array", maxItems: WALKTHROUGH_MAX.files, items: { type: "string" } },
+              summary: { type: "string" }
+            }
+          }
+        },
+        diagram: { type: "string", maxLength: WALKTHROUGH_MAX.diagram }
+      }
+    },
+    gates: {
+      type: "array",
+      maxItems: GATES_MAX,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["gate", "status", "reason"],
+        properties: { gate: { type: "string" }, status: { enum: GATE_STATUSES }, reason: { type: "string" } }
+      }
+    }
   }
 };
+function parseWalkthrough(x) {
+  const w = x;
+  const str = (s) => typeof s === "string";
+  const ok = Array.isArray(w?.areas) && w.areas.length <= WALKTHROUGH_MAX.areas && w.areas.every((a) => str(a?.name) && str(a.summary) && Array.isArray(a.files) && a.files.length <= WALKTHROUGH_MAX.files && a.files.every(str));
+  if (!ok)
+    return;
+  const d = w.diagram;
+  const diagram = str(d) && d.length <= WALKTHROUGH_MAX.diagram && /^\s*(flowchart|graph)\b/.test(d) && !d.includes("```") && !/^\s*click\b/m.test(d);
+  return { areas: w.areas.map(({ name, files, summary }) => ({ name, files, summary })), ...diagram && { diagram: d } };
+}
+function parseGates(x) {
+  if (!Array.isArray(x))
+    return;
+  return x.filter((g) => typeof g?.gate === "string" && GATE_STATUSES.includes(g.status) && typeof g.reason === "string").map(({ gate, status, reason }) => ({ gate, status, reason }));
+}
 function parseReview(x) {
   const r = x;
   if (!r || !VERDICTS.includes(r.verdict) || typeof r.headline !== "string" || !Array.isArray(r.findings))
@@ -58274,8 +58342,13 @@ function parseReview(x) {
   const ok = r.findings.every((f) => SEVERITIES.includes(f?.severity) && typeof f.file === "string" && Number.isInteger(f.line) && typeof f.title === "string" && typeof f.body === "string");
   if (!ok)
     return;
+  const { walkthrough: _, gates: __, ...rest } = r;
+  const walkthrough = parseWalkthrough(r.walkthrough);
+  const gates = parseGates(r.gates);
   return {
-    ...r,
+    ...rest,
+    ...walkthrough && { walkthrough },
+    ...gates && { gates },
     resolved: Array.isArray(r.resolved) ? r.resolved : [],
     checked: Array.isArray(r.checked) ? r.checked.filter((c) => typeof c === "string") : [],
     not_checked: r.not_checked ?? ""
@@ -58451,6 +58524,23 @@ async function collectContext(octokit, owner, repo, number, bot) {
   };
 }
 
+// src/services/gates-check.service.ts
+var GATES_CHECK = "Axon Shaft / gates";
+var norm = (s) => s.trim().toLowerCase();
+function gateResults(gates, reported = []) {
+  return gates.map((gate, i) => {
+    const r = reported.find((g) => norm(g.gate) === norm(gate)) ?? reported[i];
+    return r ? { ...r, gate } : { gate, status: "not_met", reason: "The review didn't report on this gate." };
+  });
+}
+var gatesConclusion = (gates) => gates.some((g) => g.status === "not_met") ? "failure" : "success";
+async function postGatesCheck(octokit, owner, repo, sha, gates, clean) {
+  const conclusion = gatesConclusion(gates);
+  const failed = gates.filter((g) => g.status === "not_met").length;
+  const title = failed ? `${failed} of ${gates.length} gates not met` : "Every gate met or not applicable";
+  await octokit.rest.checks.create({ owner, repo, name: GATES_CHECK, head_sha: sha, status: "completed", conclusion, output: { title, summary: clean(gatesTable(gates)) } }).catch((e) => warning(`Couldn't post the ${GATES_CHECK} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`));
+}
+
 // src/services/step.service.ts
 function step(name, fn) {
   return group(name, async () => {
@@ -58585,7 +58675,8 @@ async function reviewContext(ctx, o) {
     }
     throw e;
   }
-  const { review } = result;
+  const gates = o.gates?.length ? gateResults(o.gates, result.review.gates) : undefined;
+  const review = { ...result.review, gates };
   info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
@@ -58640,6 +58731,10 @@ ${c.body}`);
 ${clean(body)}`);
   else
     await writeSummary(body);
+  if (gates && o.dryRun)
+    info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
+  else if (gates)
+    await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun)
     info(`Would resolve the threads of ${fixed.join(", ")}`);
@@ -58829,6 +58924,7 @@ ${grant.comment}`);
     skip: globs(settings.skip),
     focus: globs(settings.focus),
     env: globs(settings.env),
+    gates: globs(settings.gates),
     bot: APP_BOT,
     prompt: job.prompt,
     checks: job.checks,

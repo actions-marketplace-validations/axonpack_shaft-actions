@@ -88,6 +88,7 @@ async function review(
     comments?: object[];
     guides?: Record<string, string>;
     dryRun?: boolean;
+    gates?: string[];
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides);
@@ -110,6 +111,7 @@ async function review(
     dryRun: extra.dryRun ?? true,
     runUrl: 'https://github.com/o/r/actions/runs/9',
     cwd: '.',
+    gates: extra.gates,
   });
   return { refs: fake.refs, prompt: runs.at(-1)!.prompt, run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
@@ -348,4 +350,13 @@ test("the card is cut to the API's limits, so a long finding never loses the rep
   const { outcome } = await review([file('src/a.ts')]);
   expect(outcome.output.findings[0]!.title).toHaveLength(300);
   expect(outcome.output.findings[0]!.body).toHaveLength(5000);
+});
+
+test("with merge gates, the summary reports each of the project's gates and the gates check is posted; without, neither", async () => {
+  const { summary } = await review([file('src/a.ts')], { gates: ['Docs are updated'] });
+  expect(summary).toContain("| ✗ | Docs are updated | The review didn't report on this gate. |");
+  expect(logs).toContain('Would post the Axon Shaft / gates check: failure');
+  logs.length = 0;
+  expect((await review([file('src/a.ts')])).summary).not.toContain('Merge gates');
+  expect(logs.some((l) => l.includes('gates check'))).toBe(false);
 });

@@ -9,7 +9,7 @@ import pkg from '../../package.json' with { type: 'json' };
 import { DASHBOARD_URL } from '../consts/api.const';
 import type { ClaudeToken, Pass } from './api.service';
 import { ShaftFailure } from '../utils/failure.util';
-import { type Review, SEVERITIES, STEPS, TYPES, VERDICTS } from '../utils/render.util';
+import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
 
@@ -47,8 +47,66 @@ export const SCHEMA = {
     resolved: { type: 'array', items: { type: 'string' } },
     checked: { type: 'array', items: { enum: STEPS } },
     not_checked: { type: 'string' },
+    walkthrough: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['areas'],
+      properties: {
+        areas: {
+          type: 'array',
+          maxItems: WALKTHROUGH_MAX.areas,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'files', 'summary'],
+            properties: {
+              name: { type: 'string' },
+              files: { type: 'array', maxItems: WALKTHROUGH_MAX.files, items: { type: 'string' } },
+              summary: { type: 'string' },
+            },
+          },
+        },
+        diagram: { type: 'string', maxLength: WALKTHROUGH_MAX.diagram },
+      },
+    },
+    gates: {
+      type: 'array',
+      maxItems: GATES_MAX,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['gate', 'status', 'reason'],
+        properties: { gate: { type: 'string' }, status: { enum: GATE_STATUSES }, reason: { type: 'string' } },
+      },
+    },
   },
 };
+
+/**
+ * The walkthrough as it may be posted, or nothing when it's malformed or over the limits: it's
+ * extra, so a bad one never fails the review. A diagram that isn't a flowchart, could close its
+ * code block, or has a `click` link is left out.
+ */
+export function parseWalkthrough(x: unknown): Walkthrough | undefined {
+  const w = x as Walkthrough;
+  const str = (s: unknown) => typeof s === 'string';
+  const ok =
+    Array.isArray(w?.areas) &&
+    w.areas.length <= WALKTHROUGH_MAX.areas &&
+    w.areas.every((a) => str(a?.name) && str(a.summary) && Array.isArray(a.files) && a.files.length <= WALKTHROUGH_MAX.files && a.files.every(str));
+  if (!ok) return;
+  const d = w.diagram;
+  const diagram = str(d) && d!.length <= WALKTHROUGH_MAX.diagram && /^\s*(flowchart|graph)\b/.test(d!) && !d!.includes('```') && !/^\s*click\b/m.test(d!);
+  return { areas: w.areas.map(({ name, files, summary }) => ({ name, files, summary })), ...(diagram && { diagram: d }) };
+}
+
+/** The well-formed gates of the reply; a malformed one is dropped, and the gates check counts it as not reported. */
+export function parseGates(x: unknown): Gate[] | undefined {
+  if (!Array.isArray(x)) return;
+  return x
+    .filter((g) => typeof g?.gate === 'string' && GATE_STATUSES.includes(g.status) && typeof g.reason === 'string')
+    .map(({ gate, status, reason }) => ({ gate, status, reason }));
+}
 
 /** Our own check of the reply, so a bad one is retried instead of posted. */
 export function parseReview(x: unknown): Review | undefined {
@@ -63,8 +121,13 @@ export function parseReview(x: unknown): Review | undefined {
       typeof f.body === 'string',
   );
   if (!ok) return;
+  const { walkthrough: _, gates: __, ...rest } = r;
+  const walkthrough = parseWalkthrough(r.walkthrough);
+  const gates = parseGates(r.gates);
   return {
-    ...r,
+    ...rest,
+    ...(walkthrough && { walkthrough }),
+    ...(gates && { gates }),
     resolved: Array.isArray(r.resolved) ? r.resolved : [],
     checked: Array.isArray(r.checked) ? r.checked.filter((c) => typeof c === 'string') : [],
     not_checked: r.not_checked ?? '',

@@ -6,6 +6,7 @@ import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
 import { runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
+import { gateResults, GATES_CHECK, gatesConclusion, postGatesCheck } from './gates-check.service';
 import { step } from './step.service';
 import {
   checkStates,
@@ -49,6 +50,8 @@ export type ReviewOptions = {
   cwd: string;
   /** The project's own variables the agent's commands get, by name. */
   env?: string[];
+  /** The project's merge gates: with any, the summary reports each and the gates check is posted. */
+  gates?: string[];
 };
 
 export type ReviewOutcome = {
@@ -220,7 +223,9 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     }
     throw e;
   }
-  const { review } = result;
+  // Only the project's own gates, each with the review's result; any other gates in the reply are dropped.
+  const gates = o.gates?.length ? gateResults(o.gates, result.review.gates) : undefined;
+  const review = { ...result.review, gates };
   core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
   core.startGroup('Post the review');
 
@@ -275,6 +280,9 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   });
   if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
   else await writeSummary(body);
+
+  if (gates && o.dryRun) core.info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
+  else if (gates) await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
 
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun) core.info(`Would resolve the threads of ${fixed.join(', ')}`);
