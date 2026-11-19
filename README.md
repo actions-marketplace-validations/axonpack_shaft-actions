@@ -329,7 +329,8 @@ These end with a notice, and the step passes:
 - a fork's pull request on `pull_request`;
 - a job that's off for the event;
 - a fork's pull request the dashboard holds back;
-- a `/review` from someone without write access.
+- a `/review` from someone without write access;
+- a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap.
 
 Any other error, such as GitHub's API failing, fails the step with that error's message.
 
