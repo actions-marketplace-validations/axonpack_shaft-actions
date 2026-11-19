@@ -76,7 +76,15 @@ async function run(): Promise<void> {
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
-  await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, duration_ms: Date.now() - started });
+  await reportRun({
+    verdict: out.verdict,
+    model: out.model,
+    effort: out.effort,
+    findings: out.bySeverity,
+    duration_ms: Date.now() - started,
+    tokens: out.tokens,
+    ...(grant.claude_token.kind === 'api_key' ? { cost_usd: out.costUsd } : {}),
+  });
 }
 
 /** Fail the step; a known failure also puts its card, message and link in the job summary. */

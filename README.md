@@ -102,7 +102,7 @@ With the model and effort on `auto`, the action picks both from the diff, after 
 | Only docs, comments, lockfiles or config | `haiku` | `low` |
 | Anything else | `sonnet` | `medium` |
 
-A model or effort set on the dashboard turns `auto` off for that one only. If the Claude plan can't use the picked model, the review falls back to the next smaller one and the footer says so. The footer always shows the model, the effort and the reason.
+A model or effort set on the dashboard turns `auto` off for that one only. If the Claude plan can't use the picked model, the review falls back to the next smaller one and the footer says so. The footer always shows the model, the effort, the tokens the run used and the reason.
 
 ## The review prompt
 
@@ -157,7 +157,7 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. From 
 - The nits, folded.
 - The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
 - "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
-- A footer with the run link, the model the review ran on (and the subagents' model on a deep review), the effort and why `auto` picked them.
+- A footer with the run link, the model the review ran on (and the subagents' model on a deep review), the effort, the tokens the run used in all, and why `auto` picked them. The dashboard's Runs list shows the same count, split into input, output and cache, with the cost for a run on an API key.
 
 Inline comments go on the lines in the diff, one per blocking or should-fix finding, and nits too when the dashboard says to post them inline. A finding that already has an inline comment isn't posted again on the next push, and when a push fixes a finding, its thread is resolved.
 

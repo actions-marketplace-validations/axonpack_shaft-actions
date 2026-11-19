@@ -146,14 +146,20 @@ export type Footer = {
   models: string;
   effort: string;
   reason: string;
+  /** What the run used; the footer shows them in all. */
+  tokens?: { input: number; output: number; cache_read: number; cache_write: number };
   skipped?: number;
   /** The catalog checks the project keeps on, from the Axon Shaft API; the others show as off. */
   checks?: string[];
 };
 
+/** A token count, such as "950", "18k" or "1.2M". */
+export const formatTokens = (n: number) => (n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`);
+
 function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
-  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  const t = f.tokens ? ` · ${formatTokens(f.tokens.input + f.tokens.output + f.tokens.cache_read + f.tokens.cache_write)} tokens` : '';
+  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 
 const chip = (text: string) => `<kbd>${text}</kbd>`;

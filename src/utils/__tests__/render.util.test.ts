@@ -4,6 +4,7 @@ import {
   diffLines,
   type Finding,
   fingerprint,
+  formatTokens,
   inlineBody,
   parseState,
   place,
@@ -252,4 +253,15 @@ test('a check the model left out of checked shows ⬜, not ✅', () => {
   const placed = place([finding({ step: 'tests' })], files, 'summary');
   const body = renderSummary({ ...review, checked: ['correctness', 'tests'] }, placed, undefined, { ...info, checks: ['correctness', 'breakage', 'tests', 'docs', 'security'] });
   expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>⬜ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>⬜ Docs</kbd> <kbd>⬜ Security</kbd>');
+});
+
+test('the footer counts every token the run used', () => {
+  const body = renderSummary(review, place(review.findings, files, 'summary'), undefined, {
+    ...info,
+    tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 },
+  });
+  expect(body).toContain('· claude-haiku-4 · low · 182k tokens · 3 lines</sub>');
+  expect(formatTokens(950)).toBe('950');
+  expect(formatTokens(1_250_000)).toBe('1.3M');
+  expect(formatTokens(2_000_000)).toBe('2M');
 });

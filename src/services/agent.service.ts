@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as core from '@actions/core';
-import { type AgentDefinition, type EffortLevel, type HookCallback, type PreToolUseHookInput, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import { type AgentDefinition, type EffortLevel, type HookCallback, type ModelUsage, type PreToolUseHookInput, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import pkg from '../../package.json' with { type: 'json' };
 import { DASHBOARD_URL } from '../consts/api.const';
 import type { ClaudeToken, Pass } from './api.service';
@@ -141,7 +141,21 @@ export type AgentOptions = {
   cwd: string;
 };
 
-export type AgentResult = { review: Review; models: string[]; costUsd: number };
+/** What a run used, summed over its models, as `POST /v1/runs` takes it. */
+export type Tokens = { input: number; output: number; cache_read: number; cache_write: number };
+export type AgentResult = { review: Review; models: string[]; costUsd: number; tokens: Tokens };
+
+/** The SDK's per-model usage, added up. */
+export const sumTokens = (usage: Record<string, ModelUsage>): Tokens =>
+  Object.values(usage).reduce(
+    (t, u) => ({
+      input: t.input + u.inputTokens,
+      output: t.output + u.outputTokens,
+      cache_read: t.cache_read + u.cacheReadInputTokens,
+      cache_write: t.cache_write + u.cacheCreationInputTokens,
+    }),
+    { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  );
 
 async function once(prompt: string, o: AgentOptions, controller: AbortController): Promise<SDKResultMessage | undefined> {
   const deep = !!o.subagentModel && !!o.passes?.length;
@@ -186,7 +200,7 @@ export async function runAgent(prompt: string, o: AgentOptions): Promise<AgentRe
       const result = await once(prompt, o, controller);
       if (result?.subtype === 'success') {
         const review = parseReview(result.structured_output);
-        if (review) return { review, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd };
+        if (review) return { review, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd, tokens: sumTokens(result.modelUsage) };
       } else if (result && result.subtype !== 'error_max_structured_output_retries') {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join('; ')}`);
       }

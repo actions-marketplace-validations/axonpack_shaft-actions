@@ -58010,9 +58010,11 @@ function parseState(body) {
     return;
   }
 }
+var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
 function footer(f) {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort} · ${f.reason}</sub>`;
+  const t = f.tokens ? ` · ${formatTokens(f.tokens.input + f.tokens.output + f.tokens.cache_read + f.tokens.cache_write)} tokens` : "";
+  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
 function card(review, placed, fixed, f) {
@@ -58240,6 +58242,12 @@ function cliEnv(claude) {
   };
 }
 var deepAgents = (model, effort, passes) => Object.fromEntries(passes.map(({ name, description, prompt }) => [name, { description, prompt, tools: ["Read", "Grep", "Glob"], model, effort }]));
+var sumTokens = (usage) => Object.values(usage).reduce((t, u) => ({
+  input: t.input + u.inputTokens,
+  output: t.output + u.outputTokens,
+  cache_read: t.cache_read + u.cacheReadInputTokens,
+  cache_write: t.cache_write + u.cacheCreationInputTokens
+}), { input: 0, output: 0, cache_read: 0, cache_write: 0 });
 async function once(prompt, o, controller) {
   const deep = !!o.subagentModel && !!o.passes?.length;
   let result;
@@ -58279,7 +58287,7 @@ async function runAgent(prompt, o) {
       if (result?.subtype === "success") {
         const review = parseReview(result.structured_output);
         if (review)
-          return { review, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd };
+          return { review, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd, tokens: sumTokens(result.modelUsage) };
       } else if (result && result.subtype !== "error_max_structured_output_retries") {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join("; ")}`);
       }
@@ -58520,6 +58528,7 @@ ${c.body}`);
     models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
     effort: choice.effort,
     reason: choice.reason,
+    tokens: result.tokens,
     skipped
   });
   if (o.dryRun)
@@ -58539,6 +58548,8 @@ ${clean(body)}`);
     summaryUrl: o.dryRun ? "" : summary?.html_url ?? "",
     model: [models.main, ...models.subagents].join(", "),
     effort: choice.effort,
+    tokens: result.tokens,
+    costUsd: result.costUsd,
     bySeverity: {
       blocking: placed.filter((p) => p.severity === "blocking").length,
       should_fix: placed.filter((p) => p.severity === "should-fix").length,
@@ -58672,7 +58683,15 @@ ${grant.comment}`);
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);
   setOutput("summary_url", out.summaryUrl);
-  await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, duration_ms: Date.now() - started });
+  await reportRun({
+    verdict: out.verdict,
+    model: out.model,
+    effort: out.effort,
+    findings: out.bySeverity,
+    duration_ms: Date.now() - started,
+    tokens: out.tokens,
+    ...grant.claude_token.kind === "api_key" ? { cost_usd: out.costUsd } : {}
+  });
 }
 async function fail(e) {
   setFailed(e instanceof Error ? e.message : String(e));

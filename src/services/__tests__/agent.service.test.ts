@@ -13,7 +13,7 @@ vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
     } else yield* reply;
   },
 }));
-const { cliEnv, deepAgents, runAgent } = await import('../agent.service');
+const { cliEnv, deepAgents, runAgent, sumTokens } = await import('../agent.service');
 
 beforeEach(() => {
   reply = [];
@@ -91,4 +91,10 @@ test('an SDK error, or anything else that breaks the run, is review_failed', asy
     code: 'review_failed',
     message: 'The review failed: Claude Code process exited with code 1. Rerun the job; the job log has the details.',
   });
+});
+
+test('the tokens are the sum over every model the run used', () => {
+  const u = (input: number) => ({ inputTokens: input, outputTokens: 2, cacheReadInputTokens: 3, cacheCreationInputTokens: 4, webSearchRequests: 0, costUSD: 0, contextWindow: 0, maxOutputTokens: 0 });
+  expect(sumTokens({ 'claude-sonnet-5-5': u(10), 'claude-haiku-5-5': u(5) })).toEqual({ input: 15, output: 4, cache_read: 6, cache_write: 8 });
+  expect(sumTokens({})).toEqual({ input: 0, output: 0, cache_read: 0, cache_write: 0 });
 });

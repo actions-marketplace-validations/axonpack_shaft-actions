@@ -52,6 +52,9 @@ export type RunSummary = {
   effort: string;
   findings: { blocking: number; should_fix: number; nit: number };
   duration_ms: number;
+  tokens: { input: number; output: number; cache_read: number; cache_write: number };
+  /** Only for a run on an API key: on a Claude plan the SDK's price isn't what anyone pays. */
+  cost_usd?: number;
 };
 
 /** POST to the Axon Shaft API with a fresh OIDC token: the API refuses a token it has already seen. */

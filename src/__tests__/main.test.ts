@@ -56,9 +56,12 @@ vi.doMock('../services/review.service', () => ({
   reviewPullRequest: async (o: Record<string, unknown>) => {
     reviewed = o;
     if (reviewError) throw reviewError((await import('../utils/failure.util')).ShaftFailure);
-    return { verdict: 'looks-good', findings: 0, summaryUrl: '', model: 'sonnet', effort: 'medium', bySeverity: { blocking: 0, should_fix: 0, nit: 0 } };
+    return { ...outcome };
   },
 }));
+
+const tokens = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
+const outcome = { verdict: 'looks-good', findings: 0, summaryUrl: '', model: 'sonnet', effort: 'medium', bySeverity: { blocking: 0, should_fix: 0, nit: 0 }, tokens, costUsd: 0.42 };
 
 const prompt = { template: '# Review {{repo}}', passes: [] };
 const grant = {
@@ -68,12 +71,14 @@ const grant = {
   settings: { model: 'auto', effort: 'auto', rules: 'Use tabs.', skip: ['**/*.lock'], focus: ['src/core/**'], maxTurns: 30, timeLimit: 15 },
   job: { type: 'review', version: 2, options: { on: ['opened'], depth: 'standard', nits: 'summary' }, checks: ['correctness'], prompt },
 };
-/** What the action sent to /v1/token. */
+/** What the action sent to /v1/token, and to /v1/runs. */
 let asked: unknown;
+let reported: Record<string, unknown> | undefined;
 /** The API answers /v1/token with `token`, and /v1/runs with 204; the run is over once /v1/runs is called. */
 const api = (token: Response) =>
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     if (url.endsWith('/v1/runs')) {
+      reported = JSON.parse(init.body as string);
       finished = true;
       return new Response(null, { status: 204 });
     }
@@ -96,6 +101,7 @@ beforeEach(() => {
   permission = 'write';
   checkedOut.length = 0;
   asked = undefined;
+  reported = undefined;
   notices.length = 0;
   inputs.length = 0;
   failed.length = 0;
@@ -185,6 +191,17 @@ test('mention, or any other run: false, posts nothing and ends with a notice', a
 });
 
 const asks = { ...comment, comment: { ...comment.comment, body: '/review' } };
+
+test('the run report has the tokens, and the cost only for a run on an API key', async () => {
+  api(Response.json(grant));
+  await main();
+  expect(reported).toMatchObject({ verdict: 'looks-good', tokens });
+  expect(reported).not.toHaveProperty('cost_usd');
+  api(Response.json({ ...grant, claude_token: { kind: 'api_key', value: 'sk-ant-api-shaft' } }));
+  finished = false;
+  await main();
+  expect(reported).toMatchObject({ tokens, cost_usd: 0.42 });
+});
 
 test('/review by someone with write access reviews the PR, with no event, at its head commit', async () => {
   context.eventName = 'issue_comment';

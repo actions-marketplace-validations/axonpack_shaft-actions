@@ -4,7 +4,7 @@ import { ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken, GrantJob } from './api.service';
-import { runAgent } from './agent.service';
+import { runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import {
   failedSummary,
@@ -52,6 +52,9 @@ export type ReviewOutcome = {
   model: string;
   effort: string;
   bySeverity: { blocking: number; should_fix: number; nit: number };
+  tokens: Tokens;
+  /** The SDK's price for the run, in US dollars. */
+  costUsd: number;
 };
 
 /** One step down when the plan behind the token can't use the picked model. */
@@ -251,6 +254,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
       (models.subagents.length ? ` · subagents: ${models.subagents.join(', ')}` : ''),
     effort: choice.effort,
     reason: choice.reason,
+    tokens: result.tokens,
     skipped,
   });
   if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
@@ -268,6 +272,8 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     summaryUrl: o.dryRun ? '' : (summary?.html_url ?? ''),
     model: [models.main, ...models.subagents].join(', '),
     effort: choice.effort,
+    tokens: result.tokens,
+    costUsd: result.costUsd,
     bySeverity: {
       blocking: placed.filter((p) => p.severity === 'blocking').length,
       should_fix: placed.filter((p) => p.severity === 'should-fix').length,
