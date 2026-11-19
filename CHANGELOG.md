@@ -1,5 +1,19 @@
 # shaft
 
+## 1.4.0
+
+### Minor Changes
+
+- d876106: - **Merge gates**: when the project has merge gates on the dashboard, the summary comment lists each gate as met, not met or not applicable, with the review's reason, and the action posts an `Axon Shaft / gates` check run on the reviewed commit. The check fails when a gate isn't met or the review didn't report on it, so branch protection can require it. The AxonShaft GitHub App needs the Checks (write) permission for the check; without it the review still posts and the log warns.
+- 3ece49d: - **Walkthrough**: the summary comment can have a folded "Walkthrough" with a table of the changed files grouped by area, one line on what changed in each, and a Mermaid flow diagram when the pull request changes a flow. The API asks for it when Code review's "Walkthrough in the summary" option is on, which is the default. A walkthrough over the limits (8 areas, 20 files in an area) is left out, and the review posts without it.
+
+### Patch Changes
+
+- 55ca763: - **Marketplace listing**: `action.yml` has a blue `check-circle` icon and a shorter description, so the action can be listed on GitHub Marketplace.
+- 6adad31: - **Footer tokens**: the summary footer shows the cost and the total on an API key, such as `$0.38 · 759k tokens`, and on a subscription the cache-weighted count with the total in brackets, such as `≈220k billed (759k with cache)`. The raw total counted every cached read and looked several times bigger than the bill.
+  - **Footer link**: "Axon Shaft" in the summary footer opens the run's page on the dashboard when the API sends it, and the dashboard otherwise.
+  - **Turn limit by size**: with no turn limit set on the dashboard, a review of under 100 changed lines gets 12 turns and one under 500 gets 20, and the footer's reason says so, such as `60 lines, up to 12 turns`. Larger diffs and deep reviews keep 30, and a limit set on the dashboard always wins.
+
 ## 1.3.0
 
 ### Minor Changes
