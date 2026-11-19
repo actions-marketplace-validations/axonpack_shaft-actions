@@ -206,8 +206,10 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. From 
    A finding with an inline comment says "inline". A finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
 3. The nits, folded.
 4. The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
-5. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
-6. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
+5. "Walkthrough", folded, for a pull request that changes three or more files: a table of the changed files grouped by area, with one line on what changed in each, and a Mermaid flow diagram when the pull request changes how its parts call each other.
+   It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
+6. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
+7. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
    On an API key the tokens show as the cost and the total, such as `$0.38 · 759k tokens`.
    On a subscription they show as the cache-weighted count with the total in brackets, such as `≈220k billed (759k with cache)`. A cache write counts 1.25 times, a cache read a tenth, and input and output as they are. Every turn reads the cached prompt again, so the total can be several times what was billed.
    "Axon Shaft" in the footer links to the run's page on the dashboard. With an API that doesn't send the run's page, it links to the dashboard.

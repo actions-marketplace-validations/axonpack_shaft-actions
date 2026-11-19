@@ -57970,6 +57970,7 @@ var VERDICTS = ["blocking", "needs-changes", "looks-good"];
 var SEVERITIES = ["blocking", "should-fix", "nit"];
 var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security", "rules"];
 var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
+var WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
 function diffLines(patch) {
   const lines = new Map;
   let right = 0;
@@ -58112,6 +58113,12 @@ var details = (summary, body) => `<details><summary>${summary}</summary>
 ${body}
 
 </details>`;
+function walkthrough(w) {
+  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ""))}\``).join("<br>")} | ${cell(prose(a.summary))} |`);
+  const diagram = w.diagram ? ["", fence(prose(w.diagram), "mermaid")] : [];
+  return details("Walkthrough", ["| Area | Files | What changed |", "|---|---|---|", ...rows, ...diagram].join(`
+`));
+}
 function startSummary(sha, prior) {
   return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
 `);
@@ -58139,6 +58146,8 @@ function renderSummary(raw, placed, prior, f) {
     out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
   if (f.skipped)
     out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
+  if (raw.walkthrough?.areas.length)
+    out.push("", walkthrough(raw.walkthrough));
   out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
 `)), "", footer(f));
   const state = {
@@ -58264,9 +58273,41 @@ var SCHEMA = {
     },
     resolved: { type: "array", items: { type: "string" } },
     checked: { type: "array", items: { enum: STEPS } },
-    not_checked: { type: "string" }
+    not_checked: { type: "string" },
+    walkthrough: {
+      type: "object",
+      additionalProperties: false,
+      required: ["areas"],
+      properties: {
+        areas: {
+          type: "array",
+          maxItems: WALKTHROUGH_MAX.areas,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "files", "summary"],
+            properties: {
+              name: { type: "string" },
+              files: { type: "array", maxItems: WALKTHROUGH_MAX.files, items: { type: "string" } },
+              summary: { type: "string" }
+            }
+          }
+        },
+        diagram: { type: "string", maxLength: WALKTHROUGH_MAX.diagram }
+      }
+    }
   }
 };
+function parseWalkthrough(x) {
+  const w = x;
+  const str = (s) => typeof s === "string";
+  const ok = Array.isArray(w?.areas) && w.areas.length <= WALKTHROUGH_MAX.areas && w.areas.every((a) => str(a?.name) && str(a.summary) && Array.isArray(a.files) && a.files.length <= WALKTHROUGH_MAX.files && a.files.every(str));
+  if (!ok)
+    return;
+  const d = w.diagram;
+  const diagram = str(d) && d.length <= WALKTHROUGH_MAX.diagram && /^\s*(flowchart|graph)\b/.test(d) && !d.includes("```") && !/^\s*click\b/m.test(d);
+  return { areas: w.areas.map(({ name, files, summary }) => ({ name, files, summary })), ...diagram && { diagram: d } };
+}
 function parseReview(x) {
   const r = x;
   if (!r || !VERDICTS.includes(r.verdict) || typeof r.headline !== "string" || !Array.isArray(r.findings))
@@ -58274,8 +58315,11 @@ function parseReview(x) {
   const ok = r.findings.every((f) => SEVERITIES.includes(f?.severity) && typeof f.file === "string" && Number.isInteger(f.line) && typeof f.title === "string" && typeof f.body === "string");
   if (!ok)
     return;
+  const { walkthrough: _, ...rest } = r;
+  const walkthrough = parseWalkthrough(r.walkthrough);
   return {
-    ...r,
+    ...rest,
+    ...walkthrough && { walkthrough },
     resolved: Array.isArray(r.resolved) ? r.resolved : [],
     checked: Array.isArray(r.checked) ? r.checked.filter((c) => typeof c === "string") : [],
     not_checked: r.not_checked ?? ""

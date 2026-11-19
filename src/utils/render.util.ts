@@ -24,6 +24,12 @@ export type Finding = {
   suggestion?: string;
 };
 
+/** The most a walkthrough may hold; a bigger one is dropped, and the review posts without it. */
+export const WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
+
+/** The changed files grouped by area, and a Mermaid flowchart when the PR changes a flow. Optional. */
+export type Walkthrough = { areas: { name: string; files: string[]; summary: string }[]; diagram?: string };
+
 /** What the model returns (the plan's JSON). */
 export type Review = {
   verdict: (typeof VERDICTS)[number];
@@ -38,6 +44,7 @@ export type Review = {
   /** The checks the model says it did; a check it didn't do shows as not checked, never as passed. */
   checked: string[];
   not_checked: string;
+  walkthrough?: Walkthrough;
 };
 
 /** The review memory kept in the summary comment's hidden state line. */
@@ -248,6 +255,13 @@ function table(rows: Placed[], f: Footer): string {
 
 const details = (summary: string, body: string) => `<details><summary>${summary}</summary>\n\n${body}\n\n</details>`;
 
+/** The walkthrough, folded: one table row per area, then the diagram GitHub draws from a mermaid block. */
+function walkthrough(w: Walkthrough): string {
+  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ''))}\``).join('<br>')} | ${cell(prose(a.summary))} |`);
+  const diagram = w.diagram ? ['', fence(prose(w.diagram), 'mermaid')] : [];
+  return details('Walkthrough', ['| Area | Files | What changed |', '|---|---|---|', ...rows, ...diagram].join('\n'));
+}
+
 export function startSummary(sha: string, prior?: State): string {
   return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
@@ -275,6 +289,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
+  if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
   out.push(
     '',
     details(
