@@ -23832,74 +23832,10 @@ async function reportRun(summary) {
 }
 
 // src/services/checkout.service.ts
-import { execFileSync } from "node:child_process";
-function checkoutHead(cwd, number, token) {
-  const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-  setSecret(basic);
-  const depth = git("rev-parse", "--is-shallow-repository") === "true" ? ["--depth=1"] : [];
-  git("-c", `http.extraheader=AUTHORIZATION: basic ${basic}`, "fetch", "--no-tags", ...depth, "origin", `refs/pull/${number}/head`);
-  git("checkout", "--quiet", "--detach", "FETCH_HEAD");
-}
-
-// src/utils/auto-pick.util.ts
-import { matchesGlob } from "node:path";
-var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
-var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
-var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
-var CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
-var COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
-var matches = (file, globs) => globs.some((g) => matchesGlob(file, g));
-function isSensitive(f) {
-  if (/(^|\/)package\.json$/.test(f.filename))
-    return f.patch === undefined || /ependencies"/.test(f.patch);
-  return SENSITIVE.test(f.filename);
-}
-function onlyComments(patch) {
-  if (!patch)
-    return false;
-  return patch.split(`
-`).filter((l) => /^[+-]/.test(l)).every((l) => {
-    const code = l.slice(1).trim();
-    return code === "" || COMMENT.test(code);
-  });
-}
-var isLight = (f) => DOCS.test(f.filename) || LOCKFILE.test(f.filename) || CONFIG.test(f.filename) || onlyComments(f.patch);
-function pick(input) {
-  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
-  const lines = files.reduce((n, f) => n + f.additions + f.deletions, 0);
-  const size = `${lines} lines`;
-  let row;
-  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
-  if (input.mode === "task")
-    row = { model: "opus", effort: "high", reason: "task" };
-  else if (hot)
-    row = { model: "opus", effort: "high", reason: `${size}, touches ${hot.filename}` };
-  else if (input.depth === "deep")
-    row = { model: "opus", effort: "high", reason: `${size}, deep` };
-  else if (lines > 1000 || files.length > 30)
-    row = { model: "opus", effort: "medium", reason: `${size}, ${files.length} files` };
-  else if (files.length > 0 && files.every(isLight))
-    row = { model: "haiku", effort: "low", reason: `${size}, docs and config only` };
-  else
-    row = { model: "sonnet", effort: "medium", reason: size };
-  const autoModel = !input.model || input.model === "auto";
-  const model = autoModel ? row.model : input.model;
-  return {
-    ...row,
-    model,
-    effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
-    subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
-    autoModel
-  };
-}
-
-// src/consts/settings.const.ts
-var GUIDE_FILES = ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "CONVENTIONS.md", ".github/pull_request_template.md", "README.md"];
-var GUIDE_CAP = { file: 8000, total: 30000 };
+import { execFileSync as execFileSync2 } from "node:child_process";
 
 // src/services/agent.service.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync as existsSync4 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { tmpdir } from "node:os";
@@ -58273,14 +58209,17 @@ function claudeBinary() {
   const bin = join2(dir, "node_modules", file);
   if (!existsSync4(bin)) {
     info(`Installing ${name}@${SDK_VERSION}`);
-    execFileSync2("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
+    execFileSync("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
   }
   return bin;
 }
-function cliEnv(claude, names = []) {
+function runnerEnv(names = []) {
   const pass = [...ENV_ALLOW, ...names.filter((n) => !ENV_DENIED.test(n))].filter((n) => process.env[n] !== undefined);
+  return Object.fromEntries(pass.map((n) => [n, process.env[n]]));
+}
+function cliEnv(claude, names = []) {
   return {
-    ...Object.fromEntries(pass.map((n) => [n, process.env[n]])),
+    ...runnerEnv(names),
     [claude.kind === "oauth" ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY"]: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}`
@@ -58372,6 +58311,72 @@ ${JSON.stringify(raw, null, 2)}`);
     clearTimeout(timer);
   }
 }
+
+// src/services/checkout.service.ts
+function checkoutHead(cwd, number, token) {
+  const git = (...args) => execFileSync2("git", args, { cwd, encoding: "utf8" }).trim();
+  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+  setSecret(basic);
+  const depth = git("rev-parse", "--is-shallow-repository") === "true" ? ["--depth=1"] : [];
+  git("-c", `http.extraheader=AUTHORIZATION: basic ${basic}`, "fetch", "--no-tags", ...depth, "origin", `refs/pull/${number}/head`);
+  git("checkout", "--quiet", "--detach", "FETCH_HEAD");
+}
+
+// src/utils/auto-pick.util.ts
+import { matchesGlob } from "node:path";
+var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
+var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
+var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
+var CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
+var COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
+var matches = (file, globs) => globs.some((g) => matchesGlob(file, g));
+function isSensitive(f) {
+  if (/(^|\/)package\.json$/.test(f.filename))
+    return f.patch === undefined || /ependencies"/.test(f.patch);
+  return SENSITIVE.test(f.filename);
+}
+function onlyComments(patch) {
+  if (!patch)
+    return false;
+  return patch.split(`
+`).filter((l) => /^[+-]/.test(l)).every((l) => {
+    const code = l.slice(1).trim();
+    return code === "" || COMMENT.test(code);
+  });
+}
+var isLight = (f) => DOCS.test(f.filename) || LOCKFILE.test(f.filename) || CONFIG.test(f.filename) || onlyComments(f.patch);
+function pick(input) {
+  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
+  const lines = files.reduce((n, f) => n + f.additions + f.deletions, 0);
+  const size = `${lines} lines`;
+  let row;
+  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
+  if (input.mode === "task")
+    row = { model: "opus", effort: "high", reason: "task" };
+  else if (hot)
+    row = { model: "opus", effort: "high", reason: `${size}, touches ${hot.filename}` };
+  else if (input.depth === "deep")
+    row = { model: "opus", effort: "high", reason: `${size}, deep` };
+  else if (lines > 1000 || files.length > 30)
+    row = { model: "opus", effort: "medium", reason: `${size}, ${files.length} files` };
+  else if (files.length > 0 && files.every(isLight))
+    row = { model: "haiku", effort: "low", reason: `${size}, docs and config only` };
+  else
+    row = { model: "sonnet", effort: "medium", reason: size };
+  const autoModel = !input.model || input.model === "auto";
+  const model = autoModel ? row.model : input.model;
+  return {
+    ...row,
+    model,
+    effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
+    subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
+    autoModel
+  };
+}
+
+// src/consts/settings.const.ts
+var GUIDE_FILES = ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "CONVENTIONS.md", ".github/pull_request_template.md", "README.md"];
+var GUIDE_CAP = { file: 8000, total: 30000 };
 
 // src/services/context.service.ts
 var comment = (c) => ({

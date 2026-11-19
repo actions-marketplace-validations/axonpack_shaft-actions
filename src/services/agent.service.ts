@@ -109,6 +109,12 @@ function claudeBinary(): string | undefined {
   return bin;
 }
 
+/** `ENV_ALLOW` and the project's own `names` that the runner has, never one `ENV_DENIED` matches. */
+export function runnerEnv(names: string[] = []): Record<string, string> {
+  const pass = [...ENV_ALLOW, ...names.filter((n) => !ENV_DENIED.test(n))].filter((n) => process.env[n] !== undefined);
+  return Object.fromEntries(pass.map((n) => [n, process.env[n]!]));
+}
+
 /**
  * The CLI's environment, which every command the model runs inherits: `ENV_ALLOW`, the project's own
  * `names` (never one `ENV_DENIED` matches) and the Claude token. Nothing else the runner holds (the
@@ -116,9 +122,8 @@ function claudeBinary(): string | undefined {
  * leak. The CLI scrubs the Claude token from the environment of what it runs.
  */
 export function cliEnv(claude: ClaudeToken, names: string[] = []): Record<string, string | undefined> {
-  const pass = [...ENV_ALLOW, ...names.filter((n) => !ENV_DENIED.test(n))].filter((n) => process.env[n] !== undefined);
   return {
-    ...Object.fromEntries(pass.map((n) => [n, process.env[n]])),
+    ...runnerEnv(names),
     [claude.kind === 'oauth' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY']: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}`,
