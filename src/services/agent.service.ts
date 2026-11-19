@@ -7,10 +7,10 @@ import * as core from '@actions/core';
 import { type AgentDefinition, type EffortLevel, type HookCallback, type ModelUsage, type PreToolUseHookInput, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import pkg from '../../package.json' with { type: 'json' };
 import { DASHBOARD_URL } from '../consts/api.const';
-import { ENV_ALLOW, ENV_DENIED } from '../consts/env.const';
 import type { ClaudeToken, Pass } from './api.service';
 import { ShaftFailure } from '../utils/failure.util';
 import { type Review, SEVERITIES, STEPS, TYPES, VERDICTS } from '../utils/render.util';
+import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
 
 /** The JSON schema the model's reply must match (the plan's output). */
@@ -107,12 +107,6 @@ function claudeBinary(): string | undefined {
     execFileSync('npm', ['install', '--no-save', '--no-package-lock', '--prefix', dir, `${name}@${SDK_VERSION}`], { stdio: 'inherit' });
   }
   return bin;
-}
-
-/** `ENV_ALLOW` and the project's own `names` that the runner has, never one `ENV_DENIED` matches. */
-export function runnerEnv(names: string[] = []): Record<string, string> {
-  const pass = [...ENV_ALLOW, ...names.filter((n) => !ENV_DENIED.test(n))].filter((n) => process.env[n] !== undefined);
-  return Object.fromEntries(pass.map((n) => [n, process.env[n]!]));
 }
 
 /**
