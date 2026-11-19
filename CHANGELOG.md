@@ -1,5 +1,16 @@
 # shaft
 
+## 1.3.0
+
+### Minor Changes
+
+- acb9773: - **Review filters**: the action also sends the branch a pull request goes into, its author's association with the repo, and whether a bot opened it. The API uses them for Code review's new filters (outside contributors, bots, Axon Shaft's own pull requests, target branches). When a filter skips a pull request, the run ends with a notice that says why.
+- e861bed: - **Run page**: the run sent to the dashboard has the review card (headline, each check's result and every finding), and a run that fails after it started sends its error, so the dashboard can show both.
+  - **Job log**: each step is a folded group with how long it took, and the Review group lists each tool call the model made, with a deep pass's name before its own.
+- e7980c8: - **Pull request on the dashboard**: the action sends the pull request's number, title, branch and author when it asks the API for its tokens, so the dashboard's overview can show which PR each run was for. A run started from a comment on the conversation tab sends it without the branch, since that event doesn't include one.
+- f9c7345: - **Environment**: the model's environment holds a short list of the runner's variables (`PATH`, `HOME`, locale, time zone, temp folder and the CI basics) plus the names set in the project's Environment variables setting, never a token. `ACTIONS_*`, `INPUT_*`, `ANTHROPIC_*`, `CLAUDE_*` and `GITHUB_TOKEN` can't be added.
+- cc6f56d: - **Tokens**: the summary comment's footer shows how many tokens the review used, and the run sent to the dashboard has the input, output and cache counts. For a run on an API key it also has the cost.
+
 ## 1.2.0
 
 ### Minor Changes
