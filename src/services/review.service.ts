@@ -3,10 +3,12 @@ import { type Choice, matches, pick } from '../utils/auto-pick.util';
 import { ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
-import type { ClaudeToken, GrantJob } from './api.service';
+import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
 import { runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
+import { step } from './step.service';
 import {
+  checkStates,
   failedSummary,
   inlineBody,
   parseState,
@@ -55,6 +57,8 @@ export type ReviewOutcome = {
   tokens: Tokens;
   /** The SDK's price for the run, in US dollars. */
   costUsd: number;
+  /** The card, for the run's page on the dashboard. */
+  output: RunOutput;
 };
 
 /** One step down when the plan behind the token can't use the picked model. */
@@ -161,7 +165,7 @@ export async function resolveThreads(octokit: Octokit, ctx: Context, fps: string
 }
 
 export async function reviewPullRequest(o: ReviewOptions & { owner: string; repo: string; number: number }): Promise<ReviewOutcome> {
-  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number, o.bot), o);
+  return reviewContext(await step('Read the pull request', () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot)), o);
 }
 
 /** Review a collected PR and post the result (or print it, on a dry run). */
@@ -189,7 +193,8 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   await writeSummary(startSummary(sha, prior));
   let result;
   try {
-    result = await runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
+    result = await step('Review', () =>
+      runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
       claude: o.claude,
       model: choice.model,
       effort: choice.effort,
@@ -199,7 +204,8 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
       maxTurns: o.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
-    });
+    }),
+    );
   } catch (e) {
     // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
     if (e instanceof ShaftFailure) {
@@ -210,6 +216,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   }
   const { review } = result;
   core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
+  core.startGroup('Post the review');
 
   const placed = place(review.findings, files, o.nits);
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
@@ -266,7 +273,36 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     await resolveThreads(octokit, ctx, fixed, o.bot).catch((e) => core.warning(`Resolving fixed threads failed: ${e.message}`));
   }
 
+  core.endGroup();
+
+  // Cut to the API's limits, so one long finding never loses the whole report.
+  const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+  const prose = (text: string) => cut(clean(text), 2000);
+  const output: RunOutput = {
+    headline: prose(review.headline),
+    claim: prose(review.claim),
+    impact: prose(review.impact),
+    scope: prose(review.scope),
+    not_checked: prose(review.not_checked),
+    type: cut(review.type, 40),
+    confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
+    comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
+    checks: checkStates(review, placed, o.checks),
+    findings: placed.slice(0, 200).map((p) => ({
+      severity: p.severity,
+      check: p.step,
+      file: cut(p.file, 500),
+      line: Math.max(1, p.line),
+      ...(p.end_line ? { end_line: p.end_line } : {}),
+      title: cut(clean(p.title), 300),
+      body: cut(clean(p.body), 5000),
+      ...(p.suggestion ? { suggestion: cut(clean(p.suggestion), 5000) } : {}),
+      inline: p.inline,
+    })),
+    fixed: fixed.length,
+  };
   return {
+    output,
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== 'nit').length,
     summaryUrl: o.dryRun ? '' : (summary?.html_url ?? ''),

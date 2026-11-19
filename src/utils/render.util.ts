@@ -164,6 +164,31 @@ function footer(f: Footer): string {
 
 const chip = (text: string) => `<kbd>${text}</kbd>`;
 
+export type CheckState = 'failed' | 'warned' | 'passed' | 'not_checked' | 'off';
+const CHECK_MARK: Record<CheckState, string> = { failed: '❌', warned: '⚠️', passed: '✅', not_checked: '⬜', off: '➖' };
+
+/**
+ * Each check's result: failed (a blocking finding), warned (any other), passed (checked with none),
+ * not checked, or off. `rules` shows only with a finding. A finding shows even under a check that's
+ * off, so a blocking one is never hidden.
+ */
+export function checkStates(review: Review, placed: Placed[], checks?: string[]): { key: string; label: string; state: CheckState }[] {
+  return STEPS.flatMap((key) => {
+    const found = placed.filter((p) => p.step === key);
+    if (key === 'rules' && !found.length) return [];
+    const state: CheckState = found.some((p) => p.severity === 'blocking')
+      ? 'failed'
+      : found.length
+        ? 'warned'
+        : checks && !checks.includes(key)
+          ? 'off'
+          : review.checked.includes(key)
+            ? 'passed'
+            : 'not_checked';
+    return [{ key, label: CHECK_LABEL[key]!, state }];
+  });
+}
+
 /**
  * The card at the top: the verdict as a GitHub alert, the headline, chips for the counts and for
  * each check (❌ a blocking finding, ⚠️ any other, ✅ checked with none, ⬜ not checked, ➖ turned off), and the PR's type.
@@ -178,21 +203,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     !placed.length && chip('✅ No findings'),
     fixed && chip(`✅ ${fixed} fixed`),
   ].filter(Boolean);
-  const checkChips = STEPS.flatMap((step) => {
-    const found = placed.filter((p) => p.step === step);
-    if (step === 'rules' && !found.length) return [];
-    // A finding shows even under a check that's off, so a blocking one is never hidden.
-    const mark = found.some((p) => p.severity === 'blocking')
-      ? '❌'
-      : found.length
-        ? '⚠️'
-        : f.checks && !f.checks.includes(step)
-          ? '➖'
-          : review.checked.includes(step)
-            ? '✅'
-            : '⬜';
-    return [chip(`${mark} ${CHECK_LABEL[step]}`)];
-  });
+  const checkChips = checkStates(review, placed, f.checks).map((c) => chip(`${CHECK_MARK[c.state]} ${c.label}`));
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, ' ');
   const alert = VERDICT_ALERT[review.verdict];

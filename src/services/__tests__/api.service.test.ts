@@ -131,7 +131,10 @@ test('a network error is api_unreachable and names the API', async () => {
   });
 });
 
-const summary = { verdict: 'looks-good', model: 'sonnet', effort: 'medium', findings: { blocking: 0, should_fix: 1, nit: 2 }, duration_ms: 1000, tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 } };
+const summary = { verdict: 'looks-good', model: 'sonnet', effort: 'medium', findings: { blocking: 0, should_fix: 1, nit: 2 }, duration_ms: 1000,
+  tokens: { input: 1, output: 2, cache_read: 3, cache_write: 4 },
+  output: { headline: 'h', claim: 'c', impact: 'i', scope: 's', not_checked: 'n', type: 'feature', confidence: 90, comment_url: '', checks: [], findings: [], fixed: 0 },
+};
 
 test('POST /v1/runs sends the summary with a fresh OIDC token', async () => {
   answer(new Response(null, { status: 204 }));

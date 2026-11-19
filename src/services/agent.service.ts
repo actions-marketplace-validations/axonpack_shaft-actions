@@ -157,9 +157,18 @@ export const sumTokens = (usage: Record<string, ModelUsage>): Tokens =>
     { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   );
 
+/** What a tool call works on, for the log: the file, pattern, command or task, on one line. */
+export function toolTarget(input: Record<string, unknown>): string {
+  const v = input.file_path ?? input.path ?? input.pattern ?? input.command ?? input.description ?? input.url ?? '';
+  const line = String(v).replace(/\s+/g, ' ').trim();
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
+
 async function once(prompt: string, o: AgentOptions, controller: AbortController): Promise<SDKResultMessage | undefined> {
   const deep = !!o.subagentModel && !!o.passes?.length;
   let result: SDKResultMessage | undefined;
+  // A deep pass's own tool calls name the pass, by the call that started it.
+  const passes = new Map<string, string>();
   for await (const m of query({
     prompt,
     options: {
@@ -184,6 +193,14 @@ async function once(prompt: string, o: AgentOptions, controller: AbortController
     },
   })) {
     if (m.type === 'result') result = m;
+    if (m.type !== 'assistant') continue;
+    for (const b of m.message.content) {
+      if (b.type !== 'tool_use') continue;
+      const input = (b.input ?? {}) as Record<string, unknown>;
+      if (typeof input.subagent_type === 'string') passes.set(b.id, input.subagent_type);
+      const who = m.parent_tool_use_id ? `[${passes.get(m.parent_tool_use_id) ?? 'pass'}] ` : '';
+      core.info(`${who}${b.name} ${toolTarget(input)}`);
+    }
   }
   return result;
 }

@@ -3,7 +3,18 @@ import { ShaftFailure } from '../../utils/failure.util';
 
 const logs: string[] = [];
 const warnings: string[] = [];
-vi.doMock('@actions/core', () => ({ info: (s: string) => logs.push(s), warning: (s: string) => warnings.push(s) }));
+vi.doMock('@actions/core', () => ({
+  info: (s: string) => logs.push(s),
+  warning: (s: string) => warnings.push(s),
+  group: (name: string, fn: () => Promise<unknown>) => {
+    logs.push(`::group::${name}`);
+    return fn();
+  },
+  startGroup: (name: string) => logs.push(`::group::${name}`),
+  endGroup: () => {},
+}));
+/** The findings the mocked review returns. */
+let found: object[] = [];
 const runs: { prompt: string; model: string; effort: string; passes?: unknown[] }[] = [];
 /** What the Agent SDK reports in modelUsage; empty means just the model asked for. */
 let usage: string[] = [];
@@ -14,7 +25,7 @@ vi.doMock('../agent.service', async (actual) => ({
   runAgent: async (prompt: string, o: { model: string; effort: string; passes?: unknown[] }) => {
     runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes });
     if (agentError) throw agentError;
-    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: [], resolved: [], checked: [], not_checked: 'n' };
+    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: ['correctness', 'tests'], not_checked: 'n' };
     return { review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
   },
 }));
@@ -109,6 +120,7 @@ beforeEach(() => {
   runs.length = 0;
   usage = [];
   agentError = undefined;
+  found = [];
 });
 
 test('buildPrompt fills every slot with the run\'s data and changes nothing else', () => {
@@ -313,4 +325,27 @@ test("a fixed finding resolves only the bot's own thread, never one a stranger s
   const ctx = { owner: 'o', repo: 'r', pr: { number: 7 } } as any;
   await resolveThreads(octokit as any, ctx, ['abc123'], 'axonshaft[bot]');
   expect(resolved).toEqual(['ours']);
+});
+
+test('the outcome has the card for the dashboard, and each step is a group in the log', async () => {
+  found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.', suggestion: 'b' }];
+  const { outcome } = await review([file('src/a.ts')]);
+  expect(outcome.output).toMatchObject({ headline: 'h', claim: 'c', not_checked: 'n', type: 'feature', confidence: 90, fixed: 0, comment_url: '' });
+  expect(outcome.output.findings).toEqual([{ severity: 'blocking', check: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.', suggestion: 'b', inline: true }]);
+  expect(outcome.output.checks.map((c) => `${c.key}:${c.state}`)).toEqual([
+    'correctness:failed',
+    'breakage:not_checked',
+    'standards:not_checked',
+    'tests:passed',
+    'docs:not_checked',
+    'security:not_checked',
+  ]);
+  expect(logs.filter((l) => l.startsWith('::group::'))).toEqual(['::group::Review', '::group::Post the review']);
+});
+
+test("the card is cut to the API's limits, so a long finding never loses the report", async () => {
+  found = [{ severity: 'nit', step: 'standards', file: 'src/a.ts', line: 1, title: 't'.repeat(400), body: 'b'.repeat(6000) }];
+  const { outcome } = await review([file('src/a.ts')]);
+  expect(outcome.output.findings[0]!.title).toHaveLength(300);
+  expect(outcome.output.findings[0]!.body).toHaveLength(5000);
 });

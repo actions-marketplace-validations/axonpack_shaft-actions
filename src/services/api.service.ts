@@ -45,8 +45,24 @@ export type Grant =
       job: GrantJob;
     };
 
-/** What `POST /v1/runs` takes. */
-export type RunSummary = {
+/** What the dashboard shows of a finished review: the card, as the PR comment has it. */
+export type RunOutput = {
+  headline: string;
+  claim: string;
+  impact: string;
+  scope: string;
+  not_checked: string;
+  type: string;
+  confidence: number;
+  comment_url: string;
+  checks: { key: string; label: string; state: string }[];
+  findings: { severity: string; check: string; file: string; line: number; end_line?: number; title: string; body: string; suggestion?: string; inline: boolean }[];
+  fixed: number;
+};
+
+/** What `POST /v1/runs` takes: a finished review, or a run that failed after it opened. */
+export type RunSummary = RunDone | { error: { code: string; message: string }; duration_ms: number };
+type RunDone = {
   verdict: string;
   model: string;
   effort: string;
@@ -55,6 +71,7 @@ export type RunSummary = {
   tokens: { input: number; output: number; cache_read: number; cache_write: number };
   /** Only for a run on an API key: on a Claude plan the SDK's price isn't what anyone pays. */
   cost_usd?: number;
+  output: RunOutput;
 };
 
 /** POST to the Axon Shaft API with a fresh OIDC token: the API refuses a token it has already seen. */

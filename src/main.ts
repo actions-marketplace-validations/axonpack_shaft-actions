@@ -5,7 +5,9 @@ import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, REVIEW_COMMAND, route } from './services/route.service';
+import { step } from './services/step.service';
 import { failureMarkdown, ShaftFailure } from './utils/failure.util';
+import { redact } from './utils/render.util';
 
 /** A setting from the Axon Shaft API, checked before the review starts. */
 function oneOf(name: string, allowed: string[], value: unknown): string {
@@ -21,6 +23,9 @@ function positive(name: string, value: unknown): number {
 
 const globs = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : []);
 
+/** Set once the API has opened the run's row: a failure after that is reported to it, so the dashboard shows it. */
+let reportFailure: ((e: unknown) => Promise<void>) | undefined;
+
 async function run(): Promise<void> {
   const started = Date.now();
   const r = route(context.eventName, context.payload);
@@ -29,7 +34,9 @@ async function run(): Promise<void> {
   const dryRun = core.getBooleanInput('dry_run');
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context.repo;
-  const grant = await fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork } : { job: r.mode });
+  const grant = await step('Config from the dashboard', () =>
+    fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork } : { job: r.mode }),
+  );
   if (!grant.run) {
     // The API's comment to post once: how to start a fork's review, or the list of commands for /help.
     if (typeof grant.comment === 'string' && typeof grant.github_token === 'string') {
@@ -47,8 +54,14 @@ async function run(): Promise<void> {
   if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
     return core.notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);
   }
+  const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64')];
+  reportFailure = (e) =>
+    reportRun({
+      error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
+      duration_ms: Date.now() - started,
+    });
   // On pull_request the checkout is the PR merged into its base; anywhere else it's the base branch.
-  if (context.eventName !== 'pull_request') checkoutHead(cwd, r.number, grant.github_token);
+  if (context.eventName !== 'pull_request') await step('Check out the pull request', async () => checkoutHead(cwd, r.number, grant.github_token));
 
   const { settings, job } = grant;
   const out = await reviewPullRequest({
@@ -57,7 +70,7 @@ async function run(): Promise<void> {
     repo,
     number: r.number,
     claude: grant.claude_token,
-    secrets: [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64')],
+    secrets,
     model: String(settings.model ?? ''),
     effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
     depth: oneOf('depth', ['standard', 'deep'], job.options.depth),
@@ -84,12 +97,14 @@ async function run(): Promise<void> {
     duration_ms: Date.now() - started,
     tokens: out.tokens,
     ...(grant.claude_token.kind === 'api_key' ? { cost_usd: out.costUsd } : {}),
+    output: out.output,
   });
 }
 
 /** Fail the step; a known failure also puts its card, message and link in the job summary. */
 async function fail(e: unknown): Promise<void> {
   core.setFailed(e instanceof Error ? e.message : String(e));
+  await reportFailure?.(e);
   if (!(e instanceof ShaftFailure)) return;
   await core.summary
     .addRaw(failureMarkdown(e))

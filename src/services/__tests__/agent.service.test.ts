@@ -1,6 +1,7 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
-vi.doMock('@actions/core', () => ({ info: () => {}, warning: () => {} }));
+const infos: string[] = [];
+vi.doMock('@actions/core', () => ({ info: (s: string) => infos.push(s), warning: () => {} }));
 /** What the mocked Agent SDK does on each `query`: yield these messages, throw, or wait for the abort. */
 let reply: 'hang' | Error | object[] = [];
 const asked: { options: { agents?: unknown; abortController: AbortController } }[] = [];
@@ -13,7 +14,7 @@ vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
     } else yield* reply;
   },
 }));
-const { cliEnv, deepAgents, runAgent, sumTokens } = await import('../agent.service');
+const { cliEnv, deepAgents, runAgent, sumTokens, toolTarget } = await import('../agent.service');
 
 beforeEach(() => {
   reply = [];
@@ -97,4 +98,24 @@ test('the tokens are the sum over every model the run used', () => {
   const u = (input: number) => ({ inputTokens: input, outputTokens: 2, cacheReadInputTokens: 3, cacheCreationInputTokens: 4, webSearchRequests: 0, costUSD: 0, contextWindow: 0, maxOutputTokens: 0 });
   expect(sumTokens({ 'claude-sonnet-5-5': u(10), 'claude-haiku-5-5': u(5) })).toEqual({ input: 15, output: 4, cache_read: 6, cache_write: 8 });
   expect(sumTokens({})).toEqual({ input: 0, output: 0, cache_read: 0, cache_write: 0 });
+});
+
+test('each tool call goes to the log, a deep pass\'s named after it', async () => {
+  const use = (id: string, name: string, input: object, parent: string | null = null) => ({
+    type: 'assistant',
+    parent_tool_use_id: parent,
+    message: { content: [{ type: 'tool_use', id, name, input }] },
+  });
+  reply = [
+    use('t1', 'Read', { file_path: 'src/pay.ts' }),
+    use('t2', 'Task', { subagent_type: 'security', description: 'Security pass' }),
+    use('t3', 'Grep', { pattern: 'exec\\(' }, 't2'),
+    { type: 'result', subtype: 'success', structured_output: { verdict: 'looks-good', headline: 'h', findings: [] }, modelUsage: {}, total_cost_usd: 0 },
+  ];
+  infos.length = 0;
+  await runAgent('prompt', options).catch(() => {});
+  expect(infos).toEqual(['Read src/pay.ts', 'Task Security pass', '[security] Grep exec\\(']);
+  expect(toolTarget({ command: 'bun   test\n --watch' })).toBe('bun test --watch');
+  expect(toolTarget({ file_path: 'x'.repeat(300) })).toHaveLength(200);
+  expect(toolTarget({})).toBe('');
 });

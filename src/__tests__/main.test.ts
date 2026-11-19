@@ -24,6 +24,7 @@ vi.doMock('@actions/core', () => ({
   notice: (m: string) => notices.push(m),
   warning: () => {},
   setOutput: () => {},
+  group: (_name: string, fn: () => Promise<unknown>) => fn(),
   summary: {
     addRaw(md: string) {
       jobSummary += md;
@@ -61,7 +62,8 @@ vi.doMock('../services/review.service', () => ({
 }));
 
 const tokens = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
-const outcome = { verdict: 'looks-good', findings: 0, summaryUrl: '', model: 'sonnet', effort: 'medium', bySeverity: { blocking: 0, should_fix: 0, nit: 0 }, tokens, costUsd: 0.42 };
+const output = { headline: 'h', claim: 'c', impact: 'i', scope: 's', not_checked: 'n', type: 'feature', confidence: 90, comment_url: '', checks: [], findings: [], fixed: 0 };
+const outcome = { verdict: 'looks-good', findings: 0, summaryUrl: '', model: 'sonnet', effort: 'medium', bySeverity: { blocking: 0, should_fix: 0, nit: 0 }, tokens, costUsd: 0.42, output };
 
 const prompt = { template: '# Review {{repo}}', passes: [] };
 const grant = {
@@ -195,7 +197,7 @@ const asks = { ...comment, comment: { ...comment.comment, body: '/review' } };
 test('the run report has the tokens, and the cost only for a run on an API key', async () => {
   api(Response.json(grant));
   await main();
-  expect(reported).toMatchObject({ verdict: 'looks-good', tokens });
+  expect(reported).toMatchObject({ verdict: 'looks-good', tokens, output });
   expect(reported).not.toHaveProperty('cost_usd');
   api(Response.json({ ...grant, claude_token: { kind: 'api_key', value: 'sk-ant-api-shaft' } }));
   finished = false;
@@ -258,6 +260,8 @@ test('a review failure goes to the job summary too', async () => {
   reviewError = (F) => new F('review_timed_out', 'The review ran past its 15-minute time limit.', 'https://shaft.axonpack.dev');
   await main();
   expect(failed).toEqual(['The review ran past its 15-minute time limit.']);
+  // The run's row is open, so the dashboard hears of the failure too.
+  expect(reported).toEqual({ error: { code: 'review_timed_out', message: 'The review ran past its 15-minute time limit.' }, duration_ms: expect.any(Number) });
   expect(jobSummary).toBe(
     '![The review ran past its 15-minute time limit.](https://shaft.axonpack.dev/errors/review_timed_out.svg)\n\nThe review ran past its 15-minute time limit.\n\n<https://shaft.axonpack.dev>',
   );

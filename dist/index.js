@@ -18524,6 +18524,9 @@ function issueCommand(command, properties, message) {
   const cmd = new Command(command, properties, message);
   process.stdout.write(cmd.toString() + os.EOL);
 }
+function issue(name, message = "") {
+  issueCommand(name, {}, message);
+}
 var CMD_STRING = "::";
 
 class Command {
@@ -19654,6 +19657,24 @@ function notice(message, properties = {}) {
 }
 function info(message) {
   process.stdout.write(message + os4.EOL);
+}
+function startGroup(name) {
+  issue("group", name);
+}
+function endGroup() {
+  issue("endgroup");
+}
+function group(name, fn) {
+  return __awaiter5(this, undefined, undefined, function* () {
+    startGroup(name);
+    let result;
+    try {
+      result = yield fn();
+    } finally {
+      endGroup();
+    }
+    return result;
+  });
 }
 function getIDToken(aud) {
   return __awaiter5(this, undefined, undefined, function* () {
@@ -58017,6 +58038,16 @@ function footer(f) {
   return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
+var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
+function checkStates(review, placed, checks) {
+  return STEPS.flatMap((key) => {
+    const found = placed.filter((p) => p.step === key);
+    if (key === "rules" && !found.length)
+      return [];
+    const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : checks && !checks.includes(key) ? "off" : review.checked.includes(key) ? "passed" : "not_checked";
+    return [{ key, label: CHECK_LABEL[key], state }];
+  });
+}
 function card(review, placed, fixed, f) {
   const n = (s) => placed.filter((p) => p.severity === s).length;
   const countChips = [
@@ -58026,13 +58057,7 @@ function card(review, placed, fixed, f) {
     !placed.length && chip("✅ No findings"),
     fixed && chip(`✅ ${fixed} fixed`)
   ].filter(Boolean);
-  const checkChips = STEPS.flatMap((step) => {
-    const found = placed.filter((p) => p.step === step);
-    if (step === "rules" && !found.length)
-      return [];
-    const mark = found.some((p) => p.severity === "blocking") ? "❌" : found.length ? "⚠️" : f.checks && !f.checks.includes(step) ? "➖" : review.checked.includes(step) ? "✅" : "⬜";
-    return [chip(`${mark} ${CHECK_LABEL[step]}`)];
-  });
+  const checkChips = checkStates(review, placed, f.checks).map((c) => chip(`${CHECK_MARK[c.state]} ${c.label}`));
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
   const alert = VERDICT_ALERT[review.verdict];
@@ -58248,9 +58273,15 @@ var sumTokens = (usage) => Object.values(usage).reduce((t, u) => ({
   cache_read: t.cache_read + u.cacheReadInputTokens,
   cache_write: t.cache_write + u.cacheCreationInputTokens
 }), { input: 0, output: 0, cache_read: 0, cache_write: 0 });
+function toolTarget(input) {
+  const v = input.file_path ?? input.path ?? input.pattern ?? input.command ?? input.description ?? input.url ?? "";
+  const line = String(v).replace(/\s+/g, " ").trim();
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line;
+}
 async function once(prompt, o, controller) {
   const deep = !!o.subagentModel && !!o.passes?.length;
   let result;
+  const passes = new Map;
   for await (const m of nrt({
     prompt,
     options: {
@@ -58275,6 +58306,17 @@ async function once(prompt, o, controller) {
   })) {
     if (m.type === "result")
       result = m;
+    if (m.type !== "assistant")
+      continue;
+    for (const b of m.message.content) {
+      if (b.type !== "tool_use")
+        continue;
+      const input = b.input ?? {};
+      if (typeof input.subagent_type === "string")
+        passes.set(b.id, input.subagent_type);
+      const who = m.parent_tool_use_id ? `[${passes.get(m.parent_tool_use_id) ?? "pass"}] ` : "";
+      info(`${who}${b.name} ${toolTarget(input)}`);
+    }
   }
   return result;
 }
@@ -58363,6 +58405,18 @@ async function collectContext(octokit, owner, repo, number, bot) {
   };
 }
 
+// src/services/step.service.ts
+function step(name, fn) {
+  return group(name, async () => {
+    const started = Date.now();
+    try {
+      return await fn();
+    } finally {
+      info(`Took ${((Date.now() - started) / 1000).toFixed(1)}s`);
+    }
+  });
+}
+
 // src/services/review.service.ts
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
 var MAX_DIFF = 200000;
@@ -58443,7 +58497,7 @@ async function resolveThreads(octokit, ctx, fps, bot) {
   }
 }
 async function reviewPullRequest(o) {
-  return reviewContext(await collectContext(o.octokit, o.owner, o.repo, o.number, o.bot), o);
+  return reviewContext(await step("Read the pull request", () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot)), o);
 }
 async function reviewContext(ctx, o) {
   const { octokit } = o;
@@ -58466,7 +58520,7 @@ async function reviewContext(ctx, o) {
   await writeSummary(startSummary(sha, prior));
   let result;
   try {
-    result = await runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
+    result = await step("Review", () => runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
       claude: o.claude,
       model: choice.model,
       effort: choice.effort,
@@ -58476,7 +58530,7 @@ async function reviewContext(ctx, o) {
       maxTurns: o.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd
-    });
+    }));
   } catch (e) {
     if (e instanceof ShaftFailure) {
       e.url ??= o.runUrl;
@@ -58486,6 +58540,7 @@ async function reviewContext(ctx, o) {
   }
   const { review } = result;
   info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
+  startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
@@ -58542,7 +58597,34 @@ ${clean(body)}`);
   else if (fixed.length) {
     await resolveThreads(octokit, ctx, fixed, o.bot).catch((e) => warning(`Resolving fixed threads failed: ${e.message}`));
   }
+  endGroup();
+  const cut = (text, max) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  const prose = (text) => cut(clean(text), 2000);
+  const output = {
+    headline: prose(review.headline),
+    claim: prose(review.claim),
+    impact: prose(review.impact),
+    scope: prose(review.scope),
+    not_checked: prose(review.not_checked),
+    type: cut(review.type, 40),
+    confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
+    comment_url: o.dryRun ? "" : summary?.html_url ?? "",
+    checks: checkStates(review, placed, o.checks),
+    findings: placed.slice(0, 200).map((p) => ({
+      severity: p.severity,
+      check: p.step,
+      file: cut(p.file, 500),
+      line: Math.max(1, p.line),
+      ...p.end_line ? { end_line: p.end_line } : {},
+      title: cut(clean(p.title), 300),
+      body: cut(clean(p.body), 5000),
+      ...p.suggestion ? { suggestion: cut(clean(p.suggestion), 5000) } : {},
+      inline: p.inline
+    })),
+    fixed: fixed.length
+  };
   return {
+    output,
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== "nit").length,
     summaryUrl: o.dryRun ? "" : summary?.html_url ?? "",
@@ -58627,6 +58709,7 @@ function positive(name, value) {
   throw new ShaftFailure("api_error", `The Axon Shaft API sent ${name} "${value}", which isn't a positive number. Check the repo's settings on the dashboard.`, DASHBOARD_URL);
 }
 var globs = (v) => Array.isArray(v) ? v.filter((g) => typeof g === "string") : [];
+var reportFailure;
 async function run() {
   const started = Date.now();
   const r = route(context2.eventName, context2.payload);
@@ -58635,7 +58718,7 @@ async function run() {
   const dryRun = getBooleanInput("dry_run");
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context2.repo;
-  const grant = await fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork } : { job: r.mode });
+  const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork } : { job: r.mode }));
   if (!grant.run) {
     if (typeof grant.comment === "string" && typeof grant.github_token === "string") {
       if (dryRun)
@@ -58655,8 +58738,13 @@ ${grant.comment}`);
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
     return notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);
   }
+  const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString("base64")];
+  reportFailure = (e) => reportRun({
+    error: { code: e instanceof ShaftFailure ? e.code : "review_failed", message: redact(e instanceof Error ? e.message : String(e), secrets) },
+    duration_ms: Date.now() - started
+  });
   if (context2.eventName !== "pull_request")
-    checkoutHead(cwd, r.number, grant.github_token);
+    await step("Check out the pull request", async () => checkoutHead(cwd, r.number, grant.github_token));
   const { settings, job } = grant;
   const out = await reviewPullRequest({
     octokit,
@@ -58664,7 +58752,7 @@ ${grant.comment}`);
     repo,
     number: r.number,
     claude: grant.claude_token,
-    secrets: [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString("base64")],
+    secrets,
     model: String(settings.model ?? ""),
     effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"], settings.effort),
     depth: oneOf("depth", ["standard", "deep"], job.options.depth),
@@ -58690,11 +58778,13 @@ ${grant.comment}`);
     findings: out.bySeverity,
     duration_ms: Date.now() - started,
     tokens: out.tokens,
-    ...grant.claude_token.kind === "api_key" ? { cost_usd: out.costUsd } : {}
+    ...grant.claude_token.kind === "api_key" ? { cost_usd: out.costUsd } : {},
+    output: out.output
   });
 }
 async function fail(e) {
   setFailed(e instanceof Error ? e.message : String(e));
+  await reportFailure?.(e);
   if (!(e instanceof ShaftFailure))
     return;
   await summary.addRaw(failureMarkdown(e)).write().catch((w) => warning(`Couldn't write the job summary: ${w.message}`));

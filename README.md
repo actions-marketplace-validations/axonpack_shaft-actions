@@ -52,7 +52,7 @@ Axon Shaft needs its dashboard. The action holds no settings and no prompt of it
 
 4. Open a pull request. To see the output in the job log before anything is posted, add `with: { dry_run: true }`.
 
-The workflow holds no secrets. With `id-token: write`, the action gets an OIDC token for the run and sends it to the Axon Shaft API with the job (`review` for a pull request event or a `/review` comment; `task` for `/fix` or `/axonshaft <prompt>`; `reply` for `/ask`; `help` for `/help`), which pull request event it was, and whether the pull request comes from a fork. When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt. Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`. After the review the action sends the verdict, model and finding counts to the dashboard's run history. If recording the run fails, the action logs a warning and the run still passes.
+The workflow holds no secrets. With `id-token: write`, the action gets an OIDC token for the run and sends it to the Axon Shaft API with the job (`review` for a pull request event or a `/review` comment; `task` for `/fix` or `/axonshaft <prompt>`; `reply` for `/ask`; `help` for `/help`), which pull request event it was, and whether the pull request comes from a fork. When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt. Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`. After the review the action sends the verdict, model, finding counts, tokens and the review card (the headline, each check's result and every finding, as the PR comment has them) to the dashboard, where the run has its own page. A run that fails after the API opened it sends its error instead. If recording the run fails, the action logs a warning and the run still passes.
 
 When the Code review job is off on the dashboard, or the event isn't one of its "When it runs" choices, the API says so and the run ends with a notice giving its reason. Nothing is posted.
 
@@ -162,6 +162,8 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. From 
 Inline comments go on the lines in the diff, one per blocking or should-fix finding, and nits too when the dashboard says to post them inline. A finding that already has an inline comment isn't posted again on the next push, and when a push fixes a finding, its thread is resolved.
 
 A dry run prints the same text to the job log.
+
+The job log folds each step into its own group, with how long it took: Config from the dashboard, Check out the pull request (on `pull_request_target` and comments), Read the pull request, Review and Post the review. The Review group lists each tool call the model made, such as `Read src/pay.ts` or `Grep retry\(`, with a deep pass's name before its own, such as `[security] Grep exec\(`. The run's page on the dashboard shows this log once the job ends.
 
 ## What the review can do
 
