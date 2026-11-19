@@ -58713,7 +58713,15 @@ function route(eventName, payload) {
 function pullRequestOf(payload) {
   const pr = payload.pull_request;
   if (pr)
-    return { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+    return {
+      number: pr.number,
+      title: pr.title,
+      branch: pr.head.ref,
+      author: pr.user.login,
+      base: pr.base.ref,
+      association: pr.author_association,
+      bot: pr.user.type === "Bot"
+    };
   const issue = payload.issue;
   if (issue?.pull_request)
     return { number: issue.number, title: issue.title, author: issue.user.login };

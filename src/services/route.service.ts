@@ -75,16 +75,28 @@ export function route(eventName: string, payload: any): Route {
   return { mode: 'task', number: number!, actor };
 }
 
-/** The pull request the run is for, as `POST /v1/token` takes it. */
-export type PullRequest = { number: number; title: string; branch?: string; author: string };
+/**
+ * The pull request the run is for, as `POST /v1/token` takes it. `base` (the branch it goes into),
+ * `association` (GitHub's `author_association`) and `bot` are for the review job's filters.
+ */
+export type PullRequest = { number: number; title: string; branch?: string; author: string; base?: string; association?: string; bot?: boolean };
 
 /**
  * The pull request from the payload, when it has one. An issue_comment on a pull request has it as
- * the issue, with no branch.
+ * the issue, with no branch; a review from a comment isn't filtered, so it needs none of the filters' facts.
  */
 export function pullRequestOf(payload: any): PullRequest | undefined {
   const pr = payload.pull_request;
-  if (pr) return { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+  if (pr)
+    return {
+      number: pr.number,
+      title: pr.title,
+      branch: pr.head.ref,
+      author: pr.user.login,
+      base: pr.base.ref,
+      association: pr.author_association,
+      bot: pr.user.type === 'Bot',
+    };
   const issue = payload.issue;
   if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login };
   return undefined;

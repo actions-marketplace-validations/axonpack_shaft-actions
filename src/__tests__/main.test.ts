@@ -145,7 +145,7 @@ test("pull_request sends the event, fork: false and the pull request, and review
     job: 'review',
     event: 'opened',
     fork: false,
-    pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat' },
+    pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat', base: 'main', association: 'MEMBER', bot: false },
   });
   expect(checkedOut).toEqual([]);
 });
@@ -156,7 +156,8 @@ test("pull_request_target is a review too: a fork's PR sends fork: true, and its
   api(Response.json(grant));
   await main();
   expect(failed).toEqual([]);
-  expect(asked).toEqual({ job: 'review', event: 'push', fork: true, pull_request: { number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger' } });
+  expect(asked).toEqual({ job: 'review', event: 'push', fork: true, pull_request: { number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger', base: 'main', association: 'FIRST_TIME_CONTRIBUTOR', bot: false },
+  });
   expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 13, 'ghs_shaft']]);
   expect(reviewed).toMatchObject({ number: 13 });
 });

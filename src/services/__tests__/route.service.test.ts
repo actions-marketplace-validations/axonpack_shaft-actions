@@ -79,11 +79,12 @@ test('anything else exits quietly', () => {
 });
 
 test("the pull request for the API comes from the payload; an issue_comment's has no branch, and one on an issue gives none", () => {
-  const retry = { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat' };
-  expect(pullRequestOf(opened)).toEqual(retry);
+  const retry = { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat', base: 'main', bot: false };
+  expect(pullRequestOf(opened)).toEqual({ ...retry, association: 'MEMBER' });
   expect(pullRequestOf(review)).toEqual(retry);
   expect(pullRequestOf(reviewComment)).toEqual(retry);
-  expect(pullRequestOf(fork)).toEqual({ number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger' });
+  expect(pullRequestOf(fork)).toEqual({ number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger', base: 'main', association: 'FIRST_TIME_CONTRIBUTOR', bot: false });
+  expect(pullRequestOf({ pull_request: { ...opened.pull_request, user: { login: 'dependabot[bot]', type: 'Bot' } } })).toMatchObject({ author: 'dependabot[bot]', bot: true });
   expect(pullRequestOf(comment)).toEqual({ number: 12, title: 'Retry failed uploads', author: 'octocat' });
   expect(pullRequestOf({ ...comment, issue: { number: 3, title: 'Crash', user: { login: 'octocat' } } })).toBeUndefined();
   expect(pullRequestOf(push)).toBeUndefined();

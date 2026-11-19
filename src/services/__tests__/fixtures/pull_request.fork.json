@@ -4,6 +4,7 @@
   "pull_request": {
     "number": 13,
     "title": "Fix typo",
+    "author_association": "FIRST_TIME_CONTRIBUTOR",
     "user": { "login": "stranger", "type": "User" },
     "head": { "ref": "patch-1", "sha": "b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0a1", "repo": { "full_name": "stranger/widgets" } },
     "base": { "ref": "main", "sha": "0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e", "repo": { "full_name": "acme/widgets" } }
