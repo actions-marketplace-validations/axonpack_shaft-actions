@@ -144,6 +144,8 @@ export type Footer = {
   /** `owner/repo`, for the links to the reviewed lines. */
   repo: string;
   runUrl?: string;
+  /** The run's page on the dashboard, which "Axon Shaft" links to; else the dashboard's home. */
+  dashboardRunUrl?: string;
   models: string;
   effort: string;
   reason: string;
@@ -170,7 +172,7 @@ function usage(t: NonNullable<Footer['tokens']>, costUsd?: number): string {
 function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
   const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : '';
-  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
+  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 
 const chip = (text: string) => `<kbd>${text}</kbd>`;

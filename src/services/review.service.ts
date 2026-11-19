@@ -43,6 +43,8 @@ export type ReviewOptions = {
   checks: string[];
   dryRun: boolean;
   runUrl?: string;
+  /** The run's page on the dashboard, when the API sends it. */
+  dashboardRunUrl?: string;
   cwd: string;
   /** The project's own variables the agent's commands get, by name. */
   env?: string[];
@@ -258,6 +260,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
     runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
     models:
       models.main +
       (models.fellBack ? ` (${choice.model} unavailable)` : '') +

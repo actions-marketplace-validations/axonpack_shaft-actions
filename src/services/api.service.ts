@@ -43,6 +43,8 @@ export type Grant =
       /** The dashboard's settings for this repo, already merged with the account's and the defaults. */
       settings: Record<string, unknown>;
       job: GrantJob;
+      /** The run's page on the dashboard. Older APIs don't send it. */
+      run_url?: string;
     };
 
 /** What the dashboard shows of a finished review: the card, as the PR comment has it. */

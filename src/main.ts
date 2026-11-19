@@ -86,6 +86,7 @@ async function run(): Promise<void> {
     checks: job.checks,
     dryRun,
     runUrl: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+    dashboardRunUrl: grant.run_url,
     cwd,
   });
   core.setOutput('verdict', out.verdict);

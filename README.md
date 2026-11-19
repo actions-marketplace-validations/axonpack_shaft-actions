@@ -196,6 +196,7 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. From 
 6. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
    On an API key the tokens show as the cost and the total, such as `$0.38 · 759k tokens`.
    On a subscription they show as the cache-weighted count with the total in brackets, such as `≈220k billed (759k with cache)`. A cache write counts 1.25 times, a cache read a tenth, and input and output as they are. Every turn reads the cached prompt again, so the total can be several times what was billed.
+   "Axon Shaft" in the footer links to the run's page on the dashboard. With an API that doesn't send the run's page, it links to the dashboard.
    The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
 #### The card

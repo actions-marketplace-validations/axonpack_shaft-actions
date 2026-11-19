@@ -58047,7 +58047,7 @@ function usage(t, costUsd) {
 function footer(f) {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
   const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : "";
-  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
+  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
 var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
@@ -58618,6 +58618,7 @@ ${c.body}`);
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
     runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
     models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
     effort: choice.effort,
     reason: choice.reason,
@@ -58824,6 +58825,7 @@ ${grant.comment}`);
     checks: job.checks,
     dryRun,
     runUrl: `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`,
+    dashboardRunUrl: grant.run_url,
     cwd
   });
   setOutput("verdict", out.verdict);

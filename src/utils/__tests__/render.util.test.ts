@@ -266,3 +266,10 @@ test('the footer shows the cost and total when known, else the cache-weighted co
   expect(formatTokens(1_250_000)).toBe('1.3M');
   expect(formatTokens(2_000_000)).toBe('2M');
 });
+
+test("the footer links Axon Shaft to the run's page when the API sent one, else to the dashboard", () => {
+  const placed = place(review.findings, files, 'summary');
+  const run = 'https://shaft.axonpack.dev/console/acme/projects/widgets/runs/7';
+  expect(renderSummary(review, placed, undefined, { ...info, dashboardRunUrl: run })).toContain(`<sub>[Axon Shaft](${run}) ·`);
+  expect(renderSummary(review, placed, undefined, info)).toContain('<sub>[Axon Shaft](https://shaft.axonpack.dev) ·');
+});
