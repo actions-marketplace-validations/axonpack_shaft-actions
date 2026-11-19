@@ -58684,6 +58684,10 @@ function route(eventName, payload) {
     return { mode: "reply", number, actor };
   return { mode: "task", number, actor };
 }
+function pullRequestOf(payload) {
+  const pr = payload.pull_request;
+  return pr && { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+}
 async function hasWriteAccess(octokit, owner, repo, username) {
   const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
   return data.permission === "admin" || data.permission === "write";
@@ -58718,7 +58722,8 @@ async function run() {
   const dryRun = getBooleanInput("dry_run");
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context2.repo;
-  const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork } : { job: r.mode }));
+  const pull_request = pullRequestOf(context2.payload);
+  const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork, pull_request } : { job: r.mode, pull_request }));
   if (!grant.run) {
     if (typeof grant.comment === "string" && typeof grant.github_token === "string") {
       if (dryRun)

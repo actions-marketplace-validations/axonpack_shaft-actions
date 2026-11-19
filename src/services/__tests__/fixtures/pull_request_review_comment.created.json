@@ -3,6 +3,8 @@
   "comment": { "id": 601, "body": "/axonshaft can you rename this?", "path": "src/retry.ts", "line": 42, "user": { "login": "maintainer", "type": "User" } },
   "pull_request": {
     "number": 12,
+    "title": "Retry failed uploads",
+    "user": { "login": "octocat", "type": "User" },
     "head": { "ref": "retry-uploads", "sha": "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0", "repo": { "full_name": "acme/widgets" } },
     "base": { "ref": "main", "sha": "0f9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e", "repo": { "full_name": "acme/widgets" } }
   },

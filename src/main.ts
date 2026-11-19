@@ -4,7 +4,7 @@ import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
 import { reviewPullRequest } from './services/review.service';
-import { commentOnce, hasWriteAccess, REVIEW_COMMAND, route } from './services/route.service';
+import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
 import { failureMarkdown, ShaftFailure } from './utils/failure.util';
 import { redact } from './utils/render.util';
@@ -34,8 +34,9 @@ async function run(): Promise<void> {
   const dryRun = core.getBooleanInput('dry_run');
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context.repo;
+  const pull_request = pullRequestOf(context.payload);
   const grant = await step('Config from the dashboard', () =>
-    fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork } : { job: r.mode }),
+    fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork, pull_request } : { job: r.mode, pull_request }),
   );
   if (!grant.run) {
     // The API's comment to post once: how to start a fork's review, or the list of commands for /help.

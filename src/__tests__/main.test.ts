@@ -137,10 +137,15 @@ test("a review reads only the dry_run input; everything else comes from the API'
   });
 });
 
-test("pull_request sends the event and fork: false, and reviews the workflow's checkout as it is", async () => {
+test("pull_request sends the event, fork: false and the pull request, and reviews the workflow's checkout as it is", async () => {
   api(Response.json(grant));
   await main();
-  expect(asked).toEqual({ job: 'review', event: 'opened', fork: false });
+  expect(asked).toEqual({
+    job: 'review',
+    event: 'opened',
+    fork: false,
+    pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat' },
+  });
   expect(checkedOut).toEqual([]);
 });
 
@@ -150,7 +155,7 @@ test("pull_request_target is a review too: a fork's PR sends fork: true, and its
   api(Response.json(grant));
   await main();
   expect(failed).toEqual([]);
-  expect(asked).toEqual({ job: 'review', event: 'push', fork: true });
+  expect(asked).toEqual({ job: 'review', event: 'push', fork: true, pull_request: { number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger' } });
   expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 13, 'ghs_shaft']]);
   expect(reviewed).toMatchObject({ number: 13 });
 });
@@ -205,7 +210,7 @@ test('the run report has the tokens, and the cost only for a run on an API key',
   expect(reported).toMatchObject({ tokens, cost_usd: 0.42 });
 });
 
-test('/review by someone with write access reviews the PR, with no event, at its head commit', async () => {
+test('/review by someone with write access reviews the PR, with no event and no pull request, at its head commit', async () => {
   context.eventName = 'issue_comment';
   context.payload = asks;
   api(Response.json(grant));

@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Octokit } from '../../types/octokit.type';
-import { commentOnce, hasWriteAccess, route } from '../route.service';
+import { commentOnce, hasWriteAccess, pullRequestOf, route } from '../route.service';
 import comment from './fixtures/issue_comment.created.json';
 import fork from './fixtures/pull_request.fork.json';
 import opened from './fixtures/pull_request.opened.json';
@@ -76,6 +76,16 @@ test('a slash word that is not one of the commands, such as /deploy, starts noth
 
 test('anything else exits quietly', () => {
   expect(quiet(route('push', push))).toBe(true);
+});
+
+test("the pull request for the API comes from the payload; an issue_comment's has no branch, so it gives none", () => {
+  const retry = { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat' };
+  expect(pullRequestOf(opened)).toEqual(retry);
+  expect(pullRequestOf(review)).toEqual(retry);
+  expect(pullRequestOf(reviewComment)).toEqual(retry);
+  expect(pullRequestOf(fork)).toEqual({ number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger' });
+  expect(pullRequestOf(comment)).toBeUndefined();
+  expect(pullRequestOf(push)).toBeUndefined();
 });
 
 test('write access: admin and write pass, the rest do not', async () => {

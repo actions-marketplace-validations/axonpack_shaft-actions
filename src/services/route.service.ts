@@ -75,6 +75,18 @@ export function route(eventName: string, payload: any): Route {
   return { mode: 'task', number: number!, actor };
 }
 
+/** The pull request the run is for, as `POST /v1/token` takes it. */
+export type PullRequest = { number: number; title: string; branch: string; author: string };
+
+/**
+ * The pull request from the payload, when it has one. An issue_comment's payload has only the issue,
+ * with no branch, so it sends none.
+ */
+export function pullRequestOf(payload: any): PullRequest | undefined {
+  const pr = payload.pull_request;
+  return pr && { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+}
+
 /** Only people with write access may start a review or a task from a comment. */
 export async function hasWriteAccess(octokit: Octokit, owner: string, repo: string, username: string): Promise<boolean> {
   const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });

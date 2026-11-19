@@ -1,14 +1,14 @@
 import * as core from '@actions/core';
 import { API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
-import type { ReviewEvent } from './route.service';
+import type { PullRequest, ReviewEvent } from './route.service';
 
 /**
- * What `POST /v1/token` takes: the job the event routed to, for a pull request event which one, and
- * for a review whether the PR comes from a fork.
+ * What `POST /v1/token` takes: the job the event routed to, for a pull request event which one, for
+ * a review whether the PR comes from a fork, and the pull request when the payload has it.
+ * `help` asks for the list of commands to post; the rest are a job kind.
  */
-/** `help` asks for the list of commands to post; the rest are a job kind. */
-export type GrantRequest = { job: 'review' | 'task' | 'reply' | 'help'; event?: ReviewEvent; fork?: boolean };
+export type GrantRequest = { job: 'review' | 'task' | 'reply' | 'help'; event?: ReviewEvent; fork?: boolean; pull_request?: PullRequest };
 
 /** One of the deep review's subagents, for a check the project keeps on. */
 export type Pass = { name: string; description: string; prompt: string };
