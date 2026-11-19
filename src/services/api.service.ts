@@ -40,9 +40,14 @@ export type Grant =
       run: true;
       github_token: string;
       claude_token: ClaudeToken;
-      /** The dashboard's settings for this repo, already merged with the account's and the defaults. */
+      /**
+       * The dashboard's settings for this repo, already merged with the account's and the defaults.
+       * `maxTurnsDefault: true` says `maxTurns` is the default, not a value set on the dashboard.
+       */
       settings: Record<string, unknown>;
       job: GrantJob;
+      /** The run's page on the dashboard. Older APIs don't send it. */
+      run_url?: string;
     };
 
 /** What the dashboard shows of a finished review: the card, as the PR comment has it. */

@@ -157,7 +157,7 @@ Everything else is set on the dashboard:
 | Effort | The effort, or `auto`. |
 | Depth | A deep review adds subagents for the correctness, breakage and security checks. |
 | Nits | How nits are shown, including whether they get inline comments. |
-| Turn limit | The most turns the model may take. |
+| Turn limit | The most turns the model may take. Left unset, the action picks it from the diff's size. See [the turn limit by size](#the-turn-limit-by-size). |
 | Time limit | How long the review may run. |
 | Review rules | The repo's own rules for the review. |
 | `skip` globs | Files to leave out of the review. |
@@ -179,7 +179,21 @@ With the model and effort on `auto`, the action picks both from the diff, after 
 - A model or effort set on the dashboard turns `auto` off for that one only.
 - On a deep review the subagents run on `sonnet` when the model is `auto`, and on the set model when it isn't.
 - If the Claude plan can't use the model `auto` picked, the review falls back to the next smaller one and the footer says so.
-- The footer always shows the model, the effort, the tokens the run used and the reason.
+- The footer always shows the model, the effort, the tokens the run used (see [the summary comment](#the-summary-comment)) and the reason.
+
+### The turn limit by size
+
+With no turn limit set on the dashboard, the action picks one from the diff's changed lines, after `skip`:
+
+| The diff | Turn limit |
+|---|---|
+| Under 100 lines | 12 |
+| Under 500 lines | 20 |
+| 500 lines or more, or a deep review | 30 |
+
+- A limit set on the dashboard always wins.
+- The action knows the limit wasn't set when the Axon Shaft API marks it as its default. With an API too old to say so, the review uses the limit the API sent.
+- When the action picked the limit by size, the footer's reason says so, such as `60 lines, up to 12 turns`.
 
 ## What gets posted
 
@@ -193,8 +207,11 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. From 
 3. The nits, folded.
 4. The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
 5. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
-6. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the total tokens and why `auto` picked them.
-   The dashboard's Runs list shows the same count, split into input, output and cache, with the cost for a run on an API key.
+6. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
+   On an API key the tokens show as the cost and the total, such as `$0.38 · 759k tokens`.
+   On a subscription they show as the cache-weighted count with the total in brackets, such as `≈220k billed (759k with cache)`. A cache write counts 1.25 times, a cache read a tenth, and input and output as they are. Every turn reads the cached prompt again, so the total can be several times what was billed.
+   "Axon Shaft" in the footer links to the run's page on the dashboard. With an API that doesn't send the run's page, it links to the dashboard.
+   The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
 #### The card
 

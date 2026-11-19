@@ -288,7 +288,7 @@ test('a deep review names its subagent model after the review model', async () =
 });
 
 test('chosenModels: aliases become the IDs the run reported, and a fallback says so', () => {
-  const choice = { model: 'opus', effort: 'high', reason: '', autoModel: true, subagentModel: 'sonnet' };
+  const choice = { model: 'opus', effort: 'high', reason: '', autoModel: true, subagentModel: 'sonnet', maxTurns: 30 };
   expect(chosenModels(['claude-sonnet-5-5', 'claude-haiku-5-5'], choice, false)).toEqual({ main: 'claude-sonnet-5-5', fellBack: true, subagents: [] });
   expect(chosenModels(['claude-opus-5'], { ...choice, autoModel: false, model: 'claude-opus-5' }, true)).toEqual({
     main: 'claude-opus-5',

@@ -23844,6 +23844,11 @@ function checkoutHead(cwd, number, token) {
 
 // src/utils/auto-pick.util.ts
 import { matchesGlob } from "node:path";
+var DEFAULT_MAX_TURNS = 30;
+var TURNS_BY_LINES = [
+  [100, 12],
+  [500, 20]
+];
 var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
 var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
 var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
@@ -23885,8 +23890,12 @@ function pick(input) {
     row = { model: "sonnet", effort: "medium", reason: size };
   const autoModel = !input.model || input.model === "auto";
   const model = autoModel ? row.model : input.model;
+  const sized = input.mode === "review" && input.depth !== "deep" && TURNS_BY_LINES.find(([below]) => lines < below)?.[1];
+  const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
   return {
     ...row,
+    reason: input.maxTurns === undefined && sized ? `${row.reason}, up to ${sized} turns` : row.reason,
+    maxTurns,
     model,
     effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
     subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
@@ -57951,6 +57960,11 @@ var package_default = {
 
 // src/utils/render.util.ts
 import { createHash } from "node:crypto";
+
+// src/utils/tokens.util.ts
+var billedTokens = (t) => Math.round(t.input + t.output + 1.25 * t.cache_write + 0.1 * t.cache_read);
+
+// src/utils/render.util.ts
 var SUMMARY_MARKER = "<!-- shaft:summary -->";
 var VERDICTS = ["blocking", "needs-changes", "looks-good"];
 var SEVERITIES = ["blocking", "should-fix", "nit"];
@@ -58032,10 +58046,17 @@ function parseState(body) {
   }
 }
 var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
+function usage(t, costUsd) {
+  const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
+  if (costUsd !== undefined)
+    return `$${costUsd.toFixed(2)} · ${total} tokens`;
+  const billed = formatTokens(billedTokens(t));
+  return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
+}
 function footer(f) {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  const t = f.tokens ? ` · ${formatTokens(f.tokens.input + f.tokens.output + f.tokens.cache_read + f.tokens.cache_write)} tokens` : "";
-  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
+  const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : "";
+  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
 var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
@@ -58531,7 +58552,7 @@ async function reviewContext(ctx, o) {
   const prior = parseState(ctx.summary?.body);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
-  const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort });
+  const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
@@ -58552,7 +58573,7 @@ async function reviewContext(ctx, o) {
       fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
       subagentModel: choice.subagentModel,
       passes,
-      maxTurns: o.maxTurns,
+      maxTurns: choice.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env
@@ -58606,10 +58627,12 @@ ${c.body}`);
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
     runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
     models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
     effort: choice.effort,
     reason: choice.reason,
     tokens: result.tokens,
+    costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined,
     skipped
   });
   if (o.dryRun)
@@ -58801,7 +58824,7 @@ ${grant.comment}`);
     effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"], settings.effort),
     depth: oneOf("depth", ["standard", "deep"], job.options.depth),
     nits: oneOf("nits", ["summary", "inline", "off"], job.options.nits),
-    maxTurns: positive("maxTurns", settings.maxTurns),
+    maxTurns: settings.maxTurns == null || settings.maxTurnsDefault === true ? undefined : positive("maxTurns", settings.maxTurns),
     timeoutMinutes: positive("timeLimit", settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),
@@ -58811,6 +58834,7 @@ ${grant.comment}`);
     checks: job.checks,
     dryRun,
     runUrl: `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`,
+    dashboardRunUrl: grant.run_url,
     cwd
   });
   setOutput("verdict", out.verdict);

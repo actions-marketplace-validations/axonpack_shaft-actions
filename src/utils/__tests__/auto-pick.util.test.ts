@@ -46,10 +46,25 @@ test('only docs, comments, lockfiles or config: haiku, low', () => {
 
 test('any other review: sonnet, medium', () => {
   const r = pick({ mode: 'review', files: [file('src/a.ts', 400), file('README.md', 12)] });
-  expect(r).toMatchObject({ model: 'sonnet', effort: 'medium', reason: '412 lines' });
+  expect(r).toMatchObject({ model: 'sonnet', effort: 'medium', reason: '412 lines, up to 20 turns' });
 });
 
 test('setting model or effort turns auto off for that one only', () => {
   expect(pick({ mode: 'review', files: [file('src/a.ts')], model: 'opus' })).toMatchObject({ model: 'opus', effort: 'medium', autoModel: false });
   expect(pick({ mode: 'review', files: [file('src/a.ts')], effort: 'max' })).toMatchObject({ model: 'sonnet', effort: 'max', autoModel: true });
+});
+
+test('max turns by size when the dashboard sets none: under 100 lines 12, under 500 lines 20, else 30', () => {
+  const turns = (lines: number, extra: object = {}) => pick({ mode: 'review', files: [file('src/a.ts', lines)], ...extra });
+  expect(turns(99)).toMatchObject({ maxTurns: 12, reason: '99 lines, up to 12 turns' });
+  expect(turns(100)).toMatchObject({ maxTurns: 20, reason: '100 lines, up to 20 turns' });
+  expect(turns(499).maxTurns).toBe(20);
+  expect(turns(500)).toMatchObject({ maxTurns: 30, reason: '500 lines' });
+  expect(turns(60, { depth: 'deep' })).toMatchObject({ maxTurns: 30, reason: '60 lines, deep' });
+  expect(pick({ mode: 'task', files: [file('src/a.ts')] }).maxTurns).toBe(30);
+});
+
+test("the dashboard's max turns always wins and leaves the reason alone", () => {
+  expect(pick({ mode: 'review', files: [file('src/a.ts', 60)], maxTurns: 50 })).toMatchObject({ maxTurns: 50, reason: '60 lines' });
+  expect(pick({ mode: 'review', files: [file('src/a.ts', 5000)], maxTurns: 5 }).maxTurns).toBe(5);
 });

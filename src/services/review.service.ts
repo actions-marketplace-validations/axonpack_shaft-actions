@@ -30,7 +30,8 @@ export type ReviewOptions = {
   effort: string;
   depth: string;
   nits: string;
-  maxTurns: number;
+  /** From the dashboard; unset picks one from the diff's size. */
+  maxTurns?: number;
   timeoutMinutes: number;
   /** Globs from the dashboard: changed files to leave out of the review, and to mark for a closer look. */
   skip: string[];
@@ -43,6 +44,8 @@ export type ReviewOptions = {
   checks: string[];
   dryRun: boolean;
   runUrl?: string;
+  /** The run's page on the dashboard, when the API sends it. */
+  dashboardRunUrl?: string;
   cwd: string;
   /** The project's own variables the agent's commands get, by name. */
   env?: string[];
@@ -178,7 +181,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   const prior = parseState(ctx.summary?.body);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
-  const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort });
+  const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
 
@@ -203,7 +206,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
       fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
       subagentModel: choice.subagentModel,
       passes,
-      maxTurns: o.maxTurns,
+      maxTurns: choice.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env,
@@ -258,6 +261,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
     runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
     models:
       models.main +
       (models.fellBack ? ` (${choice.model} unavailable)` : '') +
@@ -265,6 +269,8 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     effort: choice.effort,
     reason: choice.reason,
     tokens: result.tokens,
+    // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
+    costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
     skipped,
   });
   if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);

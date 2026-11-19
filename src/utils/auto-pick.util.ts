@@ -11,6 +11,7 @@ export type Choice = {
   subagentModel?: string;
   /** True when `model` came from the table, so a fallback may apply. */
   autoModel: boolean;
+  maxTurns: number;
 };
 
 export type PickInput = {
@@ -22,7 +23,16 @@ export type PickInput = {
   skip?: string[];
   model?: string;
   effort?: string;
+  /** From the dashboard; unset picks one from the diff's size. */
+  maxTurns?: number;
 };
+
+/** The turn cap when the dashboard sets none: the API's default, lower for a small diff. */
+export const DEFAULT_MAX_TURNS = 30;
+const TURNS_BY_LINES: [below: number, turns: number][] = [
+  [100, 12],
+  [500, 20],
+];
 
 const SENSITIVE =
   /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
@@ -70,8 +80,13 @@ export function pick(input: PickInput): Choice {
 
   const autoModel = !input.model || input.model === 'auto';
   const model = autoModel ? row.model : input.model!;
+  // A deep review's main session runs the passes and checks their findings, so it keeps the full cap.
+  const sized = input.mode === 'review' && input.depth !== 'deep' && TURNS_BY_LINES.find(([below]) => lines < below)?.[1];
+  const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
   return {
     ...row,
+    reason: input.maxTurns === undefined && sized ? `${row.reason}, up to ${sized} turns` : row.reason,
+    maxTurns,
     model,
     effort: !input.effort || input.effort === 'auto' ? row.effort : input.effort,
     // deep: opus verifies, sonnet runs the subagents. A model the user set runs both.

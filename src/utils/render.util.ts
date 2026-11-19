@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { DASHBOARD_URL, STATUS_CARDS_URL } from '../consts/api.const';
 import { failureMarkdown, type ShaftFailure } from './failure.util';
+import { billedTokens } from './tokens.util';
 
 export const SUMMARY_MARKER = '<!-- shaft:summary -->';
 
@@ -143,11 +144,15 @@ export type Footer = {
   /** `owner/repo`, for the links to the reviewed lines. */
   repo: string;
   runUrl?: string;
+  /** The run's page on the dashboard, which "Axon Shaft" links to; else the dashboard's home. */
+  dashboardRunUrl?: string;
   models: string;
   effort: string;
   reason: string;
-  /** What the run used; the footer shows them in all. */
+  /** What the run used. */
   tokens?: { input: number; output: number; cache_read: number; cache_write: number };
+  /** The run's price in US dollars, set only for a run on an API key. */
+  costUsd?: number;
   skipped?: number;
   /** The catalog checks the project keeps on, from the Axon Shaft API; the others show as off. */
   checks?: string[];
@@ -156,10 +161,18 @@ export type Footer = {
 /** A token count, such as "950", "18k" or "1.2M". */
 export const formatTokens = (n: number) => (n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`);
 
+/** The run's price and total when it has a price, else the cache-weighted count with the total in brackets. */
+function usage(t: NonNullable<Footer['tokens']>, costUsd?: number): string {
+  const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
+  if (costUsd !== undefined) return `$${costUsd.toFixed(2)} · ${total} tokens`;
+  const billed = formatTokens(billedTokens(t));
+  return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
+}
+
 function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
-  const t = f.tokens ? ` · ${formatTokens(f.tokens.input + f.tokens.output + f.tokens.cache_read + f.tokens.cache_write)} tokens` : '';
-  return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
+  const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : '';
+  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 
 const chip = (text: string) => `<kbd>${text}</kbd>`;

@@ -136,6 +136,29 @@ test("a review reads only the dry_run input; everything else comes from the API'
     checks: ['correctness'],
     dryRun: false,
   });
+  expect(reviewed?.dashboardRunUrl).toBeUndefined();
+});
+
+test("the run's dashboard page from the grant reaches the review", async () => {
+  api(Response.json({ ...grant, run_url: 'https://shaft.axonpack.dev/runs/7' }));
+  await main();
+  expect(reviewed).toMatchObject({ dashboardRunUrl: 'https://shaft.axonpack.dev/runs/7' });
+});
+
+test('a maxTurns the dashboard left unset reaches the review unset, so it picks one by size', async () => {
+  api(Response.json({ ...grant, settings: { ...grant.settings, maxTurns: null } }));
+  await main();
+  expect(failed).toEqual([]);
+  expect(reviewed?.maxTurns).toBeUndefined();
+});
+
+test('a maxTurns the API marks as its default reaches the review unset; one set on the dashboard is kept', async () => {
+  api(Response.json({ ...grant, settings: { ...grant.settings, maxTurnsDefault: true } }));
+  await main();
+  expect(reviewed?.maxTurns).toBeUndefined();
+  api(Response.json({ ...grant, settings: { ...grant.settings, maxTurnsDefault: false } }));
+  await main();
+  expect(reviewed?.maxTurns).toBe(30);
 });
 
 test("pull_request sends the event, fork: false and the pull request, and reviews the workflow's checkout as it is", async () => {
