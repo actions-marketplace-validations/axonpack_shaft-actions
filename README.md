@@ -192,6 +192,7 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 | 500 lines or more, or a deep review | 30 |
 
 - A limit set on the dashboard always wins.
+- The action knows the limit wasn't set when the Axon Shaft API marks it as its default. With an API too old to say so, the review uses the limit the API sent.
 - When the action picked the limit by size, the footer's reason says so, such as `60 lines, up to 12 turns`.
 
 ## What gets posted

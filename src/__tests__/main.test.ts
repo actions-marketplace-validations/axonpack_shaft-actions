@@ -152,6 +152,15 @@ test('a maxTurns the dashboard left unset reaches the review unset, so it picks 
   expect(reviewed?.maxTurns).toBeUndefined();
 });
 
+test('a maxTurns the API marks as its default reaches the review unset; one set on the dashboard is kept', async () => {
+  api(Response.json({ ...grant, settings: { ...grant.settings, maxTurnsDefault: true } }));
+  await main();
+  expect(reviewed?.maxTurns).toBeUndefined();
+  api(Response.json({ ...grant, settings: { ...grant.settings, maxTurnsDefault: false } }));
+  await main();
+  expect(reviewed?.maxTurns).toBe(30);
+});
+
 test("pull_request sends the event, fork: false and the pull request, and reviews the workflow's checkout as it is", async () => {
   api(Response.json(grant));
   await main();

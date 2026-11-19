@@ -58824,7 +58824,7 @@ ${grant.comment}`);
     effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"], settings.effort),
     depth: oneOf("depth", ["standard", "deep"], job.options.depth),
     nits: oneOf("nits", ["summary", "inline", "off"], job.options.nits),
-    maxTurns: settings.maxTurns == null ? undefined : positive("maxTurns", settings.maxTurns),
+    maxTurns: settings.maxTurns == null || settings.maxTurnsDefault === true ? undefined : positive("maxTurns", settings.maxTurns),
     timeoutMinutes: positive("timeLimit", settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),
