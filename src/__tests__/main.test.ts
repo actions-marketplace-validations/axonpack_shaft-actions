@@ -70,7 +70,7 @@ const grant = {
   run: true,
   github_token: 'ghs_shaft',
   claude_token: { kind: 'oauth', value: 'sk-ant-oat-shaft' },
-  settings: { model: 'auto', effort: 'auto', rules: 'Use tabs.', skip: ['**/*.lock'], focus: ['src/core/**'], maxTurns: 30, timeLimit: 15 },
+  settings: { model: 'auto', effort: 'auto', rules: 'Use tabs.', skip: ['**/*.lock'], focus: ['src/core/**'], maxTurns: 30, timeLimit: 15, env: ['NODE_OPTIONS'] },
   job: { type: 'review', version: 2, options: { on: ['opened'], depth: 'standard', nits: 'summary' }, checks: ['correctness'], prompt },
 };
 /** What the action sent to /v1/token, and to /v1/runs. */
@@ -130,6 +130,7 @@ test("a review reads only the dry_run input; everything else comes from the API'
     timeoutMinutes: 15,
     skip: ['**/*.lock'],
     focus: ['src/core/**'],
+    env: ['NODE_OPTIONS'],
     bot: 'axonshaft[bot]',
     prompt,
     checks: ['correctness'],

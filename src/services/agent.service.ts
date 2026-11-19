@@ -7,6 +7,7 @@ import * as core from '@actions/core';
 import { type AgentDefinition, type EffortLevel, type HookCallback, type ModelUsage, type PreToolUseHookInput, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import pkg from '../../package.json' with { type: 'json' };
 import { DASHBOARD_URL } from '../consts/api.const';
+import { ENV_ALLOW, ENV_DENIED } from '../consts/env.const';
 import type { ClaudeToken, Pass } from './api.service';
 import { ShaftFailure } from '../utils/failure.util';
 import { type Review, SEVERITIES, STEPS, TYPES, VERDICTS } from '../utils/render.util';
@@ -109,14 +110,15 @@ function claudeBinary(): string | undefined {
 }
 
 /**
- * The CLI's environment: only `PATH`, `HOME` and the Claude token, so nothing else the runner holds
- * (the OIDC request token, the action's inputs, GITHUB_TOKEN) is there to leak. The CLI scrubs the
- * Claude token from the environment of what it runs (git).
+ * The CLI's environment, which every command the model runs inherits: `ENV_ALLOW`, the project's own
+ * `names` (never one `ENV_DENIED` matches) and the Claude token. Nothing else the runner holds (the
+ * OIDC request token, the action's inputs, GITHUB_TOKEN) and no GitHub token of ours is there to
+ * leak. The CLI scrubs the Claude token from the environment of what it runs.
  */
-export function cliEnv(claude: ClaudeToken): Record<string, string | undefined> {
+export function cliEnv(claude: ClaudeToken, names: string[] = []): Record<string, string | undefined> {
+  const pass = [...ENV_ALLOW, ...names.filter((n) => !ENV_DENIED.test(n))].filter((n) => process.env[n] !== undefined);
   return {
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    ...Object.fromEntries(pass.map((n) => [n, process.env[n]])),
     [claude.kind === 'oauth' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY']: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}`,
@@ -139,6 +141,8 @@ export type AgentOptions = {
   maxTurns: number;
   timeoutMinutes: number;
   cwd: string;
+  /** The project's own variables to pass through, by name. */
+  env?: string[];
 };
 
 /** What a run used, summed over its models, as `POST /v1/runs` takes it. */
@@ -188,7 +192,7 @@ async function once(prompt: string, o: AgentOptions, controller: AbortController
       outputFormat: { type: 'json_schema', schema: SCHEMA },
       agents: deep ? deepAgents(o.subagentModel!, o.effort as EffortLevel, o.passes!) : undefined,
       abortController: controller,
-      env: cliEnv(o.claude),
+      env: cliEnv(o.claude, o.env),
       pathToClaudeCodeExecutable: claudeBinary(),
     },
   })) {

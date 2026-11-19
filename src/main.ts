@@ -80,6 +80,7 @@ async function run(): Promise<void> {
     timeoutMinutes: positive('timeLimit', settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),
+    env: globs(settings.env),
     bot: APP_BOT,
     prompt: job.prompt,
     checks: job.checks,

@@ -14,6 +14,7 @@ vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
     } else yield* reply;
   },
 }));
+const { ENV_ALLOW } = await import('../../consts/env.const');
 const { cliEnv, deepAgents, runAgent, sumTokens, toolTarget } = await import('../agent.service');
 
 beforeEach(() => {
@@ -21,19 +22,33 @@ beforeEach(() => {
   asked.length = 0;
 });
 
-test('the CLI gets PATH, HOME and the Claude token, and nothing else the runner holds', () => {
+test('the CLI gets the allowlist, the project\'s own names and the Claude token, and no token the runner holds', () => {
   Object.assign(process.env, {
     ACTIONS_ID_TOKEN_REQUEST_URL: 'https://oidc.example',
     ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc-secret',
     ACTIONS_RUNTIME_TOKEN: 'runtime-secret',
     INPUT_GITHUB_TOKEN: 'ghs_input',
+    INPUT_DRY_RUN: 'false',
     GITHUB_TOKEN: 'ghs_env',
     ANTHROPIC_API_KEY: 'sk-ant-api-other',
+    LANG: 'C.UTF-8',
+    CI: 'true',
+    NODE_OPTIONS: '--max-old-space-size=4096',
+    SECRET_THING: 'not-passed',
   });
-  const env = cliEnv({ kind: 'oauth', value: 'sk-ant-oat-1' });
-  expect(Object.keys(env).sort()).toEqual(['CLAUDE_AGENT_SDK_CLIENT_APP', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'HOME', 'PATH']);
-  expect(env).toMatchObject({ CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-1', CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1', PATH: process.env.PATH, HOME: process.env.HOME });
-  expect(JSON.stringify(env)).not.toMatch(/oidc|runtime-secret|ghs_|sk-ant-api/);
+  // A project asking for denied names gets none of them.
+  const names = ['NODE_OPTIONS', 'UNSET_NAME', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'INPUT_GITHUB_TOKEN', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'];
+  const env = cliEnv({ kind: 'oauth', value: 'sk-ant-oat-1' }, names);
+  expect(env).toMatchObject({
+    CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-1',
+    CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+    PATH: process.env.PATH,
+    LANG: 'C.UTF-8',
+    CI: 'true',
+    NODE_OPTIONS: '--max-old-space-size=4096',
+  });
+  expect(Object.keys(env).filter((k) => !ENV_ALLOW.includes(k)).sort()).toEqual(['CLAUDE_AGENT_SDK_CLIENT_APP', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'NODE_OPTIONS']);
+  expect(JSON.stringify(env)).not.toMatch(/oidc|runtime-secret|ghs_|sk-ant-api|not-passed/);
   expect(cliEnv({ kind: 'api_key', value: 'sk-ant-api-1' })).toMatchObject({ ANTHROPIC_API_KEY: 'sk-ant-api-1' });
 });
 

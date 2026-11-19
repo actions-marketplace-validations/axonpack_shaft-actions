@@ -57949,6 +57949,26 @@ var package_default = {
   }
 };
 
+// src/consts/env.const.ts
+var ENV_ALLOW = [
+  "PATH",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TZ",
+  "TMPDIR",
+  "CI",
+  "GITHUB_ACTIONS",
+  "RUNNER_OS",
+  "RUNNER_ARCH",
+  "GITHUB_REPOSITORY",
+  "GITHUB_SHA",
+  "GITHUB_REF",
+  "GITHUB_WORKSPACE"
+];
+var ENV_DENIED = /^(ACTIONS_|INPUT_|ANTHROPIC_|CLAUDE_)|^GITHUB_TOKEN$/;
+
 // src/utils/render.util.ts
 import { createHash } from "node:crypto";
 var SUMMARY_MARKER = "<!-- shaft:summary -->";
@@ -58257,10 +58277,10 @@ function claudeBinary() {
   }
   return bin;
 }
-function cliEnv(claude) {
+function cliEnv(claude, names = []) {
+  const pass = [...ENV_ALLOW, ...names.filter((n) => !ENV_DENIED.test(n))].filter((n) => process.env[n] !== undefined);
   return {
-    PATH: process.env.PATH,
-    HOME: process.env.HOME,
+    ...Object.fromEntries(pass.map((n) => [n, process.env[n]])),
     [claude.kind === "oauth" ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY"]: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}`
@@ -58300,7 +58320,7 @@ async function once(prompt, o, controller) {
       outputFormat: { type: "json_schema", schema: SCHEMA },
       agents: deep ? deepAgents(o.subagentModel, o.effort, o.passes) : undefined,
       abortController: controller,
-      env: cliEnv(o.claude),
+      env: cliEnv(o.claude, o.env),
       pathToClaudeCodeExecutable: claudeBinary()
     }
   })) {
@@ -58529,7 +58549,8 @@ async function reviewContext(ctx, o) {
       passes,
       maxTurns: o.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
-      cwd: o.cwd
+      cwd: o.cwd,
+      env: o.env
     }));
   } catch (e) {
     if (e instanceof ShaftFailure) {
@@ -58771,6 +58792,7 @@ ${grant.comment}`);
     timeoutMinutes: positive("timeLimit", settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),
+    env: globs(settings.env),
     bot: APP_BOT,
     prompt: job.prompt,
     checks: job.checks,

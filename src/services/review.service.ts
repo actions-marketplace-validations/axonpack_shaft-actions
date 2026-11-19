@@ -44,6 +44,8 @@ export type ReviewOptions = {
   dryRun: boolean;
   runUrl?: string;
   cwd: string;
+  /** The project's own variables the agent's commands get, by name. */
+  env?: string[];
 };
 
 export type ReviewOutcome = {
@@ -204,6 +206,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
       maxTurns: o.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
+      env: o.env,
     }),
     );
   } catch (e) {
