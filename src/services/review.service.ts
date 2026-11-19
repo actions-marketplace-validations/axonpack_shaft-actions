@@ -30,7 +30,8 @@ export type ReviewOptions = {
   effort: string;
   depth: string;
   nits: string;
-  maxTurns: number;
+  /** From the dashboard; unset picks one from the diff's size. */
+  maxTurns?: number;
   timeoutMinutes: number;
   /** Globs from the dashboard: changed files to leave out of the review, and to mark for a closer look. */
   skip: string[];
@@ -180,7 +181,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   const prior = parseState(ctx.summary?.body);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
-  const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort });
+  const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
 
@@ -205,7 +206,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
       fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
       subagentModel: choice.subagentModel,
       passes,
-      maxTurns: o.maxTurns,
+      maxTurns: choice.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env,

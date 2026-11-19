@@ -23844,6 +23844,11 @@ function checkoutHead(cwd, number, token) {
 
 // src/utils/auto-pick.util.ts
 import { matchesGlob } from "node:path";
+var DEFAULT_MAX_TURNS = 30;
+var TURNS_BY_LINES = [
+  [100, 12],
+  [500, 20]
+];
 var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
 var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
 var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
@@ -23885,8 +23890,12 @@ function pick(input) {
     row = { model: "sonnet", effort: "medium", reason: size };
   const autoModel = !input.model || input.model === "auto";
   const model = autoModel ? row.model : input.model;
+  const sized = input.mode === "review" && input.depth !== "deep" && TURNS_BY_LINES.find(([below]) => lines < below)?.[1];
+  const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
   return {
     ...row,
+    reason: input.maxTurns === undefined && sized ? `${row.reason}, up to ${sized} turns` : row.reason,
+    maxTurns,
     model,
     effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
     subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
@@ -58543,7 +58552,7 @@ async function reviewContext(ctx, o) {
   const prior = parseState(ctx.summary?.body);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
-  const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort });
+  const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
@@ -58564,7 +58573,7 @@ async function reviewContext(ctx, o) {
       fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
       subagentModel: choice.subagentModel,
       passes,
-      maxTurns: o.maxTurns,
+      maxTurns: choice.maxTurns,
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env
@@ -58815,7 +58824,7 @@ ${grant.comment}`);
     effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"], settings.effort),
     depth: oneOf("depth", ["standard", "deep"], job.options.depth),
     nits: oneOf("nits", ["summary", "inline", "off"], job.options.nits),
-    maxTurns: positive("maxTurns", settings.maxTurns),
+    maxTurns: settings.maxTurns == null ? undefined : positive("maxTurns", settings.maxTurns),
     timeoutMinutes: positive("timeLimit", settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),

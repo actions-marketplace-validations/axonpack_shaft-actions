@@ -145,6 +145,13 @@ test("the run's dashboard page from the grant reaches the review", async () => {
   expect(reviewed).toMatchObject({ dashboardRunUrl: 'https://shaft.axonpack.dev/runs/7' });
 });
 
+test('a maxTurns the dashboard left unset reaches the review unset, so it picks one by size', async () => {
+  api(Response.json({ ...grant, settings: { ...grant.settings, maxTurns: null } }));
+  await main();
+  expect(failed).toEqual([]);
+  expect(reviewed?.maxTurns).toBeUndefined();
+});
+
 test("pull_request sends the event, fork: false and the pull request, and reviews the workflow's checkout as it is", async () => {
   api(Response.json(grant));
   await main();

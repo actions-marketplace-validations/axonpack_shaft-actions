@@ -76,7 +76,8 @@ async function run(): Promise<void> {
     effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
     depth: oneOf('depth', ['standard', 'deep'], job.options.depth),
     nits: oneOf('nits', ['summary', 'inline', 'off'], job.options.nits),
-    maxTurns: positive('maxTurns', settings.maxTurns),
+    // Unset: the review picks a cap from the diff's size.
+    maxTurns: settings.maxTurns == null ? undefined : positive('maxTurns', settings.maxTurns),
     timeoutMinutes: positive('timeLimit', settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),

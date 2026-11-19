@@ -157,7 +157,7 @@ Everything else is set on the dashboard:
 | Effort | The effort, or `auto`. |
 | Depth | A deep review adds subagents for the correctness, breakage and security checks. |
 | Nits | How nits are shown, including whether they get inline comments. |
-| Turn limit | The most turns the model may take. |
+| Turn limit | The most turns the model may take. Left unset, the action picks it from the diff's size. See [the turn limit by size](#the-turn-limit-by-size). |
 | Time limit | How long the review may run. |
 | Review rules | The repo's own rules for the review. |
 | `skip` globs | Files to leave out of the review. |
@@ -180,6 +180,19 @@ With the model and effort on `auto`, the action picks both from the diff, after 
 - On a deep review the subagents run on `sonnet` when the model is `auto`, and on the set model when it isn't.
 - If the Claude plan can't use the model `auto` picked, the review falls back to the next smaller one and the footer says so.
 - The footer always shows the model, the effort, the tokens the run used (see [the summary comment](#the-summary-comment)) and the reason.
+
+### The turn limit by size
+
+With no turn limit set on the dashboard, the action picks one from the diff's changed lines, after `skip`:
+
+| The diff | Turn limit |
+|---|---|
+| Under 100 lines | 12 |
+| Under 500 lines | 20 |
+| 500 lines or more, or a deep review | 30 |
+
+- A limit set on the dashboard always wins.
+- When the action picked the limit by size, the footer's reason says so, such as `60 lines, up to 12 turns`.
 
 ## What gets posted
 
