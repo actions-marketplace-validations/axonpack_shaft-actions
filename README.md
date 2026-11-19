@@ -179,7 +179,7 @@ With the model and effort on `auto`, the action picks both from the diff, after 
 - A model or effort set on the dashboard turns `auto` off for that one only.
 - On a deep review the subagents run on `sonnet` when the model is `auto`, and on the set model when it isn't.
 - If the Claude plan can't use the model `auto` picked, the review falls back to the next smaller one and the footer says so.
-- The footer always shows the model, the effort, the tokens the run used and the reason.
+- The footer always shows the model, the effort, the tokens the run used (see [the summary comment](#the-summary-comment)) and the reason.
 
 ## What gets posted
 
@@ -193,8 +193,10 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. From 
 3. The nits, folded.
 4. The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
 5. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
-6. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the total tokens and why `auto` picked them.
-   The dashboard's Runs list shows the same count, split into input, output and cache, with the cost for a run on an API key.
+6. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
+   On an API key the tokens show as the cost and the total, such as `$0.38 · 759k tokens`.
+   On a subscription they show as the cache-weighted count with the total in brackets, such as `≈220k billed (759k with cache)`. A cache write counts 1.25 times, a cache read a tenth, and input and output as they are. Every turn reads the cached prompt again, so the total can be several times what was billed.
+   The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
 #### The card
 

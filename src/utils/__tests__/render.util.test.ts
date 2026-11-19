@@ -3,6 +3,7 @@ import { parseReview } from '../../services/agent.service';
 import {
   diffLines,
   type Finding,
+  type Footer,
   fingerprint,
   formatTokens,
   inlineBody,
@@ -255,12 +256,12 @@ test('a check the model left out of checked shows ⬜, not ✅', () => {
   expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>⬜ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>⬜ Docs</kbd> <kbd>⬜ Security</kbd>');
 });
 
-test('the footer counts every token the run used', () => {
-  const body = renderSummary(review, place(review.findings, files, 'summary'), undefined, {
-    ...info,
-    tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 },
-  });
-  expect(body).toContain('· claude-haiku-4 · low · 182k tokens · 3 lines</sub>');
+test('the footer shows the cost and total when known, else the cache-weighted count', () => {
+  const tokens = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
+  const body = (f: Partial<Footer>) => renderSummary(review, place(review.findings, files, 'summary'), undefined, { ...info, tokens, ...f });
+  expect(body({})).toContain('· claude-haiku-4 · low · ≈139k billed (182k with cache) · 3 lines</sub>');
+  expect(body({ costUsd: 0.384 })).toContain('· claude-haiku-4 · low · $0.38 · 182k tokens · 3 lines</sub>');
+  expect(body({ tokens: { ...tokens, cache_read: 0, cache_write: 0 } })).toContain('· low · 126k tokens · 3 lines</sub>');
   expect(formatTokens(950)).toBe('950');
   expect(formatTokens(1_250_000)).toBe('1.3M');
   expect(formatTokens(2_000_000)).toBe('2M');

@@ -57951,6 +57951,11 @@ var package_default = {
 
 // src/utils/render.util.ts
 import { createHash } from "node:crypto";
+
+// src/utils/tokens.util.ts
+var billedTokens = (t) => Math.round(t.input + t.output + 1.25 * t.cache_write + 0.1 * t.cache_read);
+
+// src/utils/render.util.ts
 var SUMMARY_MARKER = "<!-- shaft:summary -->";
 var VERDICTS = ["blocking", "needs-changes", "looks-good"];
 var SEVERITIES = ["blocking", "should-fix", "nit"];
@@ -58032,9 +58037,16 @@ function parseState(body) {
   }
 }
 var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
+function usage(t, costUsd) {
+  const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
+  if (costUsd !== undefined)
+    return `$${costUsd.toFixed(2)} · ${total} tokens`;
+  const billed = formatTokens(billedTokens(t));
+  return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
+}
 function footer(f) {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  const t = f.tokens ? ` · ${formatTokens(f.tokens.input + f.tokens.output + f.tokens.cache_read + f.tokens.cache_write)} tokens` : "";
+  const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : "";
   return `<sub>[Axon Shaft](${DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
@@ -58610,6 +58622,7 @@ ${c.body}`);
     effort: choice.effort,
     reason: choice.reason,
     tokens: result.tokens,
+    costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined,
     skipped
   });
   if (o.dryRun)

@@ -265,6 +265,8 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     effort: choice.effort,
     reason: choice.reason,
     tokens: result.tokens,
+    // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
+    costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
     skipped,
   });
   if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
