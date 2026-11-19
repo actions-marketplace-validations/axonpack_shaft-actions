@@ -76,15 +76,18 @@ export function route(eventName: string, payload: any): Route {
 }
 
 /** The pull request the run is for, as `POST /v1/token` takes it. */
-export type PullRequest = { number: number; title: string; branch: string; author: string };
+export type PullRequest = { number: number; title: string; branch?: string; author: string };
 
 /**
- * The pull request from the payload, when it has one. An issue_comment's payload has only the issue,
- * with no branch, so it sends none.
+ * The pull request from the payload, when it has one. An issue_comment on a pull request has it as
+ * the issue, with no branch.
  */
 export function pullRequestOf(payload: any): PullRequest | undefined {
   const pr = payload.pull_request;
-  return pr && { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+  if (pr) return { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+  const issue = payload.issue;
+  if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login };
+  return undefined;
 }
 
 /** Only people with write access may start a review or a task from a comment. */

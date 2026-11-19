@@ -58686,7 +58686,12 @@ function route(eventName, payload) {
 }
 function pullRequestOf(payload) {
   const pr = payload.pull_request;
-  return pr && { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+  if (pr)
+    return { number: pr.number, title: pr.title, branch: pr.head.ref, author: pr.user.login };
+  const issue = payload.issue;
+  if (issue?.pull_request)
+    return { number: issue.number, title: issue.title, author: issue.user.login };
+  return;
 }
 async function hasWriteAccess(octokit, owner, repo, username) {
   const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });

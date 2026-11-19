@@ -78,13 +78,14 @@ test('anything else exits quietly', () => {
   expect(quiet(route('push', push))).toBe(true);
 });
 
-test("the pull request for the API comes from the payload; an issue_comment's has no branch, so it gives none", () => {
+test("the pull request for the API comes from the payload; an issue_comment's has no branch, and one on an issue gives none", () => {
   const retry = { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat' };
   expect(pullRequestOf(opened)).toEqual(retry);
   expect(pullRequestOf(review)).toEqual(retry);
   expect(pullRequestOf(reviewComment)).toEqual(retry);
   expect(pullRequestOf(fork)).toEqual({ number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger' });
-  expect(pullRequestOf(comment)).toBeUndefined();
+  expect(pullRequestOf(comment)).toEqual({ number: 12, title: 'Retry failed uploads', author: 'octocat' });
+  expect(pullRequestOf({ ...comment, issue: { number: 3, title: 'Crash', user: { login: 'octocat' } } })).toBeUndefined();
   expect(pullRequestOf(push)).toBeUndefined();
 });
 
