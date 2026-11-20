@@ -163,6 +163,7 @@ What counts as a command:
 - The model works on the pull request's head commit. It makes the smallest change that does what was asked and runs the repo's tests and lint.
 - After the session, the action commits the change as `axonshaft[bot]`, with one plain line saying what changed, and pushes it to the pull request's branch.
 - The task runs only on a GitHub-hosted runner, a fresh machine for each job. On a self-hosted runner the session doesn't run: the reply and a notice say why, and the run ends with `self_hosted_unsupported`. Reviews and `/ask` still run there.
+- The checkout must not keep a token: set `persist-credentials: false` on `actions/checkout`, as the quick start does. When `.git/config` holds an `extraheader`, a credentials file or a password in a remote's URL, the session doesn't run: the reply warns about it, and the run ends with `credentials_in_checkout`.
 - The task needs a Linux runner. Its commands run in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox, which the action installs from the runner's Ubuntu archive when it's missing (`sudo apt-get install bubblewrap`, 0.6 or later). When the sandbox can't start, for example on macOS or on a runner without `sudo` or user namespaces, the session doesn't run: the reply and a notice say why, and the run ends with `sandbox_unavailable`.
 - The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed or Failed.
 - A request that only asks a question gets an answer, and nothing is committed.
@@ -427,6 +428,7 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
 | `self_hosted_unsupported` | A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran. |
+| `credentials_in_checkout` | A task's checkout kept a token in `.git/config`, so no session ran. Set `persist-credentials: false` on `actions/checkout`. |
 | `sandbox_unavailable` | A task couldn't start its sandbox on this runner, so no session ran. The message says why. |
 
 ### Runs that end with a notice
@@ -441,6 +443,7 @@ These end with a notice, and the step passes:
 - a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
 - a bare `/fix` with nothing to fix (`nothing_to_fix`);
 - a `/fix` or `/axonshaft` on a self-hosted runner (`self_hosted_unsupported`);
+- a `/fix` or `/axonshaft` whose checkout kept a token in `.git/config` (`credentials_in_checkout`);
 - a `/fix` or `/axonshaft` on a runner that can't start the sandbox (`sandbox_unavailable`);
 - a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap.
 

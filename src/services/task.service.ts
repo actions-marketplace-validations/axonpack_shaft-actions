@@ -8,6 +8,7 @@ import { toolDenial } from '../utils/tool-guard.util';
 import { type ReplyFormat, runAgent } from './agent.service';
 import { fetchPushToken } from './api.service';
 import { type CheckResult, repoCommands, runCheck } from './commands.service';
+import { savedCredentials } from './checkout.service';
 import { collectContext } from './context.service';
 import { assertHead, head, pushChanges, readChanges } from './push.service';
 import { ANSWER_MAX, answerFooter, buildReplyPrompt, postInThread, type ReplyOptions, type ReplyOutcome } from './reply.service';
@@ -41,10 +42,16 @@ export type TaskOptions = ReplyOptions & { bare: boolean; pushMode: string; repo
 /**
  * A finished task, or one that stopped before its session: `push_failed` when nothing could be
  * pushed, `nothing_to_fix` for a bare `/fix` with no open findings, `self_hosted_unsupported` on a
- * runner GitHub doesn't host, `sandbox_unavailable` when the runner can't start the sandbox the
- * commands run in.
+ * runner GitHub doesn't host, `credentials_in_checkout` for a checkout that kept its token, and
+ * `sandbox_unavailable` when the runner can't start the sandbox the commands run in.
  */
-export type TaskOutcome = ReplyOutcome | { refused: string; code: 'push_failed' | 'nothing_to_fix' | 'self_hosted_unsupported' | 'sandbox_unavailable' };
+export type TaskOutcome =
+  | ReplyOutcome
+  | { refused: string; code: 'push_failed' | 'nothing_to_fix' | 'self_hosted_unsupported' | 'credentials_in_checkout' | 'sandbox_unavailable' };
+
+/** Why a task refuses a checkout whose `.git/config` holds a credential. */
+export const CREDENTIALS_IN_CHECKOUT =
+  "The checkout's .git/config holds a GitHub credential, which the model could read, so nothing was changed. Set `persist-credentials: false` on the workflow's actions/checkout step.";
 
 /**
  * Why a task can't run on this runner, or undefined when it can: only on a GitHub-hosted one, a
@@ -83,7 +90,7 @@ const checksTable = (checks: CheckResult[]) =>
  * own run of the checks passes does our code ask the API for the push token, and push through
  * GitHub's API. A push the mode refuses (a fork's PR, the default branch, push mode Disabled) is
  * caught before the session, which then doesn't run, and so is a bare `/fix` with no open findings,
- * a self-hosted runner and a runner that can't start the sandbox.
+ * a self-hosted runner, a checkout that kept its token and a runner that can't start the sandbox.
  */
 export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   const ctx = await step('Read the pull request', () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
@@ -104,6 +111,11 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   if (hosted) {
     await post(`${failureMarkdown(new ShaftFailure('self_hosted_unsupported', hosted))}\n\n${TASK_MARKER}`);
     return { refused: hosted, code: 'self_hosted_unsupported' };
+  }
+  if (savedCredentials(o.cwd)) {
+    core.warning(CREDENTIALS_IN_CHECKOUT);
+    await post(`${failureMarkdown(new ShaftFailure('credentials_in_checkout', CREDENTIALS_IN_CHECKOUT))}\n\n${TASK_MARKER}`);
+    return { refused: CREDENTIALS_IN_CHECKOUT, code: 'credentials_in_checkout' };
   }
   const unsandboxed = await step('Start the sandbox', async () => prepareSandbox(o.cwd));
   if (unsandboxed) {

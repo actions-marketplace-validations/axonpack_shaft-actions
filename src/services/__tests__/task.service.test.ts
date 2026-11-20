@@ -1,5 +1,5 @@
 import * as cp from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, expect, test, vi } from 'vitest';
@@ -232,6 +232,23 @@ test('a self-hosted runner runs no session, and the reply says why', async () =>
     const out = await runTask(options());
     expect(out).toEqual({ refused: expect.stringContaining('only on GitHub-hosted runners'), code: 'self_hosted_unsupported' });
     expect(fake.posted.at(-1)).toMatch(/errors\/self_hosted_unsupported\.svg/);
+  }
+  expect(sessions).toEqual([]);
+});
+
+test('a checkout whose .git/config kept a token runs no session, and the reply warns about it', async () => {
+  const config = join(work, '.git', 'config');
+  const clean = readFileSync(config, 'utf8');
+  for (const saved of [
+    '[http "https://github.com/"]\n\textraheader = AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hz',
+    '[includeIf "gitdir:/home/runner/work/w/w/.git"]\n\tpath = /home/runner/work/_temp/git-credentials-1.config',
+    '[remote "mirror"]\n\turl = https://x-access-token:ghs_abc@github.com/acme/widgets',
+  ]) {
+    writeFileSync(config, `${clean}${saved}\n`);
+    fake = octokit();
+    expect(await runTask(options())).toEqual({ refused: expect.stringContaining('persist-credentials: false'), code: 'credentials_in_checkout' });
+    expect(fake.posted[0]).toMatch(/errors\/credentials_in_checkout\.svg/);
+    expect(fake.posted[0]).toContain("The checkout's .git/config holds a GitHub credential");
   }
   expect(sessions).toEqual([]);
 });
