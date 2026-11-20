@@ -1,7 +1,7 @@
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runnerEnv } from '../utils/env.util';
+import { inSandbox } from './sandbox.service';
 
 /** The script and target names a task may run: tests, lint, type checks, builds and formatting. */
 const CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
@@ -45,13 +45,14 @@ export type CheckResult = { command: string; passed: boolean; output: string };
 const CHECK_TIMEOUT = 10 * 60_000; // ponytail: per command; a slower suite fails its check
 
 /**
- * Run one of the repo's commands in the checkout, with only the allowlisted environment and the
- * project's own names (`runnerEnv`): no GitHub or Claude token. The caller checks the command first.
+ * Run one of the repo's commands in the checkout, in the sandbox (`inSandbox`), with only the
+ * allowlisted environment and the project's own names (`runnerEnv`): no GitHub or Claude token, and
+ * no other process to read one from. The caller checks the command first.
  */
 export function runCheck(cwd: string, command: string, env: string[] = []): CheckResult {
   const [file, ...args] = command.split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ''));
   try {
-    execFileSync(file!, args, { cwd, env: runnerEnv(env), encoding: 'utf8', stdio: 'pipe', timeout: CHECK_TIMEOUT });
+    inSandbox(cwd, file!, args, { env: runnerEnv(env), encoding: 'utf8', stdio: 'pipe', timeout: CHECK_TIMEOUT });
     return { command, passed: true, output: '' };
   } catch (e) {
     const { stdout = '', stderr = '', message } = e as { stdout?: string; stderr?: string; message: string };

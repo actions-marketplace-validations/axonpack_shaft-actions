@@ -12,6 +12,7 @@ import { ShaftFailure } from '../utils/failure.util';
 import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
+import { sandboxPrefix } from './sandbox.service';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -159,14 +160,19 @@ const DENIED = ['Read(//proc/**)', 'Read(//sys/**)'];
 
 /**
  * Checks every tool call, the subagents' too, before the allow rules let it through: a hook runs
- * where `canUseTool` doesn't, since that is only asked about calls no rule allows.
+ * where `canUseTool` doesn't, since that is only asked about calls no rule allows. A task's Bash
+ * command, once allowed, runs in the sandbox (`sandboxPrefix`), as the checks do.
  */
-const guard =
+export const guard =
   (cwd: string, commands?: string[]): HookCallback =>
   async (input) => {
     const { tool_name, tool_input } = input as PreToolUseHookInput;
-    const why = toolDenial(tool_name, (tool_input ?? {}) as Record<string, unknown>, cwd, commands);
-    return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
+    const args = (tool_input ?? {}) as Record<string, unknown>;
+    const why = toolDenial(tool_name, args, cwd, commands);
+    if (why) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } };
+    if (!commands || tool_name !== 'Bash') return {};
+    const updatedInput = { ...args, command: `${sandboxPrefix(cwd)} ${String(args.command).trim()}` };
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput } };
   };
 const SDK_VERSION = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
 

@@ -1,8 +1,18 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, test } from 'vitest';
-import { repoCommands, runCheck } from '../commands.service';
+import * as cp from 'node:child_process';
+import { expect, test, vi } from 'vitest';
+
+// The sandbox runs only on Linux (sandbox.service.test.ts): here a check runs as it would inside it, with the files recorded.
+const sandboxed: string[] = [];
+vi.doMock('../sandbox.service', () => ({
+  inSandbox: (cwd: string, file: string, args: string[], o: cp.ExecFileSyncOptions) => {
+    sandboxed.push(file);
+    return cp.execFileSync(file, args, { ...o, cwd });
+  },
+}));
+const { repoCommands, runCheck } = await import('../commands.service');
 
 const repo = (files: Record<string, string>) => {
   const cwd = mkdtempSync(join(tmpdir(), 'shaft-commands-'));
@@ -35,4 +45,5 @@ test('a check runs with only the allowlisted environment, and a failure keeps th
   expect(out).toMatchObject({ command: 'node env.js', passed: false });
   expect(out.output).not.toContain('ghs_env');
   expect(runCheck(cwd, 'node -e 0')).toEqual({ command: 'node -e 0', passed: true, output: '' });
+  expect(sandboxed).toEqual(['node', 'node']);
 });

@@ -107,6 +107,16 @@ test("a task's session may edit and run the repo's commands, each call through t
   expect(await decide('Edit', { file_path: 'src/a.ts' })).toBe('allow');
   for (const command of ['git push origin HEAD', 'gh pr view', 'git commit -m x', 'npm install left-pad', 'bun run deploy']) expect(await decide('Bash', { command }), command).toBe('deny');
   expect(await decide('Write', { file_path: '.git/hooks/pre-push' })).toBe('deny');
+  expect(await decide('Edit', { file_path: '.github/workflows/ci.yml' })).toBe('deny');
+  // A task's allowed Bash runs in the sandbox, its command unchanged after the prefix; a review's runs as it is.
+  const { sandboxPrefix } = await import('../sandbox.service');
+  expect((await hook({ tool_name: 'Bash', tool_input: { command: 'bun run test', timeout: 5 } })).hookSpecificOutput).toEqual({
+    hookEventName: 'PreToolUse',
+    permissionDecision: 'allow',
+    updatedInput: { command: `${sandboxPrefix(process.cwd())} bun run test`, timeout: 5 },
+  });
+  const reviewHook = review!.hooks.PreToolUse[0]!.hooks[0]!;
+  expect(await reviewHook({ tool_name: 'Bash', tool_input: { command: 'git diff' } })).toEqual({});
 });
 
 test('a run past the time limit is review_timed_out, linking the dashboard', async () => {
