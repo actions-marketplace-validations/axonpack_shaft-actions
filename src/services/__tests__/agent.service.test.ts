@@ -108,6 +108,8 @@ test("a task's session may edit and run the repo's commands, each call through t
   await runAgent('prompt', options, REVIEW_FORMAT);
   const [task, review] = asked.map((a) => a.options as unknown as { tools: string[]; allowedTools: string[]; env: object; hooks: { PreToolUse: { hooks: ((i: object) => Promise<any>)[] }[] } });
   expect(task!.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write']);
+  // No rule allows a task's Bash: only the guard's allow does.
+  expect(task!.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'Edit', 'Write']);
   expect(review!.tools).not.toContain('Edit');
   expect(JSON.stringify(task!.env)).not.toMatch(/ghs_/);
   const hook = task!.hooks.PreToolUse[0]!.hooks[0]!;

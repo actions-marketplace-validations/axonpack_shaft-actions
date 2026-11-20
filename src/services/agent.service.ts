@@ -282,8 +282,9 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
       tools: deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS,
-      // A task's Bash runs the repo's commands, which no allow rule can list ahead: the guard decides each call.
-      allowedTools: deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS : ALLOWED,
+      // A task's Bash runs the repo's commands, which no allow rule can list ahead, so no rule allows it:
+      // only the guard's own allow lets a call through, and if the guard doesn't answer, dontAsk denies it.
+      allowedTools: deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED,
       disallowedTools: DENIED,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
