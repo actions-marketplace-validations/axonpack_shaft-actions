@@ -260,11 +260,11 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict]!)}`,
     ...headline.map((l) => `> ${l}`),
     '>',
-    `> ${countChips.join(' ')}`,
+    `> **Findings** &nbsp; ${countChips.join(' ')}`,
     '>',
-    `> ${checkChips.join(' ')}`,
+    `> **Checks** &nbsp; ${checkChips.join(' ')}`,
     '>',
-    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed \`${f.sha.slice(0, 7)}\``].filter(Boolean).join(' · ')}</sub>`,
+    `> <sub>${[type && `🏷️ ${type}`, `🎯 ${review.confidence}% confidence`, `🔎 reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(' · ')}</sub>`,
   ].join('\n');
 }
 
