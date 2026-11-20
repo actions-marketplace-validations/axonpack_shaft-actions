@@ -24060,6 +24060,8 @@ function diffLines(patch, addedOnly = false) {
   }
   return lines;
 }
+var removedLines = (patch) => (patch ?? "").split(`
+`).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
 function fingerprint(f, code = "") {
   return createHash("sha256").update(`${f.file}
 ${f.title.trim().toLowerCase()}
@@ -59682,6 +59684,353 @@ var typeEscapes = async ({ files, checkout }) => {
   return factsText(["Type escapes on added lines:", ...lines, ...settings.length ? ["The repo's lint and type settings that name them:", ...settings] : []], "");
 };
 
+// src/utils/exports.util.ts
+var EXPORTS = [
+  /^\s*export\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|abstract\s+class|interface|type|enum|namespace)\s+([A-Za-z_$][\w$]*)/,
+  /^(?:async\s+)?def\s+([A-Za-z]\w*)|^class\s+([A-Za-z]\w*)/,
+  /^func\s+(?:\([^)]*\)\s*)?([A-Z]\w*)|^type\s+([A-Z]\w*)/,
+  /^\s*pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type|const|static)\s+([A-Za-z_]\w*)/
+];
+var EXPORT_LIST = /^\s*export\s+(?:type\s+)?\{([^}]*)\}/;
+function exportNames(line) {
+  const list = EXPORT_LIST.exec(line);
+  if (list)
+    return list[1].split(",").map((s) => s.trim().split(/\s+as\s+/).pop().replace(/^type\s+/, "")).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n) && n !== "default");
+  return EXPORTS.flatMap((r) => r.exec(line)?.slice(1).filter(Boolean) ?? []);
+}
+
+// src/services/prestep/search.service.ts
+var BUILT = ["**/{dist,build,out,vendor,coverage,.next,.expo}/**", "**/*.min.*", "**/*.d.ts"];
+var SEARCH_MAX = { files: 5000, bytes: 20000000, names: 50, perName: 20 };
+var escape2 = (s) => s.replace(/[$]/g, "\\$");
+function search(checkout, names) {
+  const cut = [];
+  const wanted = [...new Set(names)];
+  if (wanted.length > SEARCH_MAX.names)
+    cut.push(`searched for the first ${SEARCH_MAX.names} of ${wanted.length} names`);
+  const hits = new Map(wanted.slice(0, SEARCH_MAX.names).map((n) => [n, []]));
+  if (!hits.size)
+    return { hits, cut };
+  const any = new RegExp(`(?<![\\w$])(${[...hits.keys()].map(escape2).join("|")})(?![\\w$])`, "g");
+  const files = checkout.find(["**/*"]).filter((p) => CODE.test(p) && !matches(p, BUILT)).sort();
+  if (files.length > SEARCH_MAX.files)
+    cut.push(`searched the first ${SEARCH_MAX.files} of ${files.length} code files`);
+  let bytes = 0;
+  for (const [i, file] of files.slice(0, SEARCH_MAX.files).entries()) {
+    if (bytes > SEARCH_MAX.bytes) {
+      cut.push(`stopped after ${SEARCH_MAX.bytes / 1e6} MB, with ${Math.min(files.length, SEARCH_MAX.files) - i} code files left`);
+      break;
+    }
+    const text = checkout.read(file);
+    if (!text)
+      continue;
+    bytes += text.length;
+    if (text.search(any) < 0)
+      continue;
+    const found = new Map;
+    text.split(`
+`).forEach((l, n) => {
+      for (const m of l.matchAll(any)) {
+        const lines = found.get(m[1]) ?? found.set(m[1], []).get(m[1]);
+        if (lines.at(-1) !== n + 1)
+          lines.push(n + 1);
+      }
+    });
+    for (const [name, lines] of found)
+      hits.get(name).push({ file, lines });
+  }
+  return { hits, cut };
+}
+
+// src/services/prestep/callers.service.ts
+function changedExports(files) {
+  const out = new Map;
+  for (const f of files) {
+    const added = new Map([...diffLines(f.patch, true)].flatMap(([line, text]) => exportNames(text).map((n) => [n, line])));
+    const removed = new Set(removedLines(f.patch).flatMap(exportNames));
+    for (const n of new Set([...added.keys(), ...removed]))
+      if (!out.has(n))
+        out.set(n, { file: f.filename, line: added.get(n), kind: !removed.has(n) ? "added" : !added.has(n) ? "removed" : "changed" });
+  }
+  return out;
+}
+var cutNote = (cut) => cut.length ? [`Search cut: ${cut.join("; ")}.`] : [];
+var callers = async ({ files, checkout }) => {
+  const changed = changedExports(files);
+  if (!changed.size)
+    return "The pull request adds, removes or changes no exported name.";
+  const { hits, cut } = search(checkout, [...changed.keys()]);
+  const inPr = new Set(files.map((f) => f.filename));
+  const lines = [...hits].flatMap(([name, found]) => {
+    const at = changed.get(name);
+    const others = found.filter((h) => h.file !== at.file);
+    return [
+      `\`${name}\` (${at.kind} in ${at.file}${at.line ? `:${at.line}` : ""}): ${others.length ? `named in ${others.length} other file${others.length > 1 ? "s" : ""}` : "no other code file names it"}`,
+      ...others.slice(0, SEARCH_MAX.perName).map((h) => `- ${h.file}:${h.lines.slice(0, 10).join(",")}${inPr.has(h.file) ? " (changed in this pull request)" : ""}`),
+      ...others.length > SEARCH_MAX.perName ? [`- and ${others.length - SEARCH_MAX.perName} more files`] : []
+    ];
+  });
+  return factsText([...cutNote(cut), ...lines], "");
+};
+
+// src/services/prestep/unused.service.ts
+var unused = async ({ files, checkout }) => {
+  const added = new Map([...changedExports(files)].filter(([, at]) => at.kind === "added"));
+  if (!added.size)
+    return "The pull request exports no new name.";
+  const { hits, cut } = search(checkout, [...added.keys()]);
+  const lines = [...hits].filter(([name, found]) => found.every((h) => h.file === added.get(name).file)).map(([name]) => {
+    const { file, line } = added.get(name);
+    return `- \`${name}\` (${file}${line ? `:${line}` : ""})`;
+  });
+  const head = lines.length ? `${lines.length} of the ${hits.size} new exports are named in no other code file:` : `Each of the ${hits.size} new exports is named in another code file.`;
+  return factsText([...cutNote(cut), head, ...lines], "");
+};
+
+// src/services/prestep/imports.service.ts
+import { builtinModules } from "node:module";
+import { basename as basename5, dirname as dirname7 } from "node:path";
+var JS2 = /\.(?:[mc]?[jt]sx?|vue|svelte|astro)$/;
+var JS_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"\n]+)['"]/g;
+var PY_IMPORT = /^\s*(?:from\s+([A-Za-z_]\w*)[\w.]*\s+import\b|import\s+([\w., ]+))/;
+var PY_MANIFESTS = ["**/requirements*.txt", "**/pyproject.toml", "**/Pipfile", "**/setup.py", "**/setup.cfg"];
+var DEPS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+var MANIFESTS_MAX = 200;
+var npmPackage = (spec) => {
+  const s = spec.replace(/^npm:/, "");
+  if (/^(?:[./#$~]|@\/|[\w-]+:)/.test(s))
+    return;
+  return s.split("/").slice(0, s.startsWith("@") ? 2 : 1).join("/");
+};
+var pyNorm = (s) => s.toLowerCase().replace(/[-_.]+/g, "-");
+function npmKnown(checkout) {
+  const names = new Set(builtinModules);
+  const manifests = checkout.find(["**/package.json"]).slice(0, MANIFESTS_MAX);
+  for (const p of manifests) {
+    try {
+      const pkg = JSON.parse(checkout.read(p) ?? "{}");
+      if (typeof pkg.name === "string")
+        names.add(pkg.name);
+      for (const d of DEPS)
+        for (const n of Object.keys(pkg[d] ?? {}))
+          names.add(n);
+    } catch {}
+  }
+  const aliases = checkout.find(["**/{tsconfig,jsconfig}*.json"]).slice(0, MANIFESTS_MAX).flatMap((p) => [.../"paths"\s*:\s*\{([^}]*)\}/.exec(checkout.read(p) ?? "")?.[1]?.matchAll(/"([^"*]+)\*?"\s*:/g) ?? []].map((m) => m[1]));
+  return { names, aliases, read: manifests.length };
+}
+var imports = async ({ files, checkout }) => {
+  const js = [];
+  const py = [];
+  for (const f of files)
+    for (const [line, text] of diffLines(f.patch, true)) {
+      const at = `${f.filename}:${line}`;
+      if (JS2.test(f.filename))
+        for (const m of text.matchAll(JS_IMPORT))
+          js.push(...[npmPackage(m[1])].filter((n) => n !== undefined).map((name) => ({ at, name })));
+      if (f.filename.endsWith(".py")) {
+        const m = PY_IMPORT.exec(text);
+        const names = m?.[1] ? [m[1]] : m?.[2]?.split(",").map((s) => s.trim().split(/[.\s]/)[0]) ?? [];
+        py.push(...names.filter(Boolean).map((name) => ({ at, name })));
+      }
+    }
+  if (!js.length && !py.length)
+    return "The added lines import no package.";
+  const lines = [];
+  if (js.length) {
+    const { names, aliases, read } = npmKnown(checkout);
+    lines.push(`Read ${read} package.json file${read === 1 ? "" : "s"}.`);
+    for (const { at, name } of js)
+      if (!names.has(name) && !aliases.some((a) => name.startsWith(a) || `${name}/`.startsWith(a)))
+        lines.push(`- ${at} \`${name}\`: no package.json lists it`);
+  }
+  if (py.length) {
+    const manifests = checkout.find(PY_MANIFESTS).slice(0, MANIFESTS_MAX);
+    const text = pyNorm(manifests.map((p) => checkout.read(p) ?? "").join(`
+`));
+    const local = new Set(checkout.find(["**/*.py"]).flatMap((p) => [basename5(p, ".py"), basename5(dirname7(p))]));
+    lines.push(`Read ${manifests.length} Python manifest${manifests.length === 1 ? "" : "s"}.`);
+    for (const { at, name } of py)
+      if (!local.has(name) && !new RegExp(`(?<![\\w-])${pyNorm(name)}(?![\\w-])`).test(text))
+        lines.push(`- ${at} \`${name}\`: no Python manifest names it, and no module in the repo has the name; it may be in the standard library or published under another name`);
+  }
+  const n = js.length + py.length;
+  return lines.some((l) => l.startsWith("- ")) ? factsText(lines, "") : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? "" : "s"} checked).`;
+};
+
+// src/services/prestep/exports-diff.service.ts
+var STAR = /^\s*export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"][^'"]+['"]/;
+var ENTRY = /^\s*"(?:version|main|module|types|typings|exports|bin)"\s*:/;
+var BUMP2 = /^\s*['"]?[^'":]+['"]?\s*:\s*(?:major|minor|patch)\s*$/;
+var short = (s) => {
+  const t = s.trim();
+  return t.length > 160 ? `${t.slice(0, 157)}...` : t;
+};
+function exported(lines) {
+  const out = new Map;
+  for (const [line, text] of lines)
+    for (const name of STAR.test(text) ? [short(text)] : exportNames(text))
+      if (!out.has(name))
+        out.set(name, { line, text: short(text) });
+  return out;
+}
+var exportsDiff = async ({ files }) => {
+  const lines = [];
+  for (const f of files) {
+    const added = diffLines(f.patch, true);
+    const removed = removedLines(f.patch);
+    let rows;
+    if (f.filename.endsWith("package.json")) {
+      rows = [...removed.filter((l) => ENTRY.test(l)).map((l) => `- before: ${short(l)}`), ...[...added].filter(([, l]) => ENTRY.test(l)).map(([n, l]) => `- after (line ${n}): ${short(l)}`)];
+    } else if (/(^|\/)\.changeset\/[^/]+\.md$/.test(f.filename)) {
+      rows = [...added].filter(([, l]) => BUMP2.test(l)).map(([, l]) => `- bump ${short(l)}`);
+    } else {
+      const [was, now] = [exported(removed.map((l) => [undefined, l])), exported(added)];
+      rows = [
+        ...[...was].filter(([n]) => !now.has(n)).map(([n, b]) => `- removed \`${n}\`: ${b.text}`),
+        ...[...now].filter(([n]) => was.has(n) && was.get(n).text !== now.get(n).text).map(([n, a]) => `- changed \`${n}\` (line ${a.line}): ${was.get(n).text} -> ${a.text}`),
+        ...[...now].filter(([n]) => !was.has(n)).map(([n, a]) => `- added \`${n}\` (line ${a.line}): ${a.text}`)
+      ];
+    }
+    if (rows.length)
+      lines.push(`${f.filename}:`, ...rows);
+  }
+  return factsText(lines, "The pull request changes no exported name, no package entry point or version, and no changeset bump.");
+};
+
+// src/services/prestep/routes.service.ts
+var ROUTES = [
+  /\.(get|post|put|patch|delete|all|head|options|route|any)\(\s*['"`](\/[^'"`]*)/i,
+  /@(?:\w+\.)?(get|post|put|patch|delete|route|api_route|request)(?:mapping)?\(\s*['"]?([^'")]*)/i,
+  /\bexport\s+(?:async\s+)?(?:function|const)\s+(GET|POST|PUT|PATCH|DELETE|loader|action)\b()/,
+  /\b(Handle(?:Func)?|path|re_path)\(\s*['"`]([^'"`]*)/
+];
+var AUTH = /\b(?:auth\w*|\w*Auth\w*|session|currentUser|getUser|requireUser|user_id|userId|ownerId|owner|tenant\w*|role\w*|permission\w*|can|isAdmin|guard\w*|UseGuards|jwt|verify\w*|beforeHandle|login_required|Depends|policy|policies|authorize\w*|forbidden|unauthori[sz]ed|401|403)\b/i;
+var NEAR = 15;
+var routes = async ({ files, checkout }) => {
+  const lines = [];
+  for (const f of files) {
+    const text = checkout.read(f.filename)?.split(`
+`);
+    for (const [line, code] of diffLines(f.patch, true)) {
+      const m = ROUTES.map((r) => r.exec(code)).find(Boolean);
+      if (!m)
+        continue;
+      const near = (text ?? []).map((l, i) => [i + 1, l]).filter(([n, l]) => Math.abs(n - line) <= NEAR && AUTH.test(l)).slice(0, 5).map(([n, l]) => `line ${n} \`${l.trim().slice(0, 120)}\``);
+      lines.push(`- ${f.filename}:${line} ${m[1].toUpperCase()} ${m[2] || "(path from the file)"}: ${text === undefined ? "the checkout doesn't have the file" : near.length ? `auth nearby: ${near.join(", ")}` : `no auth call within ${NEAR} lines`}`);
+    }
+  }
+  return factsText(lines, "The added lines define no route.");
+};
+
+// src/services/prestep/locale-keys.service.ts
+var LOCALES = ["**/{locales,locale,i18n,lang,langs,translations,messages}/**/*.json"];
+var LOCALE_CODE = /^[a-z]{2,3}(?:[-_][A-Za-z0-9]{2,4})?$/;
+var KEYS_MAX = 30;
+function localeOf(path) {
+  const parts = path.split("/");
+  const file = parts.pop();
+  const stem = file.replace(/\.json$/, "");
+  if (LOCALE_CODE.test(stem))
+    return [`${parts.join("/")}/*.json`, stem];
+  const dir = parts.pop();
+  if (dir && LOCALE_CODE.test(dir))
+    return [`${parts.join("/")}/*/${file}`, dir];
+  return;
+}
+function keysOf(text) {
+  try {
+    const walk = (o, at) => o && typeof o === "object" && !Array.isArray(o) ? Object.entries(o).flatMap(([k, v]) => walk(v, at ? `${at}.${k}` : k)) : [at];
+    const json = JSON.parse(text ?? "");
+    return json && typeof json === "object" && !Array.isArray(json) ? new Set(walk(json, "")) : undefined;
+  } catch {
+    return;
+  }
+}
+var list = (keys) => `${keys.slice(0, KEYS_MAX).map((k) => `\`${k}\``).join(", ")}${keys.length > KEYS_MAX ? ` and ${keys.length - KEYS_MAX} more` : ""}`;
+var localeKeys = async ({ files, checkout, base }) => {
+  const all = checkout.find(LOCALES).filter((p) => localeOf(p)).sort();
+  const changed = files.filter((f) => f.status !== "removed" && matches(f.filename, LOCALES) && localeOf(f.filename));
+  if (!changed.length)
+    return all.length ? `No locale file changed. The repo has ${all.length} locale files, such as ${all.slice(0, 5).join(", ")}.` : "No locale file changed, and the repo has no JSON locale files under a `locales`, `locale`, `i18n`, `lang`, `langs`, `translations` or `messages` folder.";
+  const lines = [];
+  for (const f of changed) {
+    const [group, locale] = localeOf(f.filename);
+    const head = keysOf(checkout.read(f.filename));
+    if (!head) {
+      lines.push(`${f.filename} (${locale}): couldn't read it as a JSON object.`);
+      continue;
+    }
+    const was = f.status === "added" ? new Set : keysOf(await base(f.filename)) ?? new Set;
+    const added = [...head].filter((k) => !was.has(k));
+    if (!added.length) {
+      lines.push(`${f.filename} (${locale}): adds no key.`);
+      continue;
+    }
+    lines.push(`${f.filename} (${locale}): adds ${added.length} key${added.length === 1 ? "" : "s"}: ${list(added)}`);
+    const siblings = all.filter((p) => p !== f.filename && localeOf(p)[0] === group);
+    let complete = 0;
+    for (const p of siblings) {
+      const keys = keysOf(checkout.read(p));
+      const missing = keys ? added.filter((k) => !keys.has(k)) : added;
+      if (missing.length)
+        lines.push(`- missing in ${p} (${localeOf(p)[1]}): ${keys ? list(missing) : "couldn't read it as a JSON object"}`);
+      else
+        complete++;
+    }
+    lines.push(siblings.length ? `- ${complete} of ${siblings.length} other locales have them all.` : "- No other locale has this file.");
+  }
+  return factsText(lines, "");
+};
+
+// src/services/prestep/raw-values.service.ts
+var STYLED = ["**/*.{tsx,jsx,ts,js,mjs,vue,svelte,astro,html,css,scss,sass,less}"];
+var THEME = ["**/*{theme,Theme,tokens,Tokens,colors,Colors,palette,Palette}*", "**/{theme,themes,tokens}/**", "**/tailwind.config.*"];
+var RAW = /(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b|\b(?:rgba?|hsla?)\([^)]*\)|\b\d+(?:\.\d+)?px\b|\b(?:margin|padding|gap|fontSize|lineHeight|letterSpacing|borderRadius|borderWidth|width|height|top|left|right|bottom)\w*\s*:\s*\d+(?:\.\d+)?\b/g;
+var COMMENT2 = /^\s*(?:\/\/|\/\*|\*|<!--)/;
+var THEMES_MAX = 10;
+var rawValues = async ({ files, checkout }) => {
+  const lines = files.filter((f) => matches(f.filename, STYLED) && !matches(f.filename, THEME)).flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+    const found = COMMENT2.test(text) ? [] : [...new Set(text.match(RAW))];
+    return found.length ? [`- ${f.filename}:${line} ${found.join(", ")}`] : [];
+  }));
+  if (!lines.length)
+    return "The added lines of UI and style files have no raw colour or size.";
+  const themes = checkout.find(THEME).filter((p) => matches(p, STYLED) || p.endsWith(".json")).sort();
+  const where = themes.length ? `Theme and token files in the repo: ${themes.slice(0, THEMES_MAX).join(", ")}${themes.length > THEMES_MAX ? ` and ${themes.length - THEMES_MAX} more` : ""}.` : "The repo has no file named for a theme, tokens, colours or a palette.";
+  return factsText([where, "Raw values on added lines:", ...lines], "");
+};
+
+// src/services/prestep/native-changes.service.ts
+var NATIVE = ["**/ios/**", "**/android/**", "**/*.podspec", "**/app.json", "**/app.config.*", "**/eas.json", "**/*.xcprivacy", "**/*.entitlements", "**/Info.plist", "**/AndroidManifest.xml"];
+var APP_CONFIG = ["**/app.json", "**/app.config.{js,ts,mjs,cjs,json}"];
+var NATIVE_PACKAGE = /^(?:react-native(?:-|$)|@react-native|expo(?:-|$)|@expo\/|@capacitor\/|cordova-|@[^/]+\/react-native|.+-react-native$)/;
+var DEP_LINE = /^\s*"([^"]+)"\s*:\s*"([^"]*)"/;
+var CONFIGS_MAX = 5;
+var setting = (text, key) => new RegExp(`["']?\\b${key}["']?\\s*:\\s*(\\{[^}]*\\}|"[^"]*"|'[^']*'|[^,\\n}]+)`).exec(text ?? "")?.[1].replace(/\s+/g, " ").trim() ?? "not set";
+var nativeChanges = async ({ files, checkout, base }) => {
+  const native = files.filter((f) => matches(f.filename, NATIVE)).map((f) => `- ${f.filename} (${f.status}, +${f.additions} -${f.deletions})`);
+  const packages = files.filter((f) => f.filename.endsWith("package.json")).flatMap((f) => {
+    const pins = (lines) => new Map(lines.flatMap((l) => [DEP_LINE.exec(l)].filter((m) => m && NATIVE_PACKAGE.test(m[1])).map((m) => [m[1], m[2]])));
+    const [was, now] = [pins(removedLines(f.patch)), pins([...diffLines(f.patch, true).values()])];
+    return [...new Set([...was.keys(), ...now.keys()])].filter((n) => was.get(n) !== now.get(n)).map((n) => `- ${f.filename}: ${!was.has(n) ? `added ${n} ${now.get(n)}` : !now.has(n) ? `removed ${n} ${was.get(n)}` : `changed ${n} ${was.get(n)} -> ${now.get(n)}`}`);
+  });
+  if (!native.length && !packages.length)
+    return "No native file or package with native code changed.";
+  const configs = await Promise.all(checkout.find(APP_CONFIG).sort().slice(0, CONFIGS_MAX).map(async (p) => {
+    const [before, after] = [await base(p), checkout.read(p)];
+    return ["runtimeVersion", "version"].map((k) => {
+      const [b, a] = [setting(before, k), setting(after, k)];
+      return `- ${p} ${k}: ${b === a ? `${a} (unchanged)` : `${b} -> ${a}`}`;
+    });
+  }));
+  return factsText([
+    ...native.length ? ["Native files changed:", ...native] : [],
+    ...packages.length ? ["Packages with native code changed:", ...packages] : [],
+    ...configs.length ? ["App config, base branch -> pull request:", ...configs.flat()] : ["The repo has no app.json or app.config file."]
+  ], "");
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
 var FACTS = {
@@ -59693,7 +60042,15 @@ var FACTS = {
   "diff-stats": diffStats,
   "log-lines": logLines,
   flags,
-  "type-escapes": typeEscapes
+  "type-escapes": typeEscapes,
+  callers,
+  unused,
+  imports,
+  "exports-diff": exportsDiff,
+  routes,
+  "locale-keys": localeKeys,
+  "raw-values": rawValues,
+  "native-changes": nativeChanges
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
@@ -60313,12 +60670,12 @@ function runCheck(cwd, command, env = []) {
 
 // src/services/push.service.ts
 import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2 } from "node:fs";
-import { dirname as dirname7, join as join10 } from "node:path";
+import { dirname as dirname8, join as join10 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
   assertHead(cwd, base);
   const paths = git(cwd, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]).split("\x00").filter(Boolean).map((l) => l.slice(3));
-  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname7(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
+  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname8(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
   if (why)
     throw new ShaftFailure("push_failed", why);
   const changes = paths.map((path) => {

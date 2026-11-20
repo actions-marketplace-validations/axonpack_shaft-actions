@@ -78,6 +78,13 @@ export function diffLines(patch: string | undefined, addedOnly = false): Map<num
   return lines;
 }
 
+/** A patch's removed lines, without their `-`. */
+export const removedLines = (patch: string | undefined) =>
+  (patch ?? '')
+    .split('\n')
+    .filter((l) => l.startsWith('-'))
+    .map((l) => l.slice(1));
+
 /** A short hash of file, title and the code on the line, so it survives lines moving. */
 export function fingerprint(f: Pick<Finding, 'file' | 'title'>, code = ''): string {
   return createHash('sha256')
