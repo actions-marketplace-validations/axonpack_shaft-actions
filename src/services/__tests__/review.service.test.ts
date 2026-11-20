@@ -555,3 +555,15 @@ test('a script checklist with no findings passes', async () => {
   expect(outcome).toMatchObject({ verdict: 'looks-good', findings: 0 });
   expect(outcome.output.checks).toEqual([{ key: 'secrets', label: 'The secrets list', state: 'passed' }]);
 });
+
+test("a script+model checklist runs in the model, with its pre-step's facts after the steps", async () => {
+  const deps = { ...checklist('dependencies', ['**/*.lock', '**/*.yaml']), mode: 'script+model' as const, prestep: 'deps-diff' };
+  // The checkout is this repo, whose bun.lock the base branch doesn't have yet.
+  const { prompt, refs, run } = await review([file('bun.lock')], { checklists: [deps, checklist('correctness', ['**'])], open: OPEN });
+  expect(run.steps).toEqual(['dependencies', 'correctness']);
+  expect(refs).toContain('main:bun.lock');
+  const facts = prompt.slice(prompt.indexOf('## The steps for this run'));
+  expect(facts).toContain('\n## Facts from the pre-steps\n\n### deps-diff, for dependencies\n\nbun.lock (npm):\n- added ');
+  const missing = await review([file('apps/web/pnpm-lock.yaml')], { checklists: [deps], open: OPEN });
+  expect(missing.prompt).toContain("### deps-diff, for dependencies\n\nNot available: Couldn't read `apps/web/pnpm-lock.yaml` from the checkout.");
+});

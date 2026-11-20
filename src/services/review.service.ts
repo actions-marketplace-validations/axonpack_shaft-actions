@@ -4,11 +4,12 @@ import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-pla
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
+import type { ScriptInput } from '../types/prestep.type';
 import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
 import { type AgentResult, REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
 import { checkoutFiles } from './checkout.service';
-import { runScripts, SCRIPTS } from './prestep/prestep.service';
-import { type Context, collectContext } from './context.service';
+import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
+import { baseFile, type Context, collectContext } from './context.service';
 import {
   CATEGORY_CONCLUSION,
   categoryCheck,
@@ -288,9 +289,16 @@ async function postReview(
     };
   }
 
-  const scriptFindings = scripted.length
-    ? await step('Run the script checklists', async () => runScripts(scripted, { files, pr: ctx.pr, guides: ctx.guides, checkout: checkoutFiles(o.cwd) }))
-    : [];
+  // What the scripts read. Each base-branch file is fetched once, however many scripts ask for it.
+  const reads = new Map<string, Promise<string | undefined>>();
+  const input: ScriptInput = {
+    files,
+    pr: ctx.pr,
+    guides: ctx.guides,
+    checkout: checkoutFiles(o.cwd),
+    base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path)!,
+  };
+  const scriptFindings = scripted.length ? await step('Run the script checklists', async () => runScripts(scripted, input)) : [];
   // With only script checklists to run, no model is called, unless merge gates need judging.
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
 
@@ -298,7 +306,7 @@ async function postReview(
   if (useModel) {
     // With checklists the run's data comes first and the steps last, so the part before them reads the same whatever runs.
     const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
-    const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}` : pack;
+    const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
 
     // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
     if (summary) await writeSummary(startSummary(sha, prior));

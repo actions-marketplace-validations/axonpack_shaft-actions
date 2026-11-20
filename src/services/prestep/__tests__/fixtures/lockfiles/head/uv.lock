@@ -1,0 +1,20 @@
+version = 1
+requires-python = ">=3.12"
+
+[[package]]
+name = "app"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "requests" },
+]
+
+[[package]]
+name = "internal-kit"
+version = "2.0.0"
+source = { registry = "https://pypi.acme.dev/simple" }
+
+[[package]]
+name = "requests"
+version = "2.31.0"
+source = { registry = "https://pypi.org/simple" }

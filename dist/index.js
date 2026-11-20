@@ -23848,11 +23848,11 @@ function checkoutFiles(cwd) {
   const root = realpathSync(cwd) + sep2;
   return {
     find: (globs) => globSync(globs, { cwd, exclude: (p) => /(^|\/)(node_modules|\.git)$/.test(p) }),
-    read: (path) => {
+    read: (path, max = READ_MAX) => {
       try {
         const full = join(cwd, path);
         const stat = lstatSync(full);
-        return stat.isFile() && stat.size <= READ_MAX && realpathSync(full).startsWith(root) ? readFileSync2(full, "utf8") : undefined;
+        return stat.isFile() && stat.size <= max && realpathSync(full).startsWith(root) ? readFileSync2(full, "utf8") : undefined;
       } catch {
         return;
       }
@@ -58751,6 +58751,204 @@ ${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${
 `)}
 `;
 
+// src/services/prestep/deps-diff.service.ts
+import { dirname as dirname2, join as join4 } from "node:path";
+
+// src/utils/lockfile.util.ts
+var NPM_REGISTRY = /^https?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)(?:\/|$)/;
+var NPM_NAME = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+var unquote = (s) => s.trim().replace(/^["']|["']$/g, "");
+function packageLock(text) {
+  const at = new Map;
+  text.split(`
+`).forEach((l, i) => {
+    const m = /^\s*"([^"]*node_modules\/[^"]+)":/.exec(l);
+    if (m && !at.has(m[1]))
+      at.set(m[1], i + 1);
+  });
+  return Object.entries(JSON.parse(text).packages ?? {}).flatMap(([key, p]) => key.includes("node_modules/") && !p.link && p.version ? [{ name: p.name ?? key.slice(key.lastIndexOf("node_modules/") + 13), version: p.version, line: at.get(key) ?? 1, public: !p.resolved || NPM_REGISTRY.test(p.resolved) }] : []);
+}
+function bunLock(text) {
+  return text.split(`
+`).flatMap((l, i) => {
+    const m = /^\s*"[^"]+":\s*\["((?:@[^@"/]+\/)?[^@"]+)@([^"]+)"(?:,\s*"([^"]*)")?/.exec(l);
+    if (!m || m[2].startsWith("workspace:"))
+      return [];
+    return [{ name: m[1], version: m[2], line: i + 1, public: !m[2].includes(":") && (!m[3] || NPM_REGISTRY.test(m[3])) }];
+  });
+}
+function yarnLock(text) {
+  const out = [];
+  let name;
+  text.split(`
+`).forEach((l, i) => {
+    if (/^[^\s#].*:$/.test(l)) {
+      const spec = unquote(l.slice(0, -1).split(",")[0]);
+      name = spec === "__metadata" ? undefined : spec.slice(0, spec.indexOf("@", 1));
+      return;
+    }
+    const v = name && /^\s+version:? "?([^"\s]+)"?$/.exec(l);
+    if (v)
+      out.push({ name, version: v[1], line: i + 1, public: true });
+    const r = name && out.length && /^\s+(resolved|resolution):? "?([^"\s]+)"?$/.exec(l);
+    if (!r)
+      return;
+    if (r[2].includes("@workspace:"))
+      out.pop();
+    else
+      out.at(-1).public = r[1] === "resolved" ? NPM_REGISTRY.test(r[2]) : /@npm:[^:]+$/.test(r[2]);
+  });
+  return out;
+}
+function pnpmLock(text) {
+  const out = [];
+  let section = "";
+  text.split(`
+`).forEach((l, i) => {
+    if (/^\S/.test(l))
+      section = l;
+    if (section !== "packages:")
+      return;
+    const m = /^ {2}'?\/?([^\s']+?)'?:$/.exec(l);
+    if (m) {
+      const key = m[1].replace(/\(.*$/, "");
+      const at = key.lastIndexOf("@");
+      if (at > 0)
+        out.push({ name: key.slice(0, at), version: key.slice(at + 1), line: i + 1, public: !key.slice(at + 1).includes(":") });
+    } else if (out.length && /^\s+resolution: \{.*\b(?:tarball|repo|directory|type):/.test(l))
+      out.at(-1).public = false;
+  });
+  return out;
+}
+function requirements(text) {
+  const indexes = [...text.matchAll(/^\s*(?:-i|--index-url|--extra-index-url)[\s=]+(\S+)/gm)].map((m) => m[1]);
+  const pub = indexes.every((u) => /^https:\/\/pypi\.org\/simple\/?$/.test(u));
+  return text.split(`
+`).flatMap((l, i) => {
+    const m = /^\s*([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*===?\s*([^\s;#,]+)/.exec(l);
+    return m ? [{ name: m[1].toLowerCase(), version: m[2], line: i + 1, public: pub }] : [];
+  });
+}
+var tomlPackages = (source) => (text) => {
+  const out = [];
+  let cur;
+  const flush = () => {
+    const pub = cur?.name && cur.version ? source(cur.src) : undefined;
+    if (pub !== undefined)
+      out.push({ name: cur.name, version: cur.version, line: cur.line, public: pub });
+  };
+  text.split(`
+`).forEach((l, i) => {
+    if (l === "[[package]]") {
+      flush();
+      cur = {};
+    } else if (cur && l === "[package.source]")
+      cur.src ??= "custom";
+    else if (cur) {
+      const m = /^(name|version|source) = (.+)$/.exec(l);
+      if (m?.[1] === "name")
+        cur.name ??= unquote(m[2]);
+      if (m?.[1] === "version" && !cur.version)
+        [cur.version, cur.line] = [unquote(m[2]), i + 1];
+      if (m?.[1] === "source")
+        cur.src ??= m[2];
+    }
+  });
+  flush();
+  return out;
+};
+var cargoLock = tomlPackages((src) => src === undefined ? undefined : /^"(?:registry\+https:\/\/github\.com\/rust-lang\/crates\.io-index|sparse\+https:\/\/index\.crates\.io\/)"$/.test(src));
+var poetryLock = tomlPackages((src) => src === undefined);
+var uvLock = tomlPackages((src) => !src || /\b(?:editable|virtual|directory|path) =/.test(src) ? undefined : /registry = "https:\/\/pypi\.org\/simple\/?"/.test(src));
+function goSum(text) {
+  const seen = new Set;
+  return text.split(`
+`).flatMap((l, i) => {
+    const m = /^(\S+) (v[^\s/]+)(?:\/go\.mod)? h1:/.exec(l);
+    if (!m || seen.has(`${m[1]} ${m[2]}`))
+      return [];
+    seen.add(`${m[1]} ${m[2]}`);
+    return [{ name: m[1], version: m[2], line: i + 1, public: true }];
+  });
+}
+var LOCKFILES = [
+  [/^(?:package-lock|npm-shrinkwrap)\.json$/, "npm", packageLock],
+  [/^bun\.lock$/, "npm", bunLock],
+  [/^yarn\.lock$/, "npm", yarnLock],
+  [/^pnpm-lock\.yaml$/, "npm", pnpmLock],
+  [/^requirements.*\.txt$/, "PyPI", requirements],
+  [/^poetry\.lock$/, "PyPI", poetryLock],
+  [/^uv\.lock$/, "PyPI", uvLock],
+  [/^Cargo\.lock$/, "crates.io", cargoLock],
+  [/^go\.sum$/, "Go", goSum]
+];
+
+// src/services/prestep/deps-diff.service.ts
+var LOCK_MAX = 20000000;
+var FACTS_MAX = 16000;
+var privateNpm = (checkout, dir) => [...new Set([".", dir])].some((d) => [".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml"].some((f) => [...(checkout.read(join4(d, f)) ?? "").matchAll(/^\s*(?:registry|npmRegistryServer)\s*[=:\s]\s*["']?([^"'\s]+)/gm)].some((m) => !NPM_REGISTRY.test(m[1]))));
+var goOwner = (checkout, dir) => /^module\s+(\S+?\/[^/\s]+)/m.exec(checkout.read(join4(dir, "go.mod")) ?? "")?.[1];
+function byName(pins) {
+  const out = new Map;
+  for (const p of pins) {
+    const versions = out.get(p.name) ?? out.set(p.name, new Map).get(p.name);
+    if (!versions.has(p.version))
+      versions.set(p.version, p);
+  }
+  return out;
+}
+function diffPins(before, after) {
+  const [was, now] = [byName(before), byName(after)];
+  return [...new Set([...was.keys(), ...now.keys()])].flatMap((name) => {
+    const [b, a] = [was.get(name) ?? new Map, now.get(name) ?? new Map];
+    const from = [...b.keys()].filter((v) => !a.has(v));
+    const to = [...a.values()].filter((p) => !b.has(p.version));
+    return from.length || to.length ? [{ name, kind: !b.size ? "added" : !a.size ? "removed" : "changed", from, to }] : [];
+  });
+}
+async function depsDiff({ files, checkout, base }) {
+  const out = [];
+  for (const f of files) {
+    const [, ecosystem, parse] = LOCKFILES.find(([name]) => name.test(f.filename.split("/").pop())) ?? [];
+    if (!parse)
+      continue;
+    const head = f.status === "removed" ? "" : checkout.read(f.filename, LOCK_MAX);
+    if (head === undefined)
+      throw new Error(`Couldn't read \`${f.filename}\` from the checkout.`);
+    const dir = dirname2(f.filename);
+    const npmPrivate = ecosystem === "npm" && privateNpm(checkout, dir);
+    const owner = ecosystem === "Go" ? goOwner(checkout, dir) : undefined;
+    const pins = (head ? parse(head) : []).map((p) => ({
+      ...p,
+      public: p.public && !npmPrivate && (ecosystem !== "npm" || NPM_NAME.test(p.name)) && !(owner && (p.name === owner || p.name.startsWith(`${owner}/`)))
+    }));
+    const before = f.status === "added" ? "" : await base(f.filename) ?? "";
+    const changes = diffPins(before ? parse(before) : [], pins);
+    if (changes.length)
+      out.push({ file: f.filename, ecosystem, changes });
+  }
+  return out;
+}
+var depsDiffFacts = async (input) => {
+  const lines = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) => [
+    `${file} (${ecosystem}):`,
+    ...changes.map(({ name, kind, from, to }) => {
+      const now = to.map((p) => `${p.version}${p.public ? "" : " (not from the public registry)"}`).join(", ");
+      return `- ${kind} ${name} ${[from.join(", "), now].filter(Boolean).join(" -> ")}${to.length ? ` (line ${to[0].line})` : ""}`;
+    })
+  ]);
+  if (!lines.length)
+    return "No lockfile in the pull request adds, removes or changes a package.";
+  let text = "";
+  for (const [i, l] of lines.entries()) {
+    if (text.length + l.length > FACTS_MAX)
+      return `${text}... and ${lines.length - i} more lines, cut to fit.`;
+    text += `${l}
+`;
+  }
+  return text.trimEnd();
+};
+
 // src/services/prestep/env-vars.service.ts
 var NAME = "([A-Z_][A-Z0-9_]*)";
 var READS = [
@@ -58895,7 +59093,24 @@ var secrets = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].
 
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs };
+var FACTS = { "deps-diff": depsDiffFacts };
 var runScripts = (run, input) => run.flatMap((c) => SCRIPTS[c.prestep](input).map((f) => ({ ...f, step: c.key })));
+async function factsBlock(run, input) {
+  const keys = [...new Set(run.filter((c) => c.mode === "script+model" && c.prestep && FACTS[c.prestep]).map((c) => c.prestep))];
+  const parts = await Promise.all(keys.map(async (k) => {
+    const facts = await FACTS[k](input).catch((e) => `Not available: ${e.message}`);
+    return `### ${k}, for ${run.filter((c) => c.prestep === k).map((c) => c.key).join(", ")}
+
+${facts}`;
+  }));
+  return parts.length ? `
+## Facts from the pre-steps
+
+${parts.join(`
+
+`)}
+` : "";
+}
 
 // src/services/check-runs.service.ts
 var GATES_CHECK = "Axon Shaft / gates";
@@ -59145,13 +59360,21 @@ ${clean(body)}`);
       }
     };
   }
-  const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, { files, pr: ctx.pr, guides: ctx.guides, checkout: checkoutFiles(o.cwd) })) : [];
+  const reads = new Map;
+  const input = {
+    files,
+    pr: ctx.pr,
+    guides: ctx.guides,
+    checkout: checkoutFiles(o.cwd),
+    base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path)
+  };
+  const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, input)) : [];
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
   let result;
   if (useModel) {
     const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
     const prompt = modelled ? `${pack}
-${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}` : pack;
+${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
     if (summary)
       await writeSummary(startSummary(sha, prior));
     const model = /^[a-z]+$/.test(choice.model) ? choice.model[0].toUpperCase() + choice.model.slice(1) : choice.model;

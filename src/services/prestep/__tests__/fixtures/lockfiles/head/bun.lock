@@ -1,0 +1,24 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "app",
+      "dependencies": {
+        "lodash": "^4.17.21",
+      },
+    },
+  },
+  "packages": {
+    "@acme/ui": ["@acme/ui@1.0.0", "", {}, "sha512-x"],
+
+    "express": ["express@4.18.2", "", {}, "sha512-x"],
+
+    "internal-kit": ["internal-kit@2.0.0", "https://npm.acme.dev/internal-kit/-/internal-kit-2.0.0.tgz", {}, "sha512-x"],
+
+    "lodash": ["lodash@4.17.21", "", {}, "sha512-x"],
+
+    "tiny": ["tiny@github:acme/tiny#abc123", {}, "acme-tiny-abc123"],
+
+    "web": ["web@workspace:packages/web"],
+  }
+}
