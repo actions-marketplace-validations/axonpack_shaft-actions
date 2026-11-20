@@ -1,7 +1,7 @@
 import type { Facts, ScriptInput } from '../../types/prestep.type';
 import { exportNames } from '../../utils/exports.util';
-import { capFacts, removedLines } from '../../utils/facts.util';
-import { diffLines } from '../../utils/render.util';
+import { factsText } from '../../utils/facts.util';
+import { diffLines, removedLines } from '../../utils/render.util';
 import { SEARCH_MAX, search } from './search.service';
 
 /** Where an exported name changed: the file, its line on the new side, and whether its export line was added, removed or both. */
@@ -41,5 +41,5 @@ export const callers: Facts = async ({ files, checkout }) => {
       ...(others.length > SEARCH_MAX.perName ? [`- and ${others.length - SEARCH_MAX.perName} more files`] : []),
     ];
   });
-  return capFacts([...cutNote(cut), ...lines], '');
+  return factsText([...cutNote(cut), ...lines], '');
 };

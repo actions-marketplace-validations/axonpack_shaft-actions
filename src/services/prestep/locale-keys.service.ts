@@ -1,6 +1,6 @@
 import type { Facts } from '../../types/prestep.type';
 import { matches } from '../../utils/auto-pick.util';
-import { capFacts } from '../../utils/facts.util';
+import { factsText } from '../../utils/facts.util';
 
 /** JSON locale files under the folders translations usually live in. */
 const LOCALES = ['**/{locales,locale,i18n,lang,langs,translations,messages}/**/*.json'];
@@ -75,5 +75,5 @@ export const localeKeys: Facts = async ({ files, checkout, base }) => {
     }
     lines.push(siblings.length ? `- ${complete} of ${siblings.length} other locales have them all.` : '- No other locale has this file.');
   }
-  return capFacts(lines, '');
+  return factsText(lines, '');
 };

@@ -1,6 +1,6 @@
 import type { Facts } from '../../types/prestep.type';
 import { matches } from '../../utils/auto-pick.util';
-import { capFacts } from '../../utils/facts.util';
+import { factsText } from '../../utils/facts.util';
 import { diffLines } from '../../utils/render.util';
 
 /** UI, style and script files a style can live in. */
@@ -36,5 +36,5 @@ export const rawValues: Facts = async ({ files, checkout }) => {
   const where = themes.length
     ? `Theme and token files in the repo: ${themes.slice(0, THEMES_MAX).join(', ')}${themes.length > THEMES_MAX ? ` and ${themes.length - THEMES_MAX} more` : ''}.`
     : 'The repo has no file named for a theme, tokens, colours or a palette.';
-  return capFacts([where, 'Raw values on added lines:', ...lines], '');
+  return factsText([where, 'Raw values on added lines:', ...lines], '');
 };

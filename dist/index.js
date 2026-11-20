@@ -24060,6 +24060,8 @@ function diffLines(patch, addedOnly = false) {
   }
   return lines;
 }
+var removedLines = (patch) => (patch ?? "").split(`
+`).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
 function fingerprint(f, code = "") {
   return createHash("sha256").update(`${f.file}
 ${f.title.trim().toLowerCase()}
@@ -59361,7 +59363,8 @@ function exportNames(line) {
 
 // src/utils/facts.util.ts
 var FACTS_MAX2 = 16000;
-function capFacts(lines, none) {
+var CODE = /\.(?:[cm]?[jt]sx?|py|go|rs|rb|java|kts?|swift|php|cs|vue|svelte|dart|scala|exs?|c|cc|cpp|h|hpp|m|mm)$/;
+function factsText(lines, none) {
   if (!lines.length)
     return none;
   let text = "";
@@ -59373,11 +59376,8 @@ function capFacts(lines, none) {
   }
   return text.trimEnd();
 }
-var removedLines = (patch) => (patch ?? "").split(`
-`).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
 
 // src/services/prestep/search.service.ts
-var CODE = ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte,astro,py,go,rs,java,kt,kts,swift,m,mm,c,h,cc,cpp,hpp,cs,rb,php,dart,scala,ex,exs}"];
 var BUILT = ["**/{dist,build,out,vendor,coverage,.next,.expo}/**", "**/*.min.*", "**/*.d.ts"];
 var SEARCH_MAX = { files: 5000, bytes: 20000000, names: 50, perName: 20 };
 var escape2 = (s) => s.replace(/[$]/g, "\\$");
@@ -59390,7 +59390,7 @@ function search(checkout, names) {
   if (!hits.size)
     return { hits, cut };
   const any = new RegExp(`(?<![\\w$])(${[...hits.keys()].map(escape2).join("|")})(?![\\w$])`, "g");
-  const files = checkout.find(CODE).filter((p) => !matches(p, BUILT)).sort();
+  const files = checkout.find(["**/*"]).filter((p) => CODE.test(p) && !matches(p, BUILT)).sort();
   if (files.length > SEARCH_MAX.files)
     cut.push(`searched the first ${SEARCH_MAX.files} of ${files.length} code files`);
   let bytes = 0;
@@ -59448,7 +59448,7 @@ var callers = async ({ files, checkout }) => {
       ...others.length > SEARCH_MAX.perName ? [`- and ${others.length - SEARCH_MAX.perName} more files`] : []
     ];
   });
-  return capFacts([...cutNote(cut), ...lines], "");
+  return factsText([...cutNote(cut), ...lines], "");
 };
 
 // src/services/prestep/unused.service.ts
@@ -59462,7 +59462,7 @@ var unused = async ({ files, checkout }) => {
     return `- \`${name}\` (${file}${line ? `:${line}` : ""})`;
   });
   const head = lines.length ? `${lines.length} of the ${hits.size} new exports are named in no other code file:` : `Each of the ${hits.size} new exports is named in another code file.`;
-  return capFacts([...cutNote(cut), head, ...lines], "");
+  return factsText([...cutNote(cut), head, ...lines], "");
 };
 
 // src/services/prestep/imports.service.ts
@@ -59533,7 +59533,7 @@ var imports = async ({ files, checkout }) => {
         lines.push(`- ${at} \`${name}\`: no Python manifest names it, and no module in the repo has the name; it may be in the standard library or published under another name`);
   }
   const n = js.length + py.length;
-  return lines.some((l) => l.startsWith("- ")) ? capFacts(lines, "") : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? "" : "s"} checked).`;
+  return lines.some((l) => l.startsWith("- ")) ? factsText(lines, "") : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? "" : "s"} checked).`;
 };
 
 // src/services/prestep/exports-diff.service.ts
@@ -59573,7 +59573,7 @@ var exportsDiff = async ({ files }) => {
     if (rows.length)
       lines.push(`${f.filename}:`, ...rows);
   }
-  return capFacts(lines, "The pull request changes no exported name, no package entry point or version, and no changeset bump.");
+  return factsText(lines, "The pull request changes no exported name, no package entry point or version, and no changeset bump.");
 };
 
 // src/services/prestep/routes.service.ts
@@ -59598,7 +59598,7 @@ var routes = async ({ files, checkout }) => {
       lines.push(`- ${f.filename}:${line} ${m[1].toUpperCase()} ${m[2] || "(path from the file)"}: ${text === undefined ? "the checkout doesn't have the file" : near.length ? `auth nearby: ${near.join(", ")}` : `no auth call within ${NEAR} lines`}`);
     }
   }
-  return capFacts(lines, "The added lines define no route.");
+  return factsText(lines, "The added lines define no route.");
 };
 
 // src/services/prestep/locale-keys.service.ts
@@ -59658,7 +59658,7 @@ var localeKeys = async ({ files, checkout, base }) => {
     }
     lines.push(siblings.length ? `- ${complete} of ${siblings.length} other locales have them all.` : "- No other locale has this file.");
   }
-  return capFacts(lines, "");
+  return factsText(lines, "");
 };
 
 // src/services/prestep/raw-values.service.ts
@@ -59676,7 +59676,7 @@ var rawValues = async ({ files, checkout }) => {
     return "The added lines of UI and style files have no raw colour or size.";
   const themes = checkout.find(THEME).filter((p) => matches(p, STYLED) || p.endsWith(".json")).sort();
   const where = themes.length ? `Theme and token files in the repo: ${themes.slice(0, THEMES_MAX).join(", ")}${themes.length > THEMES_MAX ? ` and ${themes.length - THEMES_MAX} more` : ""}.` : "The repo has no file named for a theme, tokens, colours or a palette.";
-  return capFacts([where, "Raw values on added lines:", ...lines], "");
+  return factsText([where, "Raw values on added lines:", ...lines], "");
 };
 
 // src/services/prestep/native-changes.service.ts
@@ -59702,7 +59702,7 @@ var nativeChanges = async ({ files, checkout, base }) => {
       return `- ${p} ${k}: ${b === a ? `${a} (unchanged)` : `${b} -> ${a}`}`;
     });
   }));
-  return capFacts([
+  return factsText([
     ...native.length ? ["Native files changed:", ...native] : [],
     ...packages.length ? ["Packages with native code changed:", ...packages] : [],
     ...configs.length ? ["App config, base branch -> pull request:", ...configs.flat()] : ["The repo has no app.json or app.config file."]

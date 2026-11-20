@@ -1,8 +1,7 @@
 import type { Checkout } from '../../types/prestep.type';
 import { matches } from '../../utils/auto-pick.util';
+import { CODE } from '../../utils/facts.util';
 
-/** Source code in the languages a review reads. */
-export const CODE = ['**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte,astro,py,go,rs,java,kt,kts,swift,m,mm,c,h,cc,cpp,hpp,cs,rb,php,dart,scala,ex,exs}'];
 /** Built, vendored and minified code, never searched. */
 const BUILT = ['**/{dist,build,out,vendor,coverage,.next,.expo}/**', '**/*.min.*', '**/*.d.ts'];
 /** The search's caps: files read, bytes read, names searched for and files listed per name. */
@@ -27,8 +26,8 @@ export function search(checkout: Checkout, names: string[]): { hits: Map<string,
   if (!hits.size) return { hits, cut };
   const any = new RegExp(`(?<![\\w$])(${[...hits.keys()].map(escape).join('|')})(?![\\w$])`, 'g');
   const files = checkout
-    .find(CODE)
-    .filter((p) => !matches(p, BUILT))
+    .find(['**/*'])
+    .filter((p) => CODE.test(p) && !matches(p, BUILT))
     .sort();
   if (files.length > SEARCH_MAX.files) cut.push(`searched the first ${SEARCH_MAX.files} of ${files.length} code files`);
   let bytes = 0;

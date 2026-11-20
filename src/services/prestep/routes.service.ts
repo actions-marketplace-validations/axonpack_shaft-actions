@@ -1,5 +1,5 @@
 import type { Facts } from '../../types/prestep.type';
-import { capFacts } from '../../utils/facts.util';
+import { factsText } from '../../utils/facts.util';
 import { diffLines } from '../../utils/render.util';
 
 /** Route definitions, each giving its method and path where it can. */
@@ -40,5 +40,5 @@ export const routes: Facts = async ({ files, checkout }) => {
       );
     }
   }
-  return capFacts(lines, 'The added lines define no route.');
+  return factsText(lines, 'The added lines define no route.');
 };

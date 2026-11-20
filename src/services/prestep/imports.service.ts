@@ -1,7 +1,7 @@
 import { builtinModules } from 'node:module';
 import { basename, dirname } from 'node:path';
 import type { Checkout, Facts } from '../../types/prestep.type';
-import { capFacts } from '../../utils/facts.util';
+import { factsText } from '../../utils/facts.util';
 import { diffLines } from '../../utils/render.util';
 
 const JS = /\.(?:[mc]?[jt]sx?|vue|svelte|astro)$/;
@@ -77,5 +77,5 @@ export const imports: Facts = async ({ files, checkout }) => {
         lines.push(`- ${at} \`${name}\`: no Python manifest names it, and no module in the repo has the name; it may be in the standard library or published under another name`);
   }
   const n = js.length + py.length;
-  return lines.some((l) => l.startsWith('- ')) ? capFacts(lines, '') : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? '' : 's'} checked).`;
+  return lines.some((l) => l.startsWith('- ')) ? factsText(lines, '') : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? '' : 's'} checked).`;
 };

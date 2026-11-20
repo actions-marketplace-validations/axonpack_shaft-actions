@@ -1,7 +1,7 @@
 import type { Facts } from '../../types/prestep.type';
 import { exportNames } from '../../utils/exports.util';
-import { capFacts, removedLines } from '../../utils/facts.util';
-import { diffLines } from '../../utils/render.util';
+import { factsText } from '../../utils/facts.util';
+import { diffLines, removedLines } from '../../utils/render.util';
 
 /** `export * from './x'` and `export * as x from './x'`, which name no single export. */
 const STAR = /^\s*export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"][^'"]+['"]/;
@@ -48,5 +48,5 @@ export const exportsDiff: Facts = async ({ files }) => {
     }
     if (rows.length) lines.push(`${f.filename}:`, ...rows);
   }
-  return capFacts(lines, 'The pull request changes no exported name, no package entry point or version, and no changeset bump.');
+  return factsText(lines, 'The pull request changes no exported name, no package entry point or version, and no changeset bump.');
 };

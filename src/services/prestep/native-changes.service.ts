@@ -1,7 +1,7 @@
 import type { Facts } from '../../types/prestep.type';
 import { matches } from '../../utils/auto-pick.util';
-import { capFacts, removedLines } from '../../utils/facts.util';
-import { diffLines } from '../../utils/render.util';
+import { factsText } from '../../utils/facts.util';
+import { diffLines, removedLines } from '../../utils/render.util';
 
 /** Native projects, app config and the native settings files of iOS and Android. */
 const NATIVE = ['**/ios/**', '**/android/**', '**/*.podspec', '**/app.json', '**/app.config.*', '**/eas.json', '**/*.xcprivacy', '**/*.entitlements', '**/Info.plist', '**/AndroidManifest.xml'];
@@ -46,7 +46,7 @@ export const nativeChanges: Facts = async ({ files, checkout, base }) => {
         });
       }),
   );
-  return capFacts(
+  return factsText(
     [
       ...(native.length ? ['Native files changed:', ...native] : []),
       ...(packages.length ? ['Packages with native code changed:', ...packages] : []),

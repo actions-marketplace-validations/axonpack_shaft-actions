@@ -1,5 +1,5 @@
 import type { Facts } from '../../types/prestep.type';
-import { capFacts } from '../../utils/facts.util';
+import { factsText } from '../../utils/facts.util';
 import { changedExports, cutNote } from './callers.service';
 import { search } from './search.service';
 
@@ -15,5 +15,5 @@ export const unused: Facts = async ({ files, checkout }) => {
       return `- \`${name}\` (${file}${line ? `:${line}` : ''})`;
     });
   const head = lines.length ? `${lines.length} of the ${hits.size} new exports are named in no other code file:` : `Each of the ${hits.size} new exports is named in another code file.`;
-  return capFacts([...cutNote(cut), head, ...lines], '');
+  return factsText([...cutNote(cut), head, ...lines], '');
 };
