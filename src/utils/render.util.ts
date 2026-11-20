@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { ACTION_VERSION, DASHBOARD_URL, STATUS_CARDS_URL } from '../consts/api.const';
 import { failureMarkdown, type ShaftFailure } from './failure.util';
-import { billedTokens } from './tokens.util';
+import { billedTokens, CACHE_WEIGHT } from './tokens.util';
 
 export const SUMMARY_MARKER = '<!-- shaft:summary -->';
 
@@ -172,11 +172,17 @@ export type Footer = {
   /** `owner/repo`, for the links to the reviewed lines. */
   repo: string;
   runUrl?: string;
-  /** The run's page on the dashboard, which "Axon Shaft" links to; else the dashboard's home. */
+  /** The run's page on the dashboard; else the footer links the dashboard's home. */
   dashboardRunUrl?: string;
-  models: string;
-  effort: string;
-  reason: string;
+  /** The model that ran, the picked one the plan couldn't use when it fell back, and the subagents' models. Unset when no model was called. */
+  models?: { main: string; fellBackFrom?: string; subagents: string[] };
+  effort?: string;
+  /** Why `auto` picked the model and effort. */
+  reason?: string;
+  maxTurns?: number;
+  /** The changed lines and files the review read, after `skip`. */
+  lines?: number;
+  files?: number;
   /** What the run used. */
   tokens?: { input: number; output: number; cache_read: number; cache_write: number };
   /** The run's price in US dollars, set only for a run on an API key. */
@@ -188,24 +194,75 @@ export type Footer = {
   checklists?: { key: string; name: string; skip?: string }[];
   /** A newer v1 release than this run's, when the API says the run is pinned to an older one. */
   latestAction?: { version: string; url: string };
+  /** GitHub's web editor for the workflow file (`workflowEditUrl()`), linked under the newer release. */
+  workflowEditUrl?: string;
 };
+
+/**
+ * GitHub's web editor for the workflow file, from `GITHUB_WORKFLOW_REF`
+ * (`owner/repo/.github/workflows/x.yml@refs/heads/main`), on that branch. A tag or a pull request's
+ * merge ref isn't a branch to edit, so it's `defaultBranch` then; with neither, undefined.
+ */
+export function workflowEditUrl(workflowRef: string | undefined, defaultBranch: string | undefined): string | undefined {
+  const m = /^([^/]+\/[^/]+)\/(.+)@(.+)$/.exec(workflowRef ?? '');
+  const branch = m?.[3]!.startsWith('refs/heads/') ? m[3].slice('refs/heads/'.length) : defaultBranch;
+  return m && branch ? `https://github.com/${m[1]}/edit/${encodeURI(`${branch}/${m[2]}`)}` : undefined;
+}
 
 /** A token count, such as "950", "18k" or "1.2M". */
 export const formatTokens = (n: number) => (n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`);
 
-/** The run's price and total when it has a price, else the cache-weighted count with the total in brackets. */
-function usage(t: NonNullable<Footer['tokens']>, costUsd?: number): string {
-  const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
-  if (costUsd !== undefined) return `$${costUsd.toFixed(2)} · ${total} tokens`;
-  const billed = formatTokens(billedTokens(t));
-  return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
+/** A model's name for people: `claude-sonnet-5-5` is "Claude Sonnet 5.5". Any other ID stays as it is. */
+export function modelName(id: string): string {
+  const m = /^claude-(opus|sonnet|haiku)-(\d+(?:-\d)?)(?:-\d{8})?$/.exec(id);
+  return m ? `Claude ${m[1]!.charAt(0).toUpperCase()}${m[1]!.slice(1)} ${m[2]!.replace('-', '.')}` : id;
 }
 
-/** The line under what we post: links to the run's dashboard page and log, the model, effort, usage and why they were picked. */
+const modelCell = (id: string) => (modelName(id) === id ? `\`${id}\`` : `${modelName(id)} (\`${id}\`)`);
+
+/**
+ * The fold under what we post. Its line gives the model and effort, the tokens (with the cost on an
+ * API key) and the changed lines. Opened, a table has everything else the run knows, leaving out
+ * what it doesn't.
+ */
 export function footer(f: Footer): string {
-  const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
-  const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : '';
-  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
+  const t = f.tokens;
+  const total = t && t.input + t.output + t.cache_read + t.cache_write;
+  const cost = f.costUsd === undefined ? '' : `$${f.costUsd.toFixed(2)}`;
+  const head = f.models ? `${modelName(f.models.main)}${f.effort ? `, ${f.effort} effort` : ''}` : 'no model call';
+  const tail = [t && [`${formatTokens(total!)} tokens`, cost].filter(Boolean).join(' · '), f.lines !== undefined && plural(f.lines, 'line')].filter(Boolean).join(', ');
+  const ran = f.checklists?.filter((c) => !c.skip).map((c) => c.name) ?? [];
+  const notRun = f.checklists?.filter((c) => c.skip).map((c) => `${c.name} (${c.skip})`) ?? [];
+  const ref = process.env.GITHUB_ACTION_REF;
+  const rows: [string, unknown][] = [
+    ['Axon Shaft', f.dashboardRunUrl ? `[Run page](${f.dashboardRunUrl})` : `[Dashboard](${DASHBOARD_URL})`],
+    ['Logs', f.runUrl && `[Actions run](${f.runUrl})`],
+    ['Action', `v${ACTION_VERSION}${ref ? ` at \`${ref}\`` : ''}`],
+    ['Model', f.models ? modelCell(f.models.main) : 'No model call'],
+    ['Fallback', f.models?.fellBackFrom && `The plan can't use \`${f.models.fellBackFrom}\`, so the run used the model above`],
+    ['Subagents', f.models?.subagents.map(modelCell).join(', ')],
+    ['Effort', f.effort],
+    ['Why this model', f.reason],
+    ['Turn limit', f.maxTurns],
+    ['Changed lines', f.lines],
+    ['Changed files', f.files],
+    ['Skipped by `skip`', f.skipped && plural(f.skipped, 'file')],
+    ['Checklists run', ran.join(', ')],
+    ['Checklists not run', notRun.join(', ')],
+    ['Input', t && formatTokens(t.input)],
+    ['Output', t && formatTokens(t.output)],
+    ['Cache read', t && formatTokens(t.cache_read)],
+    ['Cache write', t && formatTokens(t.cache_write)],
+    ['Total', t && formatTokens(total!)],
+    ['Billed, cache-weighted', t && `≈${formatTokens(billedTokens(t))}`],
+    ['Cost', cost],
+    ['Reviewed commit', `[\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`],
+  ];
+  const table = ['| | |', '|---|---|', ...rows.filter(([, v]) => v !== undefined && v !== '' && v !== 0).map(([k, v]) => `| ${k} | ${cell(String(v))} |`)];
+  const note = t
+    ? ['', `Billed counts a cache read as ${CACHE_WEIGHT.read} of an input token and a cache write as ${CACHE_WEIGHT.write}, so it can be higher than the total when a run writes a lot of cache.`]
+    : [];
+  return details(`<sub>${[head, tail].filter(Boolean).join(' · ')}</sub>`, [...table, ...note].join('\n'));
 }
 
 const chip = (text: string) => `<kbd>${text}</kbd>`;
@@ -273,7 +330,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     '>',
     `> **Checks** &nbsp; ${checkChips.join(' ')}`,
     '>',
-    `> <sub>${[type && `🏷️ ${type}`, `🎯 ${review.confidence}% confidence`, `🔎 reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(' · ')}</sub>`,
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(' · ')}</sub>`,
   ].join('\n');
 }
 
@@ -319,15 +376,14 @@ export function startSummary(sha: string, prior?: State): string {
 }
 
 /** The summary when none of the job's checklists ran: one chip each, and no model was asked. */
-export function idleSummary(states: CheckItem[], prior: State | undefined, f: Pick<Footer, 'sha' | 'runUrl' | 'dashboardRunUrl'>): string {
-  const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
+export function idleSummary(states: CheckItem[], prior: State | undefined, f: Footer): string {
   return [
     SUMMARY_MARKER,
     `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
     '',
     states.map(stateChip).join(' '),
     '',
-    `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · no model call</sub>`,
+    footer(f),
     ...(prior ? [stateLine(prior)] : []),
   ].join('\n');
 }
@@ -343,12 +399,11 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
   const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
+  // Its own blockquote, after a blank line, so it doesn't run into the card's.
   if (f.latestAction) {
     const { version, url } = f.latestAction;
-    out.push(
-      '',
-      `Axon Shaft [v${version}](${url}) is out (this run used v${ACTION_VERSION}). To get each v1 release as it comes out, change \`uses:\` to \`axonpack/shaft-actions@v1\`.`,
-    );
+    const links = [f.workflowEditUrl && `[Update the workflow](${f.workflowEditUrl})`, `[Update from the dashboard](${f.dashboardRunUrl ?? DASHBOARD_URL})`];
+    out.push('', '> [!NOTE]', `> Axon Shaft [v${version}](${url}) is out. This run used v${ACTION_VERSION}.`, `> ${links.filter(Boolean).join(' · ')}`);
   }
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== 'not_met').length;

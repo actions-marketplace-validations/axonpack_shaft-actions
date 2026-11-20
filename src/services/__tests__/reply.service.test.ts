@@ -118,8 +118,10 @@ test('a question on a line is answered under its thread, with the footer and mar
   expect(fake.posted).toHaveLength(1);
   const [reply] = fake.posted;
   expect(reply).toMatchObject({ where: 'thread', comment_id: 4 });
-  expect(reply.body).toMatch(/^See `src\/retry\.ts:42`\. {2}\*\*\* &lt;!-- shaft:summary -->\n\n<sub>\[Axon Shaft\]\(https:\/\/shaft\.axonpack\.dev\/console\/acme\/widgets\/runs\/3\) · \[run\]/);
-  expect(reply.body).toMatch(/· sonnet · medium · 9k tokens · question<\/sub>\n\n<!-- shaft:reply -->$/);
+  expect(reply.body).toMatch(/^See `src\/retry\.ts:42`\. {2}\*\*\* &lt;!-- shaft:summary -->\n\n<details><summary><sub>sonnet, medium effort · 9k tokens<\/sub><\/summary>\n/);
+  expect(reply.body).toContain('| Axon Shaft | [Run page](https://shaft.axonpack.dev/console/acme/widgets/runs/3) |');
+  expect(reply.body).toContain('| Why this model | question |');
+  expect(reply.body).toMatch(/\n<\/details>\n\n<!-- shaft:reply -->$/);
   expect(out).toEqual({
     model: 'sonnet',
     effort: 'medium',

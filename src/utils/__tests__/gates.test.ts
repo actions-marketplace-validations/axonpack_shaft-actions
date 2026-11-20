@@ -20,7 +20,7 @@ const gates: Gate[] = [
   { gate: 'Public API changes update the docs', status: 'not_met', reason: 'docs/api.md | is unchanged.' },
   { gate: 'New endpoints have a test', status: 'not_applicable', reason: 'No endpoint changed.' },
 ];
-const info = { sha: 'abc1234', repo: 'acme/widgets', models: 'claude-haiku-4', effort: 'low', reason: '3 lines' };
+const info = { sha: 'abc1234', repo: 'acme/widgets', models: { main: 'claude-haiku-4', subagents: [] }, effort: 'low', reason: '3 lines' };
 
 test('the schema keeps gates optional, with their statuses and limit', () => {
   expect(SCHEMA.required).not.toContain('gates');

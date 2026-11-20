@@ -157,7 +157,7 @@ What counts as a command:
 - A question on a line of the diff is answered in that line's thread. A question in the conversation tab or in a review's body gets a comment on the pull request.
 - The model reads the pull request's head commit with the review's read-only tools and environment (see [What the review can do](#what-the-review-can-do)). It can't edit, commit or push.
 - The prompt has the question and the line it's on, the PR's title, body, commits and diff after `skip`, and the other comments of people inside the repo (see [What the review can do](#what-the-review-can-do)).
-- The answer cites `file:line` for its claims. It ends with the same footer line as the summary comment and is cut at 20,000 characters.
+- The answer cites `file:line` for its claims. It ends with the same footer as the summary comment and is cut at 20,000 characters.
 - With the model and effort on `auto`, it runs on `sonnet` at `medium` effort. With no turn limit set, the limit is 30.
 - The dashboard gets the run with the model, the tokens and the answer. A reply has no verdict.
 - When the model's session fails, the failure's card is posted where the question was asked, and the step fails.
@@ -261,8 +261,8 @@ With the model and effort on `auto`, the action picks both from the diff, after 
 
 - A model or effort set on the dashboard turns `auto` off for that one only.
 - On a deep review the subagents run on `sonnet` when the model is `auto`, and on the set model when it isn't.
-- If the Claude plan can't use the model `auto` picked, the review falls back to the next smaller one and the footer says so.
-- The footer always shows the model, the effort, the tokens the run used (see [the summary comment](#the-summary-comment)) and the reason.
+- If the Claude plan can't use the model `auto` picked, the review falls back to the next smaller one, and the footer's table has a Fallback row.
+- The footer shows the model, the effort and the tokens the run used, and its table adds why `auto` picked them (see [the summary comment](#the-summary-comment)).
 
 ### The turn limit by size
 
@@ -276,7 +276,7 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 
 - A limit set on the dashboard always wins.
 - The action knows the limit wasn't set when the Axon Shaft API marks it as its default. With an API too old to say so, the review uses the limit the API sent.
-- When the action picked the limit by size, the footer's reason says so, such as `60 lines, up to 12 turns`.
+- When the action picked the limit by size, the footer table's "Why this model" row says so, such as `60 lines, up to 12 turns`.
 
 ## What gets posted
 
@@ -285,7 +285,7 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 Axon Shaft keeps one summary comment on the PR and edits it on every push. The first review creates it only once the result is ready, so GitHub emails people on the PR once, about the result. A review that fails also creates it, to show the failure. From the top, it holds:
 
 1. A card in a GitHub alert, colored by verdict: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. See [the card](#the-card) below.
-   When the workflow pins an older v1 release (such as `@v1.5.0`) and a newer one is out, a line under the card names the new version and links to its release, with the version the run used. It says to change `uses:` to `axonpack/shaft-actions@v1` to get each v1 release as it comes out. A run on `@v1`, a branch or a SHA never gets it.
+   When the workflow pins an older v1 release (such as `@v1.5.0`) and a newer one is out, a `NOTE` under the card names the new version, linked to its release, and the version the run used. Under that, "Update the workflow" opens the workflow file in GitHub's editor, on the branch the run read it from (the default branch when the run came from a tag or a pull request's merge ref), and "Update from the dashboard" opens the run's page there. With no workflow path to go on, only the dashboard link shows. A run on `@v1`, a branch or a SHA never gets the note.
 2. "Merge gates", when the project has any: each gate with ✓ (met), ✗ (not met) or – (doesn't apply), and the review's reason.
 3. A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit.
    A finding with an inline comment says "inline". A finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
@@ -294,10 +294,9 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
 6. "Walkthrough", folded, for a pull request that changes three or more files: a table of the changed files grouped by area, with one line on what changed in each, and a Mermaid flow diagram when the pull request changes how its parts call each other.
    It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
 7. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
-8. A footer with the run link, the model (and the subagents' model on a deep review), the effort, the tokens and why `auto` picked them.
-   On an API key the tokens show as the cost and the total, such as `$0.38 · 759k tokens`.
-   On a subscription they show as the cache-weighted count with the total in brackets, such as `≈220k billed (759k with cache)`. A cache write counts 1.25 times, a cache read a tenth, and input and output as they are. Every turn reads the cached prompt again, so the total can be several times what was billed.
-   "Axon Shaft" in the footer links to the run's page on the dashboard. With an API that doesn't send the run's page, it links to the dashboard.
+8. A footer, one small line that opens into a table. The line gives the model by name, the effort, the tokens and the changed lines, such as `Claude Sonnet 5.5, medium effort · 62k tokens, 219 lines`. On an API key the cost follows the tokens (`62k tokens · $0.38, 219 lines`). With no token counts the tokens are left out, and a run with no model call reads `no model call · 219 lines`.
+   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
+   Billed is cache-weighted: a cache read counts as 0.1 of an input token and a cache write as 1.25, so it can come out above the total when a run writes a lot of cache. A note under the table says so.
    The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
 #### The card
@@ -318,7 +317,7 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
 - Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
 - When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
 
-The card's last line gives the kind of change (🏷️), the model's confidence (🎯) and the reviewed commit (🔎), linked to the commit on GitHub.
+The card's last line gives the kind of change, the model's confidence and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · 85% confidence · reviewed a1b2c3d`.
 
 ### Progress while the review runs
 

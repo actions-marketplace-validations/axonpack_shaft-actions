@@ -361,7 +361,7 @@ test('each guide is cut at 8,000 characters and all of them at 30,000, saying so
 test("the footer and /v1/runs name the review's model, not the CLI's own helper model", async () => {
   usage = ['claude-haiku-5-5', 'claude-sonnet-5-5'];
   const { summary, outcome } = await review([file('src/a.ts')]);
-  expect(summary).toContain(' · claude-sonnet-5-5 · medium · ');
+  expect(summary).toContain('<sub>Claude Sonnet 5.5, medium effort · ');
   expect(summary).not.toContain('haiku');
   expect(outcome.model).toBe('claude-sonnet-5-5');
 });
@@ -369,7 +369,8 @@ test("the footer and /v1/runs name the review's model, not the CLI's own helper 
 test('a deep review names its subagent model after the review model', async () => {
   usage = ['claude-haiku-5-5', 'claude-opus-5', 'claude-sonnet-5-5'];
   const { summary, outcome } = await review([file('src/a.ts')], { depth: 'deep', passes: [{ name: 'correctness', description: 'd', prompt: 'p' }] });
-  expect(summary).toContain(' · claude-opus-5 · subagents: claude-sonnet-5-5 · high · ');
+  expect(summary).toContain('<sub>Claude Opus 5, high effort · ');
+  expect(summary).toContain('| Subagents | Claude Sonnet 5.5 (`claude-sonnet-5-5`) |');
   expect(outcome.model).toBe('claude-opus-5, claude-sonnet-5-5');
 });
 
@@ -544,7 +545,8 @@ test('with only script checklists to run, no model is called: the script finding
   expect(logs).toContain('Would post the Axon Shaft / secrets check: failure');
   expect(logs.some((l) => l.startsWith('--- inline comment on src/a.ts:2'))).toBe(true);
   expect(summary).toContain('Only script checklists ran (The secrets list), so no model was called.');
-  expect(summary).toContain('no model call · scripts only · secrets</sub>');
+  expect(summary).toContain('<sub>no model call · 2 lines</sub>');
+  expect(summary).toContain('| Checklists run | The secrets list |');
   expect(summary).not.toContain('What this PR does');
   expect(logs.join('\n')).not.toContain(KEY);
 });

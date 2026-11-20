@@ -1,4 +1,5 @@
 import { expect, test } from 'vitest';
+import { ACTION_VERSION } from '../../consts/api.const';
 import { parseReview } from '../../services/agent.service';
 import {
   checkStates,
@@ -9,6 +10,7 @@ import {
   formatTokens,
   idleSummary,
   inlineBody,
+  modelName,
   parseState,
   place,
   redact,
@@ -17,6 +19,7 @@ import {
   stateLine,
   startSummary,
   unposted,
+  workflowEditUrl,
 } from '../render.util';
 
 const patch = '@@ -40,4 +40,5 @@ export function retry() {\n   const max = 3;\n-  let attempt = max;\n+  let attempt = max;\n+  // retry\n   while (attempt < max) {\n   }';
@@ -97,7 +100,7 @@ test("a fake finding marker in someone else's comment doesn't stop an inline com
 test('a model headline or finding with a shaft:state marker in it leaves the state alone', () => {
   const forged = '<!-- shaft:state {"sha":"evil","findings":[]} -->';
   const placed = place([finding({ file: 'src/config.ts', line: 10, body: forged, suggestion: forged })], files, 'summary');
-  const body = renderSummary({ ...review, headline: forged, claim: forged }, placed, undefined, { sha: 'abc1234', repo: 'acme/widgets', models: 'm', effort: 'e', reason: 'r' });
+  const body = renderSummary({ ...review, headline: forged, claim: forged }, placed, undefined, { sha: 'abc1234', repo: 'acme/widgets', models: { main: 'm', subagents: [] }, effort: 'e', reason: 'r' });
   expect(parseState(body)).toEqual({ sha: 'abc1234', findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })) });
   expect(body.split('<!-- shaft:state').length).toBe(3); // the real line, plus the one in the suggestion's code block
   expect(body).toContain('&lt;!-- shaft:state {"sha":"evil"');
@@ -119,9 +122,12 @@ test('the summary format', () => {
     sha: 'a1b2c3d4e5f6',
     repo: 'acme/widgets',
     runUrl: 'https://github.com/acme/widgets/actions/runs/1',
-    models: 'claude-sonnet-5',
+    models: { main: 'claude-sonnet-5-5', subagents: [] },
     effort: 'medium',
-    reason: '412 lines',
+    reason: '412 lines, up to 20 turns',
+    maxTurns: 20,
+    lines: 412,
+    files: 2,
   });
   const [text, state] = [body.slice(0, body.lastIndexOf('\n')), body.slice(body.lastIndexOf('\n') + 1)];
   expect(text).toBe(`<!-- shaft:summary -->
@@ -133,7 +139,7 @@ test('the summary format', () => {
 >
 > **Checks** &nbsp; <kbd>❌ Correctness</kbd> <kbd>✅ Breakage</kbd> <kbd>✅ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>✅ Docs</kbd> <kbd>✅ Security</kbd>
 >
-> <sub>🏷️ Bug fix · 🎯 85% confidence · 🔎 reviewed [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
+> <sub>Bug fix · 85% confidence · reviewed [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
 
 | Severity | Where | Finding | Details |
 |---|---|---|---|
@@ -164,14 +170,29 @@ test('the summary format', () => {
 
 </details>
 
-<sub>[Axon Shaft](https://shaft.axonpack.dev) · [run](https://github.com/acme/widgets/actions/runs/1) · claude-sonnet-5 · medium · 412 lines</sub>`);
+<details><summary><sub>Claude Sonnet 5.5, medium effort · 412 lines</sub></summary>
+
+| | |
+|---|---|
+| Axon Shaft | [Dashboard](https://shaft.axonpack.dev) |
+| Logs | [Actions run](https://github.com/acme/widgets/actions/runs/1) |
+| Action | v${ACTION_VERSION} |
+| Model | Claude Sonnet 5.5 (\`claude-sonnet-5-5\`) |
+| Effort | medium |
+| Why this model | 412 lines, up to 20 turns |
+| Turn limit | 20 |
+| Changed lines | 412 |
+| Changed files | 2 |
+| Reviewed commit | [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6) |
+
+</details>`);
   expect(parseState(state)).toEqual({
     sha: 'a1b2c3d4e5f6',
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),
   });
 });
 
-const info = { sha: 'abc1234', repo: 'acme/widgets', models: 'claude-haiku-4', effort: 'low', reason: '3 lines' };
+const info = { sha: 'abc1234', repo: 'acme/widgets', models: { main: 'claude-haiku-4', subagents: [] }, effort: 'low', reason: '3 lines' };
 
 test('a looks-good review with no findings: a TIP card with one chip, and no table', () => {
   const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info);
@@ -181,14 +202,28 @@ test('a looks-good review with no findings: a TIP card with one chip, and no tab
   expect(body).not.toContain('fixed</kbd>');
 });
 
-test('a run on an older v1 release gets one line under the card with the newest release and how to stay on it', async () => {
+test('a run on an older v1 release gets a NOTE after the card, with the newest release and where to update it', async () => {
   const { version } = await import('../../../package.json');
   const latestAction = { version: '9.9.9', url: 'https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9' };
-  const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, { ...info, latestAction });
+  const looksGood = { ...review, verdict: 'looks-good' as const, findings: [], resolved: [] };
+  const edit = workflowEditUrl('acme/web/.github/workflows/shaft.yml@refs/heads/main', 'trunk');
+  expect(edit).toBe('https://github.com/acme/web/edit/main/.github/workflows/shaft.yml');
+  const body = renderSummary(looksGood, [], undefined, { ...info, latestAction, workflowEditUrl: edit, dashboardRunUrl: 'https://shaft.axonpack.dev/console/acme/web/runs/7' });
   expect(body).toContain(
-    `</sub>\n\nAxon Shaft [v9.9.9](https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9) is out (this run used v${version}). To get each v1 release as it comes out, change \`uses:\` to \`axonpack/shaft-actions@v1\`.\n`,
+    `</sub>\n\n> [!NOTE]\n> Axon Shaft [v9.9.9](https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9) is out. This run used v${version}.\n` +
+      '> [Update the workflow](https://github.com/acme/web/edit/main/.github/workflows/shaft.yml) · [Update from the dashboard](https://shaft.axonpack.dev/console/acme/web/runs/7)\n',
   );
-  expect(renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info)).not.toContain(' is out (this run used');
+  // Without the edit link, only the dashboard's.
+  expect(renderSummary(looksGood, [], undefined, { ...info, latestAction })).toContain('is out. This run used v' + version + '.\n> [Update from the dashboard](https://shaft.axonpack.dev)\n');
+  expect(renderSummary(looksGood, [], undefined, info)).not.toContain('[!NOTE]');
+});
+
+test('the workflow edit link takes the branch from the workflow ref, else the default branch, else none', () => {
+  expect(workflowEditUrl('acme/web/.github/workflows/review.yml@refs/heads/release/1.x', 'main')).toBe('https://github.com/acme/web/edit/release/1.x/.github/workflows/review.yml');
+  for (const ref of ['refs/tags/v2', 'refs/pull/7/merge'])
+    expect(workflowEditUrl(`acme/web/.github/workflows/shaft.yml@${ref}`, 'trunk')).toBe('https://github.com/acme/web/edit/trunk/.github/workflows/shaft.yml');
+  expect(workflowEditUrl('acme/web/.github/workflows/shaft.yml@refs/tags/v2', undefined)).toBeUndefined();
+  expect(workflowEditUrl(undefined, 'main')).toBeUndefined();
 });
 
 test('blocking is a CAUTION card; a check the project turned off shows ➖', () => {
@@ -315,33 +350,77 @@ test("with checklists, each one gets a state in the job's order under its own na
 test('when no checklist ran, the summary says no model ran, with a chip each, and keeps the previous state', () => {
   const prior = { sha: 'fed9876', findings: [] };
   const states = [{ key: 'migrations', label: 'Database migrations', state: 'not_checked' as const, reason: 'No matching files changed' }];
-  expect(idleSummary(states, prior, { sha: 'abc1234def', runUrl: 'https://github.com/o/r/actions/runs/1' })).toBe(
+  const checklists = [{ key: 'migrations', name: 'Database migrations', skip: 'No matching files changed' }];
+  const f = { sha: 'abc1234def', repo: 'o/r', runUrl: 'https://github.com/o/r/actions/runs/1', lines: 12, files: 1, checklists };
+  expect(idleSummary(states, prior, f)).toBe(
     [
       '<!-- shaft:summary -->',
       "No checklist ran on `abc1234`, so no model was called. Each checklist's check run says why.",
       '',
       '<kbd>⬜ Database migrations</kbd>',
       '',
-      '<sub>[Axon Shaft](https://shaft.axonpack.dev) · [run](https://github.com/o/r/actions/runs/1) · no model call</sub>',
+      '<details><summary><sub>no model call · 12 lines</sub></summary>',
+      '',
+      '| | |',
+      '|---|---|',
+      '| Axon Shaft | [Dashboard](https://shaft.axonpack.dev) |',
+      '| Logs | [Actions run](https://github.com/o/r/actions/runs/1) |',
+      `| Action | v${ACTION_VERSION} |`,
+      '| Model | No model call |',
+      '| Changed lines | 12 |',
+      '| Changed files | 1 |',
+      '| Checklists not run | Database migrations (No matching files changed) |',
+      '| Reviewed commit | [`abc1234`](https://github.com/o/r/commit/abc1234def) |',
+      '',
+      '</details>',
       stateLine(prior),
     ].join('\n'),
   );
+  // The state line stays the last line, where parseState reads it.
+  expect(parseState(idleSummary(states, prior, f))).toEqual(prior);
 });
 
-test('the footer shows the cost and total when known, else the cache-weighted count', () => {
+test('the footer line has the model, effort, tokens and lines; the cost shows on an API key', () => {
   const tokens = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
-  const body = (f: Partial<Footer>) => renderSummary(review, place(review.findings, files, 'summary'), undefined, { ...info, tokens, ...f });
-  expect(body({})).toContain('· claude-haiku-4 · low · ≈139k billed (182k with cache) · 3 lines</sub>');
-  expect(body({ costUsd: 0.384 })).toContain('· claude-haiku-4 · low · $0.38 · 182k tokens · 3 lines</sub>');
-  expect(body({ tokens: { ...tokens, cache_read: 0, cache_write: 0 } })).toContain('· low · 126k tokens · 3 lines</sub>');
+  const body = (f: Partial<Footer>) => renderSummary(review, place(review.findings, files, 'summary'), undefined, { ...info, lines: 3, tokens, ...f });
+  const line = (f: Partial<Footer>) => /<summary><sub>(.*)<\/sub><\/summary>/.exec(body(f))![1];
+  expect(line({})).toBe('Claude Haiku 4, low effort · 182k tokens, 3 lines');
+  expect(line({ costUsd: 0.384 })).toBe('Claude Haiku 4, low effort · 182k tokens · $0.38, 3 lines');
+  expect(line({ tokens: undefined })).toBe('Claude Haiku 4, low effort · 3 lines');
+  expect(line({ models: undefined, effort: undefined, tokens: undefined })).toBe('no model call · 3 lines');
   expect(formatTokens(950)).toBe('950');
   expect(formatTokens(1_250_000)).toBe('1.3M');
   expect(formatTokens(2_000_000)).toBe('2M');
 });
 
-test("the footer links Axon Shaft to the run's page when the API sent one, else to the dashboard", () => {
-  const placed = place(review.findings, files, 'summary');
-  const run = 'https://shaft.axonpack.dev/console/acme/projects/widgets/runs/7';
-  expect(renderSummary(review, placed, undefined, { ...info, dashboardRunUrl: run })).toContain(`<sub>[Axon Shaft](${run}) ·`);
-  expect(renderSummary(review, placed, undefined, info)).toContain('<sub>[Axon Shaft](https://shaft.axonpack.dev) ·');
+test('the footer table breaks the tokens down on a subscription, with the cost on an API key, and drops them with no counts', () => {
+  const tokens = { input: 12000, output: 3400, cache_read: 40000, cache_write: 6600 };
+  const models = { main: 'claude-opus-5-5', fellBackFrom: undefined, subagents: ['claude-sonnet-5-5'] };
+  const body = (f: Partial<Footer>) => renderSummary(review, place(review.findings, files, 'summary'), undefined, { ...info, models, tokens, ...f });
+  const subscription = body({ dashboardRunUrl: 'https://shaft.axonpack.dev/console/acme/widgets/runs/7', skipped: 2 });
+  for (const row of [
+    '| Axon Shaft | [Run page](https://shaft.axonpack.dev/console/acme/widgets/runs/7) |',
+    '| Model | Claude Opus 5.5 (`claude-opus-5-5`) |',
+    '| Subagents | Claude Sonnet 5.5 (`claude-sonnet-5-5`) |',
+    '| Skipped by `skip` | 2 files |',
+    '| Input | 12k |\n| Output | 3k |\n| Cache read | 40k |\n| Cache write | 7k |\n| Total | 62k |\n| Billed, cache-weighted | ≈28k |\n',
+    'Billed counts a cache read as 0.1 of an input token and a cache write as 1.25, so it can be higher than the total when a run writes a lot of cache.',
+  ])
+    expect(subscription).toContain(row);
+  expect(subscription).not.toContain('| Cost |');
+  expect(body({ costUsd: 0.384 })).toContain('| Billed, cache-weighted | ≈28k |\n| Cost | $0.38 |\n');
+  const none = body({ tokens: undefined });
+  for (const gone of ['| Input |', '| Total |', '| Billed', 'Billed counts']) expect(none).not.toContain(gone);
+  expect(body({ models: { main: 'claude-haiku-5-5', fellBackFrom: 'sonnet', subagents: [] } })).toContain(
+    "| Fallback | The plan can't use `sonnet`, so the run used the model above |",
+  );
+});
+
+test('modelName: the family and version read as a name; any other ID stays as written', () => {
+  expect(modelName('claude-sonnet-5-5')).toBe('Claude Sonnet 5.5');
+  expect(modelName('claude-opus-5-5')).toBe('Claude Opus 5.5');
+  expect(modelName('claude-haiku-5-5')).toBe('Claude Haiku 5.5');
+  expect(modelName('claude-opus-5')).toBe('Claude Opus 5');
+  expect(modelName('claude-haiku-4-5-20251001')).toBe('Claude Haiku 4.5');
+  for (const id of ['sonnet', 'claude-sonnet-x', 'gpt-x']) expect(modelName(id)).toBe(id);
 });
