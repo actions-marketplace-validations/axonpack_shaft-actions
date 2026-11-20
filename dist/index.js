@@ -23754,8 +23754,41 @@ function getOctokit(token, options, ...additionalPlugins) {
   const GitHubWithPlugins = GitHub.plugin(...additionalPlugins);
   return new GitHubWithPlugins(getOctokitOptions(token, options));
 }
+// package.json
+var version = "1.5.0";
+var package_default = {
+  name: "shaft",
+  version,
+  private: true,
+  description: "A GitHub Action that reviews pull requests with Claude through the Claude Agent SDK.",
+  license: "MIT",
+  type: "module",
+  scripts: {
+    build: "bun build src/main.ts --target node --outfile dist/index.js",
+    lint: "oxlint src",
+    typecheck: "tsc --noEmit",
+    test: "vitest run",
+    changeset: "changeset",
+    "version-packages": "changeset version && bun run build"
+  },
+  dependencies: {
+    "@actions/core": "^3.0.1",
+    "@actions/github": "^9.1.1",
+    "@anthropic-ai/claude-agent-sdk": "0.3.325"
+  },
+  devDependencies: {
+    "@changesets/cli": "3.0.3",
+    "@types/node": "^26.6.6",
+    oxlint: "1.90.0",
+    "oxlint-config-universe": "0.2.0",
+    typescript: "^7.0.2",
+    vitest: "5.0.5",
+    yaml: "2.9.1"
+  }
+};
 
 // src/consts/api.const.ts
+var ACTION_VERSION = version;
 var API_AUDIENCE = "https://api-shaft.axonpack.dev";
 var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
 var APP_BOT = "axonshaft[bot]";
@@ -23798,7 +23831,7 @@ async function post(path, body) {
   }
 }
 async function fetchGrant(request) {
-  const res = await post("/v1/token", request);
+  const res = await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } });
   const body = await res.json().catch(() => {
     return;
   });
@@ -24188,6 +24221,10 @@ function renderSummary(raw, placed, prior, f) {
   const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
   const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
+  if (f.latestAction) {
+    const { version, url } = f.latestAction;
+    out.push("", `Axon Shaft [v${version}](${url}) is out (this run used v${ACTION_VERSION}). To get each v1 release as it comes out, change \`uses:\` to \`axonpack/shaft-actions@v1\`.`);
+  }
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== "not_met").length;
     out.push("", `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, "", gatesTable(raw.gates));
@@ -58247,37 +58284,6 @@ Je();
 Yh();
 qe();
 qe();
-// package.json
-var package_default = {
-  name: "shaft",
-  version: "1.5.0",
-  private: true,
-  description: "A GitHub Action that reviews pull requests with Claude through the Claude Agent SDK.",
-  license: "MIT",
-  type: "module",
-  scripts: {
-    build: "bun build src/main.ts --target node --outfile dist/index.js",
-    lint: "oxlint src",
-    typecheck: "tsc --noEmit",
-    test: "vitest run",
-    changeset: "changeset",
-    "version-packages": "changeset version && bun run build"
-  },
-  dependencies: {
-    "@actions/core": "^3.0.1",
-    "@actions/github": "^9.1.1",
-    "@anthropic-ai/claude-agent-sdk": "0.3.325"
-  },
-  devDependencies: {
-    "@changesets/cli": "3.0.3",
-    "@types/node": "^26.6.6",
-    oxlint: "1.90.0",
-    "oxlint-config-universe": "0.2.0",
-    typescript: "^7.0.2",
-    vitest: "5.0.5",
-    yaml: "2.9.1"
-  }
-};
 
 // src/consts/env.const.ts
 var ENV_ALLOW = [
@@ -59571,6 +59577,7 @@ ${c.body}`);
     checklists: planned,
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
+    latestAction: o.latestAction,
     models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
     effort: useModel ? choice.effort : "scripts only",
     reason: useModel ? choice.reason : scripted.map((c) => c.key).join(", "),
@@ -59827,7 +59834,8 @@ ${grant.comment}`);
     gates: globs(settings.gates),
     prompt: job.prompt,
     checks: job.checks,
-    checklists: job.checklists
+    checklists: job.checklists,
+    latestAction: grant.latest_action
   });
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);

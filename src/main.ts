@@ -124,6 +124,7 @@ async function run(): Promise<void> {
     prompt: job.prompt,
     checks: job.checks,
     checklists: job.checklists,
+    latestAction: grant.latest_action,
   });
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);

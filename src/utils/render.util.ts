@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { DASHBOARD_URL, STATUS_CARDS_URL } from '../consts/api.const';
+import { ACTION_VERSION, DASHBOARD_URL, STATUS_CARDS_URL } from '../consts/api.const';
 import { failureMarkdown, type ShaftFailure } from './failure.util';
 import { billedTokens } from './tokens.util';
 
@@ -177,6 +177,8 @@ export type Footer = {
   checks?: string[];
   /** The job's checklists, when the API sends them: the card shows these in place of the checks. */
   checklists?: { key: string; name: string; skip?: string }[];
+  /** A newer v1 release than this run's, when the API says the run is pinned to an older one. */
+  latestAction?: { version: string; url: string };
 };
 
 /** A token count, such as "950", "18k" or "1.2M". */
@@ -332,6 +334,13 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
   const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
+  if (f.latestAction) {
+    const { version, url } = f.latestAction;
+    out.push(
+      '',
+      `Axon Shaft [v${version}](${url}) is out (this run used v${ACTION_VERSION}). To get each v1 release as it comes out, change \`uses:\` to \`axonpack/shaft-actions@v1\`.`,
+    );
+  }
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== 'not_met').length;
     out.push('', `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, '', gatesTable(raw.gates));

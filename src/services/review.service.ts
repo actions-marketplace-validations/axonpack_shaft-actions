@@ -70,6 +70,8 @@ export type ReviewOptions = {
   runUrl?: string;
   /** The run's page on the dashboard, when the API sends it. */
   dashboardRunUrl?: string;
+  /** A newer v1 release than this run's, for a line under the summary's card. */
+  latestAction?: { version: string; url: string };
   cwd: string;
   /** The project's own variables the agent's commands get, by name. */
   env?: string[];
@@ -395,6 +397,7 @@ async function postReview(
     checklists: planned,
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
+    latestAction: o.latestAction,
     models:
       models.main +
       (models.fellBack ? ` (${choice.model} unavailable)` : '') +

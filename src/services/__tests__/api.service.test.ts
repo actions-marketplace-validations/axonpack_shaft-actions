@@ -12,6 +12,7 @@ vi.doMock('@actions/core', () => ({
   warning: (s: string) => warnings.push(s),
 }));
 const { fetchGrant, reportRun } = await import('../api.service');
+const { version } = await import('../../../package.json');
 
 const requests: { url: string; init: RequestInit }[] = [];
 const answer = (res: Response | Error) =>
@@ -27,7 +28,11 @@ beforeEach(() => {
   audiences.length = 0;
   requests.length = 0;
   process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
+  process.env.GITHUB_ACTION_REF = 'v1.5.0';
 });
+
+/** What every POST /v1/token also sends: this build's version and the ref the workflow runs it at. */
+const action = { version, ref: 'v1.5.0' };
 
 const review = { job: 'review', event: 'push' } as const;
 const job = {
@@ -44,13 +49,13 @@ const failure = (p: Promise<unknown>) => p.then(
   (e) => ({ code: e.code, message: e.message, url: e.url }),
 );
 
-test('POST /v1/token sends the job and event with the OIDC token, and masks both tokens', async () => {
+test("POST /v1/token sends the job and event, and the action's version and ref, with the OIDC token, and masks both tokens", async () => {
   answer(Response.json(run));
   expect(await fetchGrant(review)).toEqual(run);
   expect(audiences).toEqual(['https://api-shaft.axonpack.dev']);
   expect(requests[0].url).toBe('https://api-shaft.axonpack.dev/v1/token');
   expect(requests[0].init).toMatchObject({ method: 'POST', headers: { authorization: 'Bearer oidc-1' } });
-  expect(JSON.parse(requests[0].init.body as string)).toEqual(review);
+  expect(JSON.parse(requests[0].init.body as string)).toEqual({ ...review, action });
   expect(masked).toEqual(['ghs_shaft', 'sk-ant-oat-shaft']);
 });
 
@@ -59,13 +64,16 @@ test('a review sends whether the PR comes from a fork; one started from a commen
   await fetchGrant({ job: 'review', event: 'opened', fork: true });
   answer(Response.json(run));
   await fetchGrant({ job: 'review', fork: false });
-  expect(requests.map((r) => JSON.parse(r.init.body as string))).toEqual([{ job: 'review', event: 'opened', fork: true }, { job: 'review', fork: false }]);
+  expect(requests.map((r) => JSON.parse(r.init.body as string))).toEqual([
+    { job: 'review', event: 'opened', fork: true, action },
+    { job: 'review', fork: false, action },
+  ]);
 });
 
 test('a task sends no event', async () => {
   answer(Response.json(run));
   await fetchGrant({ job: 'task' });
-  expect(JSON.parse(requests[0].init.body as string)).toEqual({ job: 'task' });
+  expect(JSON.parse(requests[0].init.body as string)).toEqual({ job: 'task', action });
 });
 
 test('run: false comes back with its reason, and nothing is masked', async () => {

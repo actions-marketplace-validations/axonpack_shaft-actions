@@ -67,6 +67,7 @@ Along with the token, it sends:
 - Which pull request event it was, and whether the pull request comes from a fork.
 - The pull request's number, title, branch and author, for the dashboard's overview.
 - The branch it goes into, its author's association with the repo, and whether a bot opened it, for the Code review job's filters.
+- The action's own version, from its `package.json`, and the ref the workflow runs it at (`v1`, `v1.5.0`, a branch or a SHA), so the API can tell when a newer release is out.
 
 A comment on the pull request's conversation tab doesn't carry the branch, so a run started from one sends the pull request without it.
 
@@ -226,6 +227,7 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 Axon Shaft keeps one summary comment on the PR and edits it on every push. The first review creates it only once the result is ready, so GitHub emails people on the PR once, about the result. A review that fails also creates it, to show the failure. From the top, it holds:
 
 1. A card in a GitHub alert, colored by verdict: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. See [the card](#the-card) below.
+   When the workflow pins an older v1 release (such as `@v1.5.0`) and a newer one is out, a line under the card names the new version and links to its release, with the version the run used. It says to change `uses:` to `axonpack/shaft-actions@v1` to get each v1 release as it comes out. A run on `@v1`, a branch or a SHA never gets it.
 2. "Merge gates", when the project has any: each gate with ✓ (met), ✗ (not met) or – (doesn't apply), and the review's reason.
 3. A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit.
    A finding with an inline comment says "inline". A finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
@@ -456,7 +458,7 @@ Versions are kept with [Changesets](https://github.com/changesets/changesets), a
 2. Each push to `main` with changesets pending opens or refreshes the Version Packages PR. It raises the version in `package.json`, adds the changes to `CHANGELOG.md` and rebuilds `dist/index.js`.
 3. Merging that PR releases the version, for example `2.1.3`. The release workflow tags the merge commit `v2.1.3`, moves the `v2` tag to the same commit, and creates a GitHub Release with that version's changelog.
 
-Workflows that use `axonpack/shaft-actions@v1` get every 1.x release. To stay on one version, use `@v1.1.0`.
+Workflows that use `axonpack/shaft-actions@v1` get every 1.x release. To stay on one version, use `@v1.1.0`. A run on a pinned version that's older than the newest v1 release gets a line about it under the summary card, and the project's overview on the dashboard shows the same to admins.
 
 ## License
 
