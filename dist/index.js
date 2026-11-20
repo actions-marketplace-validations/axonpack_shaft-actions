@@ -23755,7 +23755,7 @@ function getOctokit(token, options, ...additionalPlugins) {
   return new GitHubWithPlugins(getOctokitOptions(token, options));
 }
 // package.json
-var version = "1.7.0";
+var version = "1.7.1";
 var package_default = {
   name: "shaft",
   version,
