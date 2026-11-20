@@ -92,9 +92,11 @@ export function route(eventName: string, payload: any): Route {
 
 /**
  * The pull request the run is for, as `POST /v1/token` takes it. `base` (the branch it goes into),
- * `association` (GitHub's `author_association`) and `bot` are for the review job's filters.
+ * `association` (GitHub's `author_association`), `bot` and `labels` (their names) are for the review job's filters.
  */
-export type PullRequest = { number: number; title: string; branch?: string; author: string; base?: string; association?: string; bot?: boolean };
+export type PullRequest = { number: number; title: string; branch?: string; author: string; base?: string; association?: string; bot?: boolean; labels?: string[] };
+
+const labelsOf = (item: any): string[] => (item.labels ?? []).map((l: { name: string }) => l.name);
 
 /**
  * The pull request from the payload, when it has one. An issue_comment on a pull request has it as
@@ -111,9 +113,10 @@ export function pullRequestOf(payload: any): PullRequest | undefined {
       base: pr.base.ref,
       association: pr.author_association,
       bot: pr.user.type === 'Bot',
+      labels: labelsOf(pr),
     };
   const issue = payload.issue;
-  if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login };
+  if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login, labels: labelsOf(issue) };
   return undefined;
 }
 

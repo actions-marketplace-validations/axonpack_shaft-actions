@@ -64,7 +64,7 @@ Along with the token, it sends:
 - The job: `review` for a pull request event or a `/review` comment, `task` for `/fix` or `/axonshaft <prompt>`, `reply` for `/ask`, and `help` for `/help`.
 - Which pull request event it was, and whether the pull request comes from a fork.
 - The pull request's number, title, branch and author, for the dashboard's overview.
-- The branch it goes into, its author's association with the repo, and whether a bot opened it, for the Code review job's filters.
+- The branch it goes into, its author's association with the repo, whether a bot opened it, and its label names, for the Code review job's filters.
 - The action's own version, from its `package.json`, and the ref the workflow runs it at (`v1`, `v1.5.0`, a branch or a SHA), so the API can tell when a newer release is out.
 
 A comment on the pull request's conversation tab doesn't carry the branch, so a run started from one sends the pull request without it.
@@ -87,8 +87,16 @@ The API tells the action to stop, and the run ends with a notice giving the reas
 
 - the Code review job is off on the dashboard;
 - the event isn't one of its "When it runs" choices;
-- its "Which pull requests" filters skip this one (outside contributors, bots, Axon Shaft's own, or a branch it isn't set to review);
+- its "Which pull requests" filters skip this one (outside contributors, bots, Axon Shaft's own, a branch it isn't set to review, or a label it skips);
 - an admin paused Axon Shaft on the repo from the project's settings.
+
+### Skipping a pull request by label
+
+A pull request with one of the Code review's skip labels isn't reviewed when it's opened, pushed to or marked ready. The labels match whatever their case. Every project starts with `skip-review`, `no-review`, `skip-ai-review` and `do-not-review`. An admin can change the list on the dashboard, under "Skip pull requests with these labels", or clear it to skip none.
+
+Someone with write access can still comment `/review` to review a labelled pull request. Once the label is removed, the next push is reviewed as usual. Removing a label doesn't start a review by itself, because the workflow doesn't run on `labeled` or `unlabeled`.
+
+Action versions before 1.7 don't send the labels, so nothing is skipped by label until the workflow runs 1.7 or later.
 
 ## Pull requests from forks
 

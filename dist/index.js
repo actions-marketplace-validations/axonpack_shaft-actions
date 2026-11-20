@@ -58786,6 +58786,7 @@ function route(eventName, payload) {
     return { mode: "skip", reason: `/${command === "fix" ? "fix" : "axonshaft"} works on a pull request, not an issue.`, notice: true };
   return { mode: "task", number, actor, ask, bare: command === "fix" && !text.replace("/fix", "").trim() };
 }
+var labelsOf = (item) => (item.labels ?? []).map((l) => l.name);
 function pullRequestOf(payload) {
   const pr = payload.pull_request;
   if (pr)
@@ -58796,11 +58797,12 @@ function pullRequestOf(payload) {
       author: pr.user.login,
       base: pr.base.ref,
       association: pr.author_association,
-      bot: pr.user.type === "Bot"
+      bot: pr.user.type === "Bot",
+      labels: labelsOf(pr)
     };
   const issue = payload.issue;
   if (issue?.pull_request)
-    return { number: issue.number, title: issue.title, author: issue.user.login };
+    return { number: issue.number, title: issue.title, author: issue.user.login, labels: labelsOf(issue) };
   return;
 }
 async function hasWriteAccess(octokit, owner, repo, username) {
