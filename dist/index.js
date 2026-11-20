@@ -59465,12 +59465,84 @@ var unused = async ({ files, checkout }) => {
   return capFacts([...cutNote(cut), head, ...lines], "");
 };
 
+// src/services/prestep/imports.service.ts
+import { builtinModules } from "node:module";
+import { basename as basename2, dirname as dirname4 } from "node:path";
+var JS2 = /\.(?:[mc]?[jt]sx?|vue|svelte|astro)$/;
+var JS_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)['"]([^'"\n]+)['"]/g;
+var PY_IMPORT = /^\s*(?:from\s+([A-Za-z_]\w*)[\w.]*\s+import\b|import\s+([\w., ]+))/;
+var PY_MANIFESTS = ["**/requirements*.txt", "**/pyproject.toml", "**/Pipfile", "**/setup.py", "**/setup.cfg"];
+var DEPS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+var MANIFESTS_MAX = 200;
+var npmPackage = (spec) => {
+  const s = spec.replace(/^npm:/, "");
+  if (/^(?:[./#$~]|@\/|[\w-]+:)/.test(s))
+    return;
+  return s.split("/").slice(0, s.startsWith("@") ? 2 : 1).join("/");
+};
+var pyNorm = (s) => s.toLowerCase().replace(/[-_.]+/g, "-");
+function npmKnown(checkout) {
+  const names = new Set(builtinModules);
+  const manifests = checkout.find(["**/package.json"]).slice(0, MANIFESTS_MAX);
+  for (const p of manifests) {
+    try {
+      const pkg = JSON.parse(checkout.read(p) ?? "{}");
+      if (typeof pkg.name === "string")
+        names.add(pkg.name);
+      for (const d of DEPS)
+        for (const n of Object.keys(pkg[d] ?? {}))
+          names.add(n);
+    } catch {}
+  }
+  const aliases = checkout.find(["**/{tsconfig,jsconfig}*.json"]).slice(0, MANIFESTS_MAX).flatMap((p) => [.../"paths"\s*:\s*\{([^}]*)\}/.exec(checkout.read(p) ?? "")?.[1]?.matchAll(/"([^"*]+)\*?"\s*:/g) ?? []].map((m) => m[1]));
+  return { names, aliases, read: manifests.length };
+}
+var imports = async ({ files, checkout }) => {
+  const js = [];
+  const py = [];
+  for (const f of files)
+    for (const [line, text] of diffLines(f.patch, true)) {
+      const at = `${f.filename}:${line}`;
+      if (JS2.test(f.filename))
+        for (const m of text.matchAll(JS_IMPORT))
+          js.push(...[npmPackage(m[1])].filter((n) => n !== undefined).map((name) => ({ at, name })));
+      if (f.filename.endsWith(".py")) {
+        const m = PY_IMPORT.exec(text);
+        const names = m?.[1] ? [m[1]] : m?.[2]?.split(",").map((s) => s.trim().split(/[.\s]/)[0]) ?? [];
+        py.push(...names.filter(Boolean).map((name) => ({ at, name })));
+      }
+    }
+  if (!js.length && !py.length)
+    return "The added lines import no package.";
+  const lines = [];
+  if (js.length) {
+    const { names, aliases, read } = npmKnown(checkout);
+    lines.push(`Read ${read} package.json file${read === 1 ? "" : "s"}.`);
+    for (const { at, name } of js)
+      if (!names.has(name) && !aliases.some((a) => name.startsWith(a) || `${name}/`.startsWith(a)))
+        lines.push(`- ${at} \`${name}\`: no package.json lists it`);
+  }
+  if (py.length) {
+    const manifests = checkout.find(PY_MANIFESTS).slice(0, MANIFESTS_MAX);
+    const text = pyNorm(manifests.map((p) => checkout.read(p) ?? "").join(`
+`));
+    const local = new Set(checkout.find(["**/*.py"]).flatMap((p) => [basename2(p, ".py"), basename2(dirname4(p))]));
+    lines.push(`Read ${manifests.length} Python manifest${manifests.length === 1 ? "" : "s"}.`);
+    for (const { at, name } of py)
+      if (!local.has(name) && !new RegExp(`(?<![\\w-])${pyNorm(name)}(?![\\w-])`).test(text))
+        lines.push(`- ${at} \`${name}\`: no Python manifest names it, and no module in the repo has the name; it may be in the standard library or published under another name`);
+  }
+  const n = js.length + py.length;
+  return lines.some((l) => l.startsWith("- ")) ? capFacts(lines, "") : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? "" : "s"} checked).`;
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
 var FACTS = {
   "deps-diff": depsDiffFacts,
   callers,
-  unused
+  unused,
+  imports
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
@@ -60090,12 +60162,12 @@ function runCheck(cwd, command, env = []) {
 
 // src/services/push.service.ts
 import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2 } from "node:fs";
-import { dirname as dirname4, join as join8 } from "node:path";
+import { dirname as dirname5, join as join8 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
   assertHead(cwd, base);
   const paths = git(cwd, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]).split("\x00").filter(Boolean).map((l) => l.slice(3));
-  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname4(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
+  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname5(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
   if (why)
     throw new ShaftFailure("push_failed", why);
   const changes = paths.map((path) => {
