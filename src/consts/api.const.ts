@@ -1,3 +1,8 @@
+import { version } from '../../package.json';
+
+/** This build's version, from `package.json`, bundled into `dist` (`1.5.0`). */
+export const ACTION_VERSION = version;
+
 /** The audience of the run's OIDC token, which the Axon Shaft API checks. */
 export const API_AUDIENCE = 'https://api-shaft.axonpack.dev';
 

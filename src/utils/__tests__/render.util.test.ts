@@ -178,6 +178,16 @@ test('a looks-good review with no findings: a TIP card with one chip, and no tab
   expect(body).not.toContain('fixed</kbd>');
 });
 
+test('a run on an older v1 release gets one line under the card with the newest release and how to stay on it', async () => {
+  const { version } = await import('../../../package.json');
+  const latestAction = { version: '9.9.9', url: 'https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9' };
+  const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, { ...info, latestAction });
+  expect(body).toContain(
+    `</sub>\n\nAxon Shaft [v9.9.9](https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9) is out (this run used v${version}). To get each v1 release as it comes out, change \`uses:\` to \`axonpack/shaft-actions@v1\`.\n`,
+  );
+  expect(renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info)).not.toContain(' is out (this run used');
+});
+
 test('blocking is a CAUTION card; a check the project turned off shows ➖', () => {
   const placed = place([finding({ severity: 'blocking', step: 'security' })], files, 'summary');
   const body = renderSummary({ ...review, verdict: 'blocking' }, placed, undefined, { ...info, checks: ['correctness', 'tests'] });

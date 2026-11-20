@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { API_AUDIENCE, API_URL } from '../consts/api.const';
+import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
 import type { PullRequest, ReviewEvent } from './route.service';
 
@@ -44,6 +44,9 @@ export type GrantJob = {
   checklists?: Checklist[] | null;
 };
 
+/** A newer v1 release of the action than this run's: its version (`1.6.2`) and its release page. */
+export type LatestAction = { version: string; url: string };
+
 /** The project's Claude token, from the dashboard. */
 export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 
@@ -66,6 +69,8 @@ export type Grant =
       job: GrantJob;
       /** The run's page on the dashboard. Older APIs don't send it. */
       run_url?: string;
+      /** Only when this run is pinned to an older v1 release than the newest. Older APIs don't send it. */
+      latest_action?: LatestAction;
     };
 
 /** What the dashboard shows of a finished review: the card, as the PR comment has it. */
@@ -119,9 +124,13 @@ async function post(path: string, body: unknown): Promise<Response> {
   }
 }
 
-/** Whether to run, and this repo's GitHub token, Claude token, settings and job from the Axon Shaft API. Both tokens are masked. */
+/**
+ * Whether to run, and this repo's GitHub token, Claude token, settings and job from the Axon Shaft API.
+ * Both tokens are masked. It also sends this build's version and the ref the workflow runs it at
+ * (`v1`, `v1.5.0`, a branch or a SHA), so the API can say when a newer release is out.
+ */
 export async function fetchGrant(request: GrantRequest): Promise<Grant> {
-  const res = await post('/v1/token', request);
+  const res = await post('/v1/token', { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } });
   const body = await res.json().catch(() => undefined);
   if (!res.ok) {
     // The API's errors are `{ error, message, url? }`; anything else came from something in front of it.

@@ -97,7 +97,7 @@ const grant = {
   settings: { model: 'auto', effort: 'auto', rules: 'Use tabs.', skip: ['**/*.lock'], focus: ['src/core/**'], maxTurns: 30, timeLimit: 15, env: ['NODE_OPTIONS'] },
   job: { type: 'review', version: 2, options: { on: ['opened'], depth: 'standard', nits: 'summary' }, checks: ['correctness'], prompt },
 };
-/** What the action sent to /v1/token, and to /v1/runs. */
+/** What the action sent to /v1/token (without the action's version, which api.service.test.ts checks), and to /v1/runs. */
 let asked: unknown;
 let reported: Record<string, unknown> | undefined;
 /** The API answers /v1/token with `token`, and /v1/runs with 204; the run is over once /v1/runs is called. */
@@ -108,7 +108,8 @@ const api = (token: Response) =>
       finished = true;
       return new Response(null, { status: 204 });
     }
-    asked = JSON.parse(init.body as string);
+    const { action: _, ...rest } = JSON.parse(init.body as string);
+    asked = rest;
     return token;
   });
 
@@ -174,6 +175,13 @@ test("the run's dashboard page from the grant reaches the review", async () => {
   api(Response.json({ ...grant, run_url: 'https://shaft.axonpack.dev/runs/7' }));
   await main();
   expect(reviewed).toMatchObject({ dashboardRunUrl: 'https://shaft.axonpack.dev/runs/7' });
+});
+
+test('a newer action release from the grant reaches the review, for the line under its card', async () => {
+  const latest_action = { version: '1.6.2', url: 'https://github.com/axonpack/shaft-actions/releases/tag/v1.6.2' };
+  api(Response.json({ ...grant, latest_action }));
+  await main();
+  expect(reviewed).toMatchObject({ latestAction: latest_action });
 });
 
 test('a maxTurns the dashboard left unset reaches the review unset, so it picks one by size', async () => {
