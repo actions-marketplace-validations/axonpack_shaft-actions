@@ -9,7 +9,8 @@ export type Route =
    * none, and its `actor` needs write access. `fork` is undefined when the payload doesn't say.
    */
   | { mode: 'review'; number: number; event?: ReviewEvent; fork?: boolean; actor?: string }
-  | { mode: 'task'; number: number; actor: string; ask: Ask }
+  /** `/fix` or `/axonshaft <prompt>`: make the change. `bare`: a `/fix` with nothing else, which fixes the last review's findings. */
+  | { mode: 'task'; number: number; actor: string; ask: Ask; bare: boolean }
   /** `/ask`: answer, never change code. */
   | { mode: 'reply'; number: number; actor: string; ask: Ask }
   /** `/help`: post the list of commands. */
@@ -85,7 +86,8 @@ export function route(eventName: string, payload: any): Route {
       : { id: c.id, text };
   if (command === 'ask' && !onPr) return { mode: 'skip', reason: '/ask works on a pull request, not an issue.', notice: true };
   if (command === 'ask') return { mode: 'reply', number: number!, actor, ask };
-  return { mode: 'task', number: number!, actor, ask };
+  if (!onPr) return { mode: 'skip', reason: `/${command === 'fix' ? 'fix' : 'axonshaft'} works on a pull request, not an issue.`, notice: true };
+  return { mode: 'task', number: number!, actor, ask, bare: command === 'fix' && !text.replace('/fix', '').trim() };
 }
 
 /**

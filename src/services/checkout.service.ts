@@ -42,3 +42,16 @@ export function checkoutFiles(cwd: string): Checkout {
     },
   };
 }
+
+/**
+ * Whether the checkout's `.git/config` holds a credential the model could read: an `extraheader` or a
+ * credentials file from a checkout without `persist-credentials: false`, a credential helper, or a
+ * password in a remote's URL.
+ */
+export function savedCredentials(cwd: string): boolean {
+  try {
+    return /extraheader|credential|:\/\/[^\s/@]*:[^\s/@]+@/i.test(readFileSync(join(cwd, '.git', 'config'), 'utf8'));
+  } catch {
+    return false;
+  }
+}

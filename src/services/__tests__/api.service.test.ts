@@ -11,7 +11,7 @@ vi.doMock('@actions/core', () => ({
   },
   warning: (s: string) => warnings.push(s),
 }));
-const { fetchGrant, reportRun } = await import('../api.service');
+const { fetchGrant, fetchPushToken, reportRun } = await import('../api.service');
 const { version } = await import('../../../package.json');
 
 const requests: { url: string; init: RequestInit }[] = [];
@@ -74,6 +74,17 @@ test('a task sends no event', async () => {
   answer(Response.json(run));
   await fetchGrant({ job: 'task' });
   expect(JSON.parse(requests[0].init.body as string)).toEqual({ job: 'task', action });
+});
+
+test("POST /v1/push-token sends a fresh OIDC token and masks the push token; the API's refusal keeps its code", async () => {
+  answer(Response.json({ push_token: 'ghs_push', branch: 'fix-login' }));
+  expect(await fetchPushToken()).toEqual({ push_token: 'ghs_push', branch: 'fix-login' });
+  expect(requests[0]).toMatchObject({ url: 'https://api-shaft.axonpack.dev/v1/push-token', init: { method: 'POST', headers: { authorization: 'Bearer oidc-1' } } });
+  expect(masked).toEqual(['ghs_push']);
+  answer(Response.json({ error: 'push_failed', message: 'The pull request comes from a fork.' }, { status: 403 }));
+  expect(await failure(fetchPushToken())).toEqual({ code: 'push_failed', message: 'The pull request comes from a fork.', url: undefined });
+  answer(Response.json({ branch: 'fix-login' }));
+  expect(await failure(fetchPushToken())).toMatchObject({ code: 'api_error' });
 });
 
 test('run: false comes back with its reason, and nothing is masked', async () => {

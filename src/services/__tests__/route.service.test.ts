@@ -58,18 +58,20 @@ test('/review in a comment on a PR: a review with no event, by the commenter', (
 });
 
 test('comments and reviews with /fix or /axonshaft: task, with the comment it came in', () => {
-  expect(route('issue_comment', comment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer', ask: { id: 501, text: '/fix the failing test please' } });
+  expect(route('issue_comment', comment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer', ask: { id: 501, text: '/fix the failing test please' }, bare: false });
   expect(route('pull_request_review_comment', reviewComment)).toEqual({
     mode: 'task',
     number: 12,
     actor: 'maintainer',
     ask: { id: 601, text: '/axonshaft can you rename this?', path: 'src/retry.ts', line: 42, thread: 601 },
+    bare: false,
   });
   expect(route('pull_request_review', review)).toEqual({
     mode: 'task',
     number: 12,
     actor: 'maintainer',
     ask: { id: 701, text: 'Looks close.\n/axonshaft add a test for the retry path.' },
+    bare: false,
   });
 });
 
@@ -150,6 +152,14 @@ test('a slash command at the start of a line: /review on a PR reviews; /fix is a
   const onIssue = (body: string) => ({ ...says(body), issue: { ...comment.issue, pull_request: undefined } });
   expect(route('issue_comment', onIssue('/review'))).toMatchObject({ mode: 'skip', notice: true });
   expect(route('issue_comment', onIssue('/ask why?'))).toEqual({ mode: 'skip', reason: '/ask works on a pull request, not an issue.', notice: true });
+  expect(route('issue_comment', onIssue('/fix it'))).toEqual({ mode: 'skip', reason: '/fix works on a pull request, not an issue.', notice: true });
+  expect(route('issue_comment', onIssue('/axonshaft do it'))).toEqual({ mode: 'skip', reason: '/axonshaft works on a pull request, not an issue.', notice: true });
+});
+
+test('a bare /fix fixes the last review; anything else after it, or /axonshaft, is its own request', () => {
+  const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
+  for (const body of ['/fix', '  /fix  \n', '\n/fix\n']) expect(route('issue_comment', says(body)), body).toMatchObject({ mode: 'task', bare: true });
+  for (const body of ['/fix the null check', 'Thanks.\n/fix', '/axonshaft']) expect(route('issue_comment', says(body)), body).toMatchObject({ mode: 'task', bare: false });
 });
 
 test('a command inside a sentence, a quote, inline code or a code block, or a longer word, starts nothing', () => {

@@ -23830,18 +23830,19 @@ async function post(path, body) {
     throw new ShaftFailure("api_unreachable", `Couldn't reach the Axon Shaft API at ${API_URL} (${e.message}). Rerun the job in a few minutes.`);
   }
 }
-async function fetchGrant(request) {
-  const res = await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } });
+async function answer(res) {
   const body = await res.json().catch(() => {
     return;
   });
-  if (!res.ok) {
-    if (typeof body?.error === "string" && typeof body.message === "string") {
-      throw new ShaftFailure(body.error, body.message, typeof body.url === "string" ? body.url : undefined);
-    }
-    throw new ShaftFailure("api_error", `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
+  if (res.ok)
+    return body;
+  if (typeof body?.error === "string" && typeof body.message === "string") {
+    throw new ShaftFailure(body.error, body.message, typeof body.url === "string" ? body.url : undefined);
   }
-  const grant = body;
+  throw new ShaftFailure("api_error", `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
+}
+async function fetchGrant(request) {
+  const grant = await answer(await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }));
   if (grant?.run === false) {
     if (typeof grant.github_token === "string")
       setSecret(grant.github_token);
@@ -23852,6 +23853,14 @@ async function fetchGrant(request) {
   }
   setSecret(grant.github_token);
   setSecret(grant.claude_token.value);
+  return grant;
+}
+async function fetchPushToken() {
+  const grant = await answer(await post("/v1/push-token", {}));
+  if (typeof grant?.push_token !== "string" || typeof grant.branch !== "string") {
+    throw new ShaftFailure("api_error", "The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.");
+  }
+  setSecret(grant.push_token);
   return grant;
 }
 async function reportRun(summary) {
@@ -23891,6 +23900,13 @@ function checkoutFiles(cwd) {
       }
     }
   };
+}
+function savedCredentials(cwd) {
+  try {
+    return /extraheader|credential|:\/\/[^\s/@]*:[^\s/@]+@/i.test(readFileSync2(join(cwd, ".git", "config"), "utf8"));
+  } catch {
+    return false;
+  }
 }
 
 // src/services/reaction.service.ts
@@ -24266,11 +24282,11 @@ function unposted(placed, reviewComments, bot) {
 }
 
 // src/services/agent.service.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync4 } from "node:fs";
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { existsSync as existsSync5 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { tmpdir } from "node:os";
-import { join as join3 } from "node:path";
+import { join as join5 } from "node:path";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as DQ } from "node:module";
@@ -58314,12 +58330,13 @@ function runnerEnv(names = []) {
 // src/utils/tool-guard.util.ts
 import { realpathSync as realpathSync3 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute as isAbsolute2, relative, resolve as resolve2, sep as sep4 } from "node:path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep as sep4 } from "node:path";
 function real(path) {
   try {
     return realpathSync3(path);
   } catch {
-    return path;
+    const up = dirname2(path);
+    return up === path ? path : join3(real(up), basename(path));
   }
 }
 var DENIED = ["/proc", "/sys", process.env.RUNNER_TEMP, process.env.RUNNER_TOOL_CACHE].filter((d) => !!d);
@@ -58333,7 +58350,11 @@ function insideCheckout(path, cwd) {
   return under(target, root) && !DENIED.some((d) => under(target, real(d)));
 }
 var GIT_DENIED = /^--(no-in|ou|ext)/;
-function toolDenial(tool, input, cwd) {
+var INSTALL = / (ci|install)\b/;
+var isRepoCommand = (command, commands) => commands.some((c) => command === c || !INSTALL.test(c) && command.startsWith(`${c} `));
+function toolDenial(tool, input, cwd, commands) {
+  if (input.run_in_background)
+    return "Nothing runs in the background: run it in the foreground.";
   const outside = (p) => typeof p === "string" && !insideCheckout(p, cwd);
   if (tool === "Read" && (typeof input.file_path !== "string" || outside(input.file_path)))
     return "Only files in the checkout can be read.";
@@ -58342,20 +58363,125 @@ function toolDenial(tool, input, cwd) {
   if (tool === "Glob" && typeof input.pattern === "string" && (isAbsolute2(input.pattern) || input.pattern.includes("..") || input.pattern.startsWith("~"))) {
     return "Glob patterns stay inside the checkout.";
   }
+  if (tool === "Edit" || tool === "Write") {
+    if (!commands)
+      return "This run only reads.";
+    if (typeof input.file_path !== "string" || outside(input.file_path))
+      return "Only files in the checkout can be edited.";
+    if (insideCheckout(resolve2(cwd, input.file_path), resolve2(cwd, ".git")))
+      return "Nothing under .git/ can be edited.";
+    if (insideCheckout(resolve2(cwd, input.file_path), resolve2(cwd, ".github")))
+      return "Nothing under .github/ can be edited.";
+    return;
+  }
   if (tool !== "Bash")
     return;
-  const command = typeof input.command === "string" ? input.command : "";
+  const allowed = commands ? "git diff, git log, git show, git status and the repo's own commands" : "git diff, git log and git show";
+  const command = typeof input.command === "string" ? input.command.trim() : "";
   if (/[;&|<>`$(){}\\\n]/.test(command))
-    return "Only plain git diff, git log and git show commands run.";
-  const args = command.trim().split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ""));
-  if (args[0] !== "git" || !["diff", "log", "show"].includes(args[1]))
-    return "Only git diff, git log and git show run.";
-  for (const arg of args.slice(2)) {
-    if (GIT_DENIED.test(arg))
+    return `Only plain ${allowed} run.`;
+  const args = command.split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ""));
+  const git = args[0] === "git" && ["diff", "log", "show", ...commands ? ["status"] : []].includes(args[1]);
+  if (!git && !(commands && isRepoCommand(command, commands)))
+    return `Only ${allowed} run.`;
+  for (const arg of args.slice(git ? 2 : 1)) {
+    if (git && GIT_DENIED.test(arg))
       return `git ${arg.split("=")[0]} isn't allowed.`;
     const value = arg.startsWith("-") && arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : arg;
     if (/^[/~]|\.\./.test(value) && outside(value))
-      return "git may only name paths in the checkout.";
+      return "Commands may only name paths in the checkout.";
+  }
+}
+
+// src/services/sandbox.service.ts
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { accessSync, constants as constants4, existsSync as existsSync4, statSync as statSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { isAbsolute as isAbsolute3, join as join4, relative as relative2 } from "node:path";
+var BWRAP_MIN = [0, 6];
+var under2 = (path, dir) => !relative2(dir, path).startsWith("..") && !isAbsolute3(relative2(dir, path));
+var bin = { bwrap: "bwrap", env: "env", pkill: "pkill" };
+function which2(name) {
+  for (const dir of (process.env.PATH ?? "").split(":").filter((d) => isAbsolute3(d))) {
+    try {
+      const file = join4(dir, name);
+      accessSync(file, constants4.X_OK);
+      if (statSync2(file).isFile())
+        return file;
+    } catch {}
+  }
+}
+function sandboxArgs(cwd) {
+  const home = process.env.HOME || homedir2();
+  const temp = process.env.RUNNER_TEMP;
+  const hidden = temp && !under2(temp, home) ? [home, temp] : [home];
+  const tools = (process.env.PATH ?? "").split(":").filter((p) => isAbsolute3(p) && under2(p, home) && relative2(home, p) !== "" && !(temp && under2(temp, p)) && !under2(p, cwd) && existsSync4(p));
+  return [
+    "--die-with-parent",
+    "--new-session",
+    "--unshare-pid",
+    "--unshare-ipc",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
+    "--cap-drop",
+    "ALL",
+    "--ro-bind",
+    "/",
+    "/",
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--tmpfs",
+    "/tmp",
+    "--tmpfs",
+    "/run",
+    ...hidden.flatMap((d) => ["--tmpfs", d]),
+    ...tools.flatMap((p) => ["--ro-bind", p, p]),
+    "--bind",
+    cwd,
+    cwd,
+    "--chdir",
+    cwd,
+    "--setenv",
+    "HOME",
+    home,
+    "--setenv",
+    "TMPDIR",
+    "/tmp"
+  ];
+}
+var inSandbox = (cwd, file, args, o) => execFileSync2(bin.bwrap, [...sandboxArgs(cwd), "--", file, ...args], { ...o, cwd });
+var sandboxPrefix = (cwd) => [bin.env, "-u", "ANTHROPIC_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", bin.bwrap, ...sandboxArgs(cwd), "--"].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
+function endSandboxes() {
+  try {
+    execFileSync2(bin.pkill, ["-KILL", "-u", String(process.getuid?.()), "-x", "bwrap"], { stdio: "ignore" });
+  } catch {}
+}
+function prepareSandbox(cwd) {
+  if (process.platform !== "linux")
+    return `A change needs a Linux runner, for its sandbox. This one runs ${process.platform}.`;
+  const run = (file, args) => execFileSync2(file, args, { encoding: "utf8", stdio: "pipe", timeout: 5 * 60000 });
+  try {
+    if (!which2("bwrap")) {
+      info("Installing bubblewrap, for the sandbox the change runs in");
+      run("sudo", ["-n", "apt-get", "update", "-qq"]);
+      run("sudo", ["-n", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", "--no-install-recommends", "bubblewrap"]);
+    }
+    for (const name of Object.keys(bin)) {
+      const path = which2(name);
+      if (!path)
+        return `The runner has no ${name} on its PATH, and the sandbox needs it, so nothing was changed.`;
+      bin[name] = path;
+    }
+    const version = /(\d+)\.(\d+)/.exec(run(bin.bwrap, ["--version"]))?.slice(1).map(Number) ?? [0, 0];
+    if (version[0] < BWRAP_MIN[0] || version[0] === BWRAP_MIN[0] && version[1] < BWRAP_MIN[1]) {
+      return `The runner has bubblewrap ${version.join(".")}, and the sandbox needs ${BWRAP_MIN.join(".")} or later.`;
+    }
+    inSandbox(cwd, "true", [], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
+  } catch (e) {
+    const out = e.stderr?.trim() || e.message;
+    return `The sandbox didn't start on this runner, so nothing was changed. Install bubblewrap 0.6 or later and allow unprivileged user namespaces: ${out}`;
   }
 }
 
@@ -58474,12 +58600,19 @@ function parseReview(x) {
   };
 }
 var READ_TOOLS = ["Read", "Grep", "Glob", "Bash"];
+var EDIT_TOOLS = [...READ_TOOLS, "Edit", "Write"];
 var ALLOWED = ["Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)"];
 var DENIED2 = ["Read(//proc/**)", "Read(//sys/**)"];
-var guard = (cwd) => async (input) => {
+var guard = (cwd, commands) => async (input) => {
   const { tool_name, tool_input } = input;
-  const why = toolDenial(tool_name, tool_input ?? {}, cwd);
-  return why ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } } : {};
+  const args = tool_input ?? {};
+  const why = toolDenial(tool_name, args, cwd, commands);
+  if (why)
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } };
+  if (!commands || tool_name !== "Bash")
+    return {};
+  const updatedInput = { ...args, command: `${sandboxPrefix(cwd)} ${String(args.command).trim()}` };
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput } };
 };
 var SDK_VERSION = package_default.dependencies["@anthropic-ai/claude-agent-sdk"];
 function claudeBinary() {
@@ -58488,11 +58621,11 @@ function claudeBinary() {
   try {
     return createRequire2(import.meta.url).resolve(file);
   } catch {}
-  const dir = join3(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
-  const bin = join3(dir, "node_modules", file);
-  if (!existsSync4(bin)) {
+  const dir = join5(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
+  const bin = join5(dir, "node_modules", file);
+  if (!existsSync5(bin)) {
     info(`Installing ${name}@${SDK_VERSION}`);
-    execFileSync2("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
+    execFileSync3("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
   }
   return bin;
 }
@@ -58501,6 +58634,8 @@ function cliEnv(claude, names = []) {
     ...runnerEnv(names),
     [claude.kind === "oauth" ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY"]: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}`
   };
 }
@@ -58519,6 +58654,7 @@ function toolTarget(input) {
 }
 async function once(prompt, o, schema, controller) {
   const deep = !!o.subagentModel && !!o.passes?.length;
+  const edit = !!o.commands;
   let result;
   const passes = new Map;
   for await (const m of nrt({
@@ -58529,10 +58665,10 @@ async function once(prompt, o, schema, controller) {
       effort: o.effort,
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
-      tools: deep ? [...READ_TOOLS, "Agent"] : READ_TOOLS,
-      allowedTools: deep ? [...ALLOWED, "Agent"] : ALLOWED,
+      tools: deep ? [...READ_TOOLS, "Agent"] : edit ? EDIT_TOOLS : READ_TOOLS,
+      allowedTools: deep ? [...ALLOWED, "Agent"] : edit ? EDIT_TOOLS.filter((t) => t !== "Bash") : ALLOWED,
       disallowedTools: DENIED2,
-      hooks: { PreToolUse: [{ hooks: [guard(o.cwd)] }] },
+      hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: "dontAsk",
       settingSources: [],
       persistSession: false,
@@ -58642,7 +58778,9 @@ function route(eventName, payload) {
     return { mode: "skip", reason: "/ask works on a pull request, not an issue.", notice: true };
   if (command === "ask")
     return { mode: "reply", number, actor, ask };
-  return { mode: "task", number, actor, ask };
+  if (!onPr)
+    return { mode: "skip", reason: `/${command === "fix" ? "fix" : "axonshaft"} works on a pull request, not an issue.`, notice: true };
+  return { mode: "task", number, actor, ask, bare: command === "fix" && !text.replace("/fix", "").trim() };
 }
 function pullRequestOf(payload) {
   const pr = payload.pull_request;
@@ -58733,7 +58871,9 @@ async function collectContext(octokit, owner, repo, number, bot) {
       author: pr.user.login,
       headSha: pr.head.sha,
       base: pr.base.ref,
-      head: pr.head.ref
+      head: pr.head.ref,
+      fork: pr.head.repo?.full_name !== pr.base.repo.full_name,
+      defaultBranch: pr.base.repo.default_branch
     },
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),
@@ -58758,7 +58898,7 @@ ${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${
 `;
 
 // src/services/prestep/deps-diff.service.ts
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname3, join as join6 } from "node:path";
 
 // src/utils/lockfile.util.ts
 var NPM_REGISTRY = /^https?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)(?:\/|$)/;
@@ -58892,8 +59032,8 @@ var LOCKFILES = [
 // src/services/prestep/deps-diff.service.ts
 var LOCK_MAX = 20000000;
 var FACTS_MAX = 16000;
-var privateNpm = (checkout, dir) => [...new Set([".", dir])].some((d) => [".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml"].some((f) => [...(checkout.read(join4(d, f)) ?? "").matchAll(/^\s*(?:registry|npmRegistryServer)\s*[=:\s]\s*["']?([^"'\s]+)/gm)].some((m) => !NPM_REGISTRY.test(m[1]))));
-var goOwner = (checkout, dir) => /^module\s+(\S+?\/[^/\s]+)/m.exec(checkout.read(join4(dir, "go.mod")) ?? "")?.[1];
+var privateNpm = (checkout, dir) => [...new Set([".", dir])].some((d) => [".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml"].some((f) => [...(checkout.read(join6(d, f)) ?? "").matchAll(/^\s*(?:registry|npmRegistryServer)\s*[=:\s]\s*["']?([^"'\s]+)/gm)].some((m) => !NPM_REGISTRY.test(m[1]))));
+var goOwner = (checkout, dir) => /^module\s+(\S+?\/[^/\s]+)/m.exec(checkout.read(join6(dir, "go.mod")) ?? "")?.[1];
 function byName(pins) {
   const out = new Map;
   for (const p of pins) {
@@ -58921,7 +59061,7 @@ async function depsDiff({ files, checkout, base }) {
     const head = f.status === "removed" ? "" : checkout.read(f.filename, LOCK_MAX);
     if (head === undefined)
       throw new Error(`Couldn't read \`${f.filename}\` from the checkout.`);
-    const dir = dirname2(f.filename);
+    const dir = dirname3(f.filename);
     const npmPrivate = ecosystem === "npm" && privateNpm(checkout, dir);
     const owner = ecosystem === "Go" ? goOwner(checkout, dir) : undefined;
     const pins = (head ? parse(head) : []).map((p) => ({
@@ -59675,22 +59815,38 @@ function buildReplyPrompt(ctx, ask, asker, o) {
     commits: ctx.commits.map((m) => `- ${m}`).join(`
 `),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments].filter((c) => c.id !== ask.id)),
-    diff: diffText(ctx.files, o.focus)
+    diff: diffText(ctx.files, o.focus),
+    ...o.slots
   });
+}
+async function postInThread(o, body) {
+  if (o.dryRun) {
+    info(`--- reply
+${body}`);
+    return "";
+  }
+  const req = { owner: o.owner, repo: o.repo, body: redact(body, o.secrets) };
+  const { data } = o.ask.thread ? await o.octokit.rest.pulls.createReplyForReviewComment({ ...req, pull_number: o.number, comment_id: o.ask.thread }) : await o.octokit.rest.issues.createComment({ ...req, issue_number: o.number });
+  return data.html_url;
+}
+function answerFooter(o, sha, choice, result) {
+  const models = chosenModels(result.models, choice, false);
+  const sub = footer({
+    sha,
+    repo: `${o.owner}/${o.repo}`,
+    runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
+    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : ""),
+    effort: choice.effort,
+    reason: choice.reason,
+    tokens: result.tokens,
+    costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined
+  });
+  return { sub, model: models.main };
 }
 async function replyToComment(o) {
   const ctx = await step("Read the pull request", () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
-  const clean = (text) => redact(text, o.secrets);
-  const post = async (body) => {
-    if (o.dryRun) {
-      info(`--- reply
-${body}`);
-      return "";
-    }
-    const req = { owner: o.owner, repo: o.repo, body: clean(body) };
-    const { data } = o.ask.thread ? await o.octokit.rest.pulls.createReplyForReviewComment({ ...req, pull_number: o.number, comment_id: o.ask.thread }) : await o.octokit.rest.issues.createComment({ ...req, issue_number: o.number });
-    return data.html_url;
-  };
+  const post = (body) => postInThread(o, body);
   const choice = pick({ mode: "reply", model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   info(`Answering with ${choice.model}, effort ${choice.effort}`);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
@@ -59715,25 +59871,315 @@ ${REPLY_MARKER}`);
     }
     throw e;
   }
-  const answer = clean(prose(result.reply)).slice(0, ANSWER_MAX);
-  const models = chosenModels(result.models, choice, false);
-  const sub = footer({
-    sha: ctx.pr.headSha,
-    repo: `${o.owner}/${o.repo}`,
-    runUrl: o.runUrl,
-    dashboardRunUrl: o.dashboardRunUrl,
-    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : ""),
-    effort: choice.effort,
-    reason: choice.reason,
-    tokens: result.tokens,
-    costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined
-  });
+  const answer = redact(prose(result.reply), o.secrets).slice(0, ANSWER_MAX);
+  const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result);
   const commentUrl = await post(`${answer}
 
 ${sub}
 
 ${REPLY_MARKER}`);
-  return { model: models.main, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
+  return { model, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
+}
+
+// src/utils/push.util.ts
+function pushDenial(mode, t) {
+  if (mode !== "restricted" && mode !== "enabled")
+    return "Pushing is turned off for this project. An admin can change Push mode in its settings on the dashboard.";
+  if (t.branch === t.defaultBranch)
+    return `Axon Shaft never pushes to the default branch, ${t.defaultBranch}.`;
+  if (mode === "enabled")
+    return;
+  if (!t.pullBranch || t.fork)
+    return "Push mode is Restricted, so Axon Shaft pushes only to a pull request's own branch in this repo.";
+  if (t.branch !== t.pullBranch)
+    return `Push mode is Restricted, so Axon Shaft pushes only to the pull request's branch, ${t.pullBranch}, not ${t.branch}.`;
+}
+var COMMIT_MAX = { files: 200, fileBytes: 1024 * 1024, totalBytes: 10 * 1024 * 1024 };
+var mb2 = (bytes) => `${bytes / 1024 / 1024} MB`;
+function commitDenial(changes) {
+  const paths = changes.map((c) => c.path);
+  const bad = paths.find((p) => p.startsWith("/") || p.split("/").some((s) => s === ".." || s.toLowerCase() === ".git"));
+  if (bad)
+    return `The change names ${bad}, outside the files a commit can hold, so nothing was pushed.`;
+  const github = paths.filter((p) => /^\.github(\/|$)/i.test(p));
+  if (github.length)
+    return `The change touches ${github.join(", ")}, and Axon Shaft never commits anything under .github/, so nothing was pushed.`;
+  if (changes.length > COMMIT_MAX.files)
+    return `The change has ${changes.length} files, more than the ${COMMIT_MAX.files} one commit from Axon Shaft may hold, so nothing was pushed.`;
+  const big = changes.find((c) => (c.content?.length ?? 0) > COMMIT_MAX.fileBytes);
+  if (big)
+    return `${big.path} is over ${mb2(COMMIT_MAX.fileBytes)}, the most one file in a commit may be, so nothing was pushed.`;
+  const total = changes.reduce((n, c) => n + (c.content?.length ?? 0), 0);
+  if (total > COMMIT_MAX.totalBytes)
+    return `The change adds up to over ${mb2(COMMIT_MAX.totalBytes)}, the most one commit may hold, so nothing was pushed.`;
+}
+var RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|npm-shrinkwrap\.json)$/;
+var runsCode = (paths) => paths.filter((p) => RUNS_CODE.test(p));
+
+// src/services/commands.service.ts
+import { existsSync as existsSync6, readFileSync as readFileSync4 } from "node:fs";
+import { join as join7 } from "node:path";
+var CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
+var LOCKS = [
+  ["bun.lock", "bun", "bun install --frozen-lockfile"],
+  ["bun.lockb", "bun", "bun install --frozen-lockfile"],
+  ["pnpm-lock.yaml", "pnpm", "pnpm install --frozen-lockfile"],
+  ["yarn.lock", "yarn", "yarn install --frozen-lockfile"],
+  ["package-lock.json", "npm", "npm ci"]
+];
+var read = (cwd, file) => existsSync6(join7(cwd, file)) ? readFileSync4(join7(cwd, file), "utf8") : undefined;
+function repoCommands(cwd) {
+  const out = [];
+  const pkg = read(cwd, "package.json");
+  if (pkg) {
+    const [, pm, install] = LOCKS.find(([lock]) => existsSync6(join7(cwd, lock))) ?? ["", "npm", "npm install"];
+    let scripts = {};
+    try {
+      scripts = JSON.parse(pkg).scripts ?? {};
+    } catch {}
+    out.push(install, ...Object.keys(scripts).filter((n) => CHECK_NAME.test(n)).map((n) => `${pm} run ${n}`));
+  }
+  const make = read(cwd, "Makefile");
+  if (make)
+    out.push(...[...make.matchAll(/^([\w.-]+):/gm)].map((m) => m[1]).filter((t) => CHECK_NAME.test(t)).map((t) => `make ${t}`));
+  if (read(cwd, "Cargo.toml") !== undefined)
+    out.push("cargo test", "cargo check", "cargo clippy", "cargo fmt", "cargo build");
+  if (read(cwd, "go.mod") !== undefined)
+    out.push("go test", "go vet", "go build");
+  return [...new Set(out)];
+}
+var CHECK_TIMEOUT = 10 * 60000;
+function runCheck(cwd, command, env = []) {
+  const [file, ...args] = command.split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ""));
+  try {
+    inSandbox(cwd, file, args, { env: runnerEnv(env), encoding: "utf8", stdio: "pipe", timeout: CHECK_TIMEOUT });
+    return { command, passed: true, output: "" };
+  } catch (e) {
+    const { stdout = "", stderr = "", message } = e;
+    const output = `${stdout}${stderr}`.trim() || message;
+    return { command, passed: false, output: output.split(`
+`).slice(-40).join(`
+`) };
+  }
+}
+
+// src/services/push.service.ts
+import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2 } from "node:fs";
+import { dirname as dirname4, join as join8 } from "node:path";
+var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
+function readChanges(cwd, base) {
+  assertHead(cwd, base);
+  const paths = git(cwd, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]).split("\x00").filter(Boolean).map((l) => l.slice(3));
+  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname4(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
+  if (why)
+    throw new ShaftFailure("push_failed", why);
+  const changes = paths.map((path) => {
+    const file = join8(cwd, path);
+    let fd;
+    try {
+      fd = openSync2(file, constants5.O_RDONLY | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
+    } catch (e) {
+      const code = e.code;
+      if (code === "ENOENT")
+        return { path };
+      if (code === "ELOOP")
+        return { path, mode: "120000", content: Buffer.from(readlinkSync2(file)) };
+      throw new ShaftFailure("push_failed", `${path} couldn't be read (${code}), so nothing was pushed.`);
+    }
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile())
+        throw new ShaftFailure("push_failed", `${path} isn't a file or a link, so nothing was pushed.`);
+      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync5(fd) };
+    } finally {
+      closeSync2(fd);
+    }
+  });
+  const big = commitDenial(changes);
+  if (big)
+    throw new ShaftFailure("push_failed", big);
+  return changes;
+}
+var head = (cwd) => git(cwd, ["rev-parse", "HEAD"]).trim();
+function assertHead(cwd, base) {
+  if (head(cwd) !== base)
+    throw new ShaftFailure("push_failed", "Something in the run moved HEAD off the pull request's head commit, so nothing was pushed.");
+}
+async function pushChanges(token, p) {
+  const octokit = getOctokit(token);
+  const { owner, repo } = p;
+  try {
+    const { data: base } = await octokit.rest.git.getCommit({ owner, repo, commit_sha: p.base });
+    const tree = [];
+    for (const c of p.changes) {
+      const sha = c.content ? (await octokit.rest.git.createBlob({ owner, repo, content: c.content.toString("base64"), encoding: "base64" })).data.sha : null;
+      tree.push({ path: c.path, mode: c.mode ?? "100644", type: "blob", sha });
+    }
+    const { data: made } = await octokit.rest.git.createTree({ owner, repo, base_tree: base.tree.sha, tree });
+    const { data: commit } = await octokit.rest.git.createCommit({ owner, repo, message: p.message, tree: made.sha, parents: [p.base], author: p.author });
+    await octokit.rest.git.updateRef({ owner, repo, ref: `heads/${p.branch}`, sha: commit.sha, force: false });
+    return commit.sha;
+  } catch (e) {
+    throw new ShaftFailure("push_failed", `The push to ${p.branch} failed: ${e.message}`);
+  } finally {
+    await octokit.rest.apps.revokeInstallationAccessToken().catch((e) => warning(`Couldn't revoke the push token: ${e.message}`));
+  }
+}
+
+// src/services/task.service.ts
+var TASK_MARKER = "<!-- shaft:task -->";
+var TASK_FORMAT = {
+  name: "task",
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["answer", "commit_message", "checks"],
+    properties: { answer: { type: "string" }, commit_message: { type: "string" }, checks: { type: "array", items: { type: "string" } } }
+  },
+  parse: (x) => {
+    const r = x;
+    const ok = typeof r?.answer === "string" && !!r.answer.trim() && typeof r.commit_message === "string" && Array.isArray(r.checks) && r.checks.every((c) => typeof c === "string");
+    return ok ? r : undefined;
+  }
+};
+var CREDENTIALS_IN_CHECKOUT = "The checkout's .git/config holds a GitHub credential, which the model could read, so nothing was changed. Set `persist-credentials: false` on the workflow's actions/checkout step.";
+function selfHosted() {
+  if (process.env.RUNNER_ENVIRONMENT === "github-hosted")
+    return;
+  return "Axon Shaft makes changes only on GitHub-hosted runners, and this job runs on a self-hosted one, so nothing was changed. Run the Axon Shaft job on `runs-on: ubuntu-latest`.";
+}
+function taskRequest(ask, findings) {
+  if (!findings.length)
+    return ask.text;
+  return `Fix these open findings from the last review (severity, place, title):
+
+${findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}`).join(`
+`)}`;
+}
+function checkList(listed, commands, cwd) {
+  const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith("git ") && !toolDenial("Bash", { command: c }, cwd, commands));
+  return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
+}
+var checksTable = (checks) => checks.length ? ["| Check | Result |", "| --- | --- |", ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? "Passed" : "Failed"} |`)].join(`
+`) : "No checks were run.";
+async function runTask(o) {
+  const ctx = await step("Read the pull request", () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
+  const post = (body) => postInThread(o, body);
+  const target = { branch: ctx.pr.head, pullBranch: ctx.pr.head, defaultBranch: ctx.pr.defaultBranch, fork: ctx.pr.fork };
+  const refused = pushDenial(o.pushMode, target);
+  if (refused) {
+    await post(`${failureMarkdown(new ShaftFailure("push_failed", `${refused} Nothing was changed.`, DASHBOARD_URL))}
+
+${TASK_MARKER}`);
+    return { refused, code: "push_failed" };
+  }
+  const findings = o.bare ? parseState(ctx.summary?.body)?.findings ?? [] : [];
+  if (o.bare && !findings.length) {
+    const why = ctx.summary ? "The last review has no open findings to fix." : "There's nothing to fix yet: comment `/review` first.";
+    await post(`${why}
+
+${TASK_MARKER}`);
+    return { refused: why, code: "nothing_to_fix" };
+  }
+  const hosted = selfHosted();
+  if (hosted) {
+    await post(`${failureMarkdown(new ShaftFailure("self_hosted_unsupported", hosted))}
+
+${TASK_MARKER}`);
+    return { refused: hosted, code: "self_hosted_unsupported" };
+  }
+  if (savedCredentials(o.cwd)) {
+    warning(CREDENTIALS_IN_CHECKOUT);
+    await post(`${failureMarkdown(new ShaftFailure("credentials_in_checkout", CREDENTIALS_IN_CHECKOUT))}
+
+${TASK_MARKER}`);
+    return { refused: CREDENTIALS_IN_CHECKOUT, code: "credentials_in_checkout" };
+  }
+  const unsandboxed = await step("Start the sandbox", async () => prepareSandbox(o.cwd));
+  if (unsandboxed) {
+    await post(`${failureMarkdown(new ShaftFailure("sandbox_unavailable", unsandboxed))}
+
+${TASK_MARKER}`);
+    return { refused: unsandboxed, code: "sandbox_unavailable" };
+  }
+  const base = head(o.cwd);
+  const commands = repoCommands(o.cwd);
+  const choice = pick({ mode: "task", model: o.model, effort: o.effort, maxTurns: o.maxTurns });
+  info(`Making the change with ${choice.model}, effort ${choice.effort}. The repo's commands: ${commands.join(", ") || "none"}`);
+  const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
+  const prompt = buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, {
+    template: o.template,
+    focus: o.focus,
+    slots: { request: taskRequest(o.ask, findings), commands: commands.map((c) => `- \`${c}\``).join(`
+`) }
+  });
+  try {
+    const result = await step("Make the change", () => runAgent(prompt, {
+      claude: o.claude,
+      model: choice.model,
+      effort: choice.effort,
+      fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
+      maxTurns: choice.maxTurns,
+      timeoutMinutes: o.timeoutMinutes,
+      cwd: o.cwd,
+      env: o.env,
+      commands
+    }, TASK_FORMAT).finally(endSandboxes));
+    const lines = [prose(result.reply.answer)];
+    const changes = readChanges(o.cwd, base);
+    if (changes.length) {
+      const paths = changes.map((c) => c.path);
+      const name = (f) => `\`${f.replace(/[`\r\n]/g, "")}\``;
+      lines.push(`**Changed:** ${paths.map(name).join(", ")}`);
+      const runs = runsCode(paths);
+      if (runs.length)
+        lines.push(`**Read before merging:** ${runs.map(name).join(", ")} decide${runs.length === 1 ? "s" : ""} what runs on install and in CI.`);
+      const checks = await step("Run the checks", async () => checkList(result.reply.checks, commands, o.cwd).map((c) => runCheck(o.cwd, c, o.env)));
+      const failed = checks.filter((c) => !c.passed);
+      if (failed.length) {
+        warning(`Nothing was pushed: ${failed.map((c) => c.command).join(", ")} failed.`);
+        lines.push(`Nothing was pushed, because ${failed.length === 1 ? "a check" : "some checks"} failed.`);
+      } else if (o.dryRun)
+        lines.push("Nothing was pushed: this was a dry run.");
+      else {
+        assertHead(o.cwd, base);
+        const { data: bot } = await o.octokit.rest.users.getByUsername({ username: o.bot });
+        const message = redact(result.reply.commit_message.split(`
+`)[0].trim(), o.secrets).slice(0, 100) || "Make the change asked for with /fix";
+        const author = { name: o.bot, email: `${bot.id}+${o.bot}@users.noreply.github.com` };
+        const grant = await step("Get the push token", fetchPushToken);
+        const sha = await step("Push the commit", () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
+        lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
+      }
+      lines.push(checksTable(checks));
+      for (const c of failed)
+        lines.push(`<details><summary>Output of <code>${c.command}</code></summary>
+
+\`\`\`\`
+${prose(c.output).replace(/`{4,}/g, "```")}
+\`\`\`\`
+
+</details>`);
+    }
+    const answer = redact(lines.join(`
+
+`), o.secrets).slice(0, ANSWER_MAX);
+    const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result);
+    const commentUrl = await post(`${answer}
+
+${sub}
+
+${TASK_MARKER}`);
+    return { model, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
+  } catch (e) {
+    if (e instanceof ShaftFailure) {
+      e.url ??= o.runUrl;
+      await post(`${failureMarkdown(e)}
+
+${TASK_MARKER}`);
+    }
+    throw e;
+  }
 }
 
 // src/main.ts
@@ -59778,18 +60224,17 @@ ${grant.comment}`);
     return notice(grant.reason);
   }
   const octokit = getOctokit(grant.github_token);
-  if (r.mode !== "review" && r.mode !== "reply") {
-    if (!await hasWriteAccess(octokit, owner, repo, r.actor))
-      return notice(`${r.actor} has no write access, so nothing was started.`);
-    reaction = await reactStart(octokit, context2, dryRun);
-    return notice("Task mode is not built yet.");
-  }
+  if (r.mode === "help")
+    return notice("The Axon Shaft API sent a run for /help, which runs nothing.");
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
-    const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : "the question wasn't answered. Only people with write access can ask with /ask";
+    const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : r.mode === "reply" ? "the question wasn't answered. Only people with write access can ask with /ask" : "nothing was changed. Only people with write access can start a change with /fix or /axonshaft";
     return notice(`${r.actor} has no write access, so ${what}.`);
   }
   reaction = await reactStart(octokit, context2, dryRun);
-  const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString("base64")];
+  const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
+  for (const v of envValues)
+    setSecret(v);
+  const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString("base64"), ...envValues];
   reportFailure = (e) => reportRun({
     error: { code: e instanceof ShaftFailure ? e.code : "review_failed", message: redact(e instanceof Error ? e.message : String(e), secrets) },
     duration_ms: Date.now() - started
@@ -59822,6 +60267,23 @@ ${grant.comment}`);
     tokens: o.tokens,
     ...grant.claude_token.kind === "api_key" ? { cost_usd: o.costUsd } : {}
   });
+  if (r.mode === "task") {
+    const out = await runTask({
+      ...common,
+      ask: r.ask,
+      asker: r.actor,
+      bare: r.bare,
+      template: job.prompt.template,
+      pushMode: String(settings.pushMode),
+      repoUrl: `${context2.serverUrl}/${owner}/${repo}`
+    });
+    if (!("refused" in out)) {
+      done = true;
+      return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
+    }
+    notice(out.refused);
+    return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
+  }
   if (r.mode === "reply") {
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });
     done = true;

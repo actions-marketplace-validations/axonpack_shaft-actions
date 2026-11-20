@@ -1,9 +1,9 @@
 import * as core from '@actions/core';
-import { matches, pick } from '../utils/auto-pick.util';
+import { type Choice, matches, pick } from '../utils/auto-pick.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { diffText, fillSlots, trustedComments } from '../utils/prompt.util';
 import { footer, prose, redact } from '../utils/render.util';
-import { type ReplyFormat, runAgent, type Tokens } from './agent.service';
+import { type AgentResult, type ReplyFormat, runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import { chosenModels, FALLBACK, type ReviewOptions } from './review.service';
 import type { Ask } from './route.service';
@@ -43,7 +43,7 @@ export type ReplyOutcome = {
  * The Reply prompt: the dashboard's template with the run's data in its slots. `ctx.files` is the
  * diff after `skip`. The question itself is left out of the comments, which it would repeat.
  */
-export function buildReplyPrompt(ctx: Context, ask: Ask, asker: string, o: { template: string; focus: string[] }): string {
+export function buildReplyPrompt(ctx: Context, ask: Ask, asker: string, o: { template: string; focus: string[]; slots?: Record<string, string> }): string {
   const { pr } = ctx;
   // A file name can hold a backtick or a line break; neither may reach the prompt's own text.
   const path = ask.path?.replace(/[`\r\n]/g, '');
@@ -62,7 +62,51 @@ export function buildReplyPrompt(ctx: Context, ask: Ask, asker: string, o: { tem
     commits: ctx.commits.map((m) => `- ${m}`).join('\n'),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments].filter((c) => c.id !== ask.id)),
     diff: diffText(ctx.files, o.focus),
+    // A task's own: its request and the repo's commands.
+    ...o.slots,
   });
+}
+
+/** Where an answer goes, and how it's posted. */
+type Thread = Pick<ReplyOptions, 'octokit' | 'owner' | 'repo' | 'number' | 'ask' | 'dryRun' | 'secrets'>;
+
+/**
+ * Post `body`, redacted, where the comment was made: under the thread for a comment on a line, else
+ * on the pull request. Its URL, or '' on a dry run, which only logs it.
+ */
+export async function postInThread(o: Thread, body: string): Promise<string> {
+  if (o.dryRun) {
+    core.info(`--- reply\n${body}`);
+    return '';
+  }
+  const req = { owner: o.owner, repo: o.repo, body: redact(body, o.secrets) };
+  const { data } = o.ask.thread
+    ? await o.octokit.rest.pulls.createReplyForReviewComment({ ...req, pull_number: o.number, comment_id: o.ask.thread })
+    : await o.octokit.rest.issues.createComment({ ...req, issue_number: o.number });
+  return data.html_url;
+}
+
+/** The footer under an answer, and the model that answered, from the session's result. */
+export function answerFooter(
+  o: Pick<ReplyOptions, 'owner' | 'repo' | 'runUrl' | 'dashboardRunUrl' | 'claude'>,
+  sha: string,
+  choice: Choice,
+  result: Pick<AgentResult<unknown>, 'models' | 'tokens' | 'costUsd'>,
+): { sub: string; model: string } {
+  const models = chosenModels(result.models, choice, false);
+  const sub = footer({
+    sha,
+    repo: `${o.owner}/${o.repo}`,
+    runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
+    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : ''),
+    effort: choice.effort,
+    reason: choice.reason,
+    tokens: result.tokens,
+    // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
+    costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
+  });
+  return { sub, model: models.main };
 }
 
 /**
@@ -71,18 +115,7 @@ export function buildReplyPrompt(ctx: Context, ask: Ask, asker: string, o: { tem
  */
 export async function replyToComment(o: ReplyOptions): Promise<ReplyOutcome> {
   const ctx = await step('Read the pull request', () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
-  const clean = (text: string) => redact(text, o.secrets);
-  const post = async (body: string) => {
-    if (o.dryRun) {
-      core.info(`--- reply\n${body}`);
-      return '';
-    }
-    const req = { owner: o.owner, repo: o.repo, body: clean(body) };
-    const { data } = o.ask.thread
-      ? await o.octokit.rest.pulls.createReplyForReviewComment({ ...req, pull_number: o.number, comment_id: o.ask.thread })
-      : await o.octokit.rest.issues.createComment({ ...req, issue_number: o.number });
-    return data.html_url;
-  };
+  const post = (body: string) => postInThread(o, body);
   const choice = pick({ mode: 'reply', model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   core.info(`Answering with ${choice.model}, effort ${choice.effort}`);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
@@ -112,20 +145,8 @@ export async function replyToComment(o: ReplyOptions): Promise<ReplyOutcome> {
     }
     throw e;
   }
-  const answer = clean(prose(result.reply)).slice(0, ANSWER_MAX);
-  const models = chosenModels(result.models, choice, false);
-  const sub = footer({
-    sha: ctx.pr.headSha,
-    repo: `${o.owner}/${o.repo}`,
-    runUrl: o.runUrl,
-    dashboardRunUrl: o.dashboardRunUrl,
-    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : ''),
-    effort: choice.effort,
-    reason: choice.reason,
-    tokens: result.tokens,
-    // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
-    costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
-  });
+  const answer = redact(prose(result.reply), o.secrets).slice(0, ANSWER_MAX);
+  const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result);
   const commentUrl = await post(`${answer}\n\n${sub}\n\n${REPLY_MARKER}`);
-  return { model: models.main, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
+  return { model, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
 }

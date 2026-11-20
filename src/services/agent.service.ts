@@ -12,6 +12,7 @@ import { ShaftFailure } from '../utils/failure.util';
 import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
+import { sandboxPrefix } from './sandbox.service';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -152,20 +153,26 @@ export function parseReview(x: unknown): Review | undefined {
 }
 
 const READ_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+const EDIT_TOOLS = [...READ_TOOLS, 'Edit', 'Write'];
 const ALLOWED = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)'];
 /** The CLI's own deny rules, on top of the hook below. `//` makes a rule path absolute. */
 const DENIED = ['Read(//proc/**)', 'Read(//sys/**)'];
 
 /**
  * Checks every tool call, the subagents' too, before the allow rules let it through: a hook runs
- * where `canUseTool` doesn't, since that is only asked about calls no rule allows.
+ * where `canUseTool` doesn't, since that is only asked about calls no rule allows. A task's Bash
+ * command, once allowed, runs in the sandbox (`sandboxPrefix`), as the checks do.
  */
-const guard =
-  (cwd: string): HookCallback =>
+export const guard =
+  (cwd: string, commands?: string[]): HookCallback =>
   async (input) => {
     const { tool_name, tool_input } = input as PreToolUseHookInput;
-    const why = toolDenial(tool_name, (tool_input ?? {}) as Record<string, unknown>, cwd);
-    return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
+    const args = (tool_input ?? {}) as Record<string, unknown>;
+    const why = toolDenial(tool_name, args, cwd, commands);
+    if (why) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } };
+    if (!commands || tool_name !== 'Bash') return {};
+    const updatedInput = { ...args, command: `${sandboxPrefix(cwd)} ${String(args.command).trim()}` };
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput } };
   };
 const SDK_VERSION = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
 
@@ -193,13 +200,17 @@ function claudeBinary(): string | undefined {
  * The CLI's environment, which every command the model runs inherits: `ENV_ALLOW`, the project's own
  * `names` (never one `ENV_DENIED` matches) and the Claude token. Nothing else the runner holds (the
  * OIDC request token, the action's inputs, GITHUB_TOKEN) and no GitHub token of ours is there to
- * leak. The CLI scrubs the Claude token from the environment of what it runs.
+ * leak. The CLI scrubs the Claude token from the environment of what it runs. Background commands
+ * are off, including the CLI's own move of a slow command to the background and its hand-off of
+ * running ones at exit: repo code must never run while the CLI's file tools act.
  */
 export function cliEnv(claude: ClaudeToken, names: string[] = []): Record<string, string | undefined> {
   return {
     ...runnerEnv(names),
     [claude.kind === 'oauth' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY']: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+    CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}`,
   };
 }
@@ -222,6 +233,11 @@ export type AgentOptions = {
   cwd: string;
   /** The project's own variables to pass through, by name. */
   env?: string[];
+  /**
+   * A task's: the repo's own commands (`repoCommands`). The session may then edit files in the
+   * checkout and run these, each call still checked by the guard. No token is added for them.
+   */
+  commands?: string[];
 };
 
 /** What a run used, summed over its models, as `POST /v1/runs` takes it. */
@@ -253,6 +269,7 @@ export function toolTarget(input: Record<string, unknown>): string {
 
 async function once(prompt: string, o: AgentOptions, schema: Record<string, unknown>, controller: AbortController): Promise<SDKResultMessage | undefined> {
   const deep = !!o.subagentModel && !!o.passes?.length;
+  const edit = !!o.commands;
   let result: SDKResultMessage | undefined;
   // A deep pass's own tool calls name the pass, by the call that started it.
   const passes = new Map<string, string>();
@@ -264,10 +281,12 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       effort: o.effort as EffortLevel,
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
-      tools: deep ? [...READ_TOOLS, 'Agent'] : READ_TOOLS,
-      allowedTools: deep ? [...ALLOWED, 'Agent'] : ALLOWED,
+      tools: deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS,
+      // A task's Bash runs the repo's commands, which no allow rule can list ahead, so no rule allows it:
+      // only the guard's own allow lets a call through, and if the guard doesn't answer, dontAsk denies it.
+      allowedTools: deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED,
       disallowedTools: DENIED,
-      hooks: { PreToolUse: [{ hooks: [guard(o.cwd)] }] },
+      hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
       // No project or user settings: a PR could otherwise add hooks or MCP servers that run its code.
       settingSources: [],
@@ -293,7 +312,7 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
 }
 
 /**
- * Run the session with read-only tools, for a reply in `format`: the review's, or a job's own. A
+ * Run the session with read-only tools (a task's also edit and run the repo's commands), for a reply in `format`: the review's, or a job's own. A
  * reply that doesn't match the schema is retried once, then the run fails. Every failure comes out
  * as a `ShaftFailure` with a `review_*` code, whatever the job.
  */

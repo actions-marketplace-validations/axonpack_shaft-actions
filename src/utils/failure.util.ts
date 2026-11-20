@@ -3,7 +3,8 @@ import { ERROR_CARDS_URL } from '../consts/api.const';
 /**
  * A failure the action knows: `code` is one of the Axon Shaft API's error codes, or the action's
  * own (`missing_id_token`, `api_unreachable`, `review_timed_out`, `review_invalid_reply`,
- * `review_failed`, `push_failed`). `message` says what to do and `url` where to do it.
+ * `review_failed`, `push_failed`, `self_hosted_unsupported`, `credentials_in_checkout`,
+ * `sandbox_unavailable`). `message` says what to do and `url` where to do it.
  */
 export class ShaftFailure extends Error {
   constructor(
