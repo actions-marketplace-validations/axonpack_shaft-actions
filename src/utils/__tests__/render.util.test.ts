@@ -129,11 +129,11 @@ test('the summary format', () => {
 > ![Needs changes](https://shaft.axonpack.dev/status/needs-changes.svg)
 > \`retry()\` never retries, so the fix this PR is for does not take effect.
 >
-> <kbd>🔴 1 blocking</kbd> <kbd>🟡 2 should fix</kbd> <kbd>⚪ 2 nits</kbd> <kbd>✅ 1 fixed</kbd>
+> **Findings** &nbsp; <kbd>🔴 1 blocking</kbd> <kbd>🟡 2 should fix</kbd> <kbd>⚪ 2 nits</kbd> <kbd>✅ 1 fixed</kbd>
 >
-> <kbd>❌ Correctness</kbd> <kbd>✅ Breakage</kbd> <kbd>✅ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>✅ Docs</kbd> <kbd>✅ Security</kbd>
+> **Checks** &nbsp; <kbd>❌ Correctness</kbd> <kbd>✅ Breakage</kbd> <kbd>✅ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>✅ Docs</kbd> <kbd>✅ Security</kbd>
 >
-> <sub>Bug fix · 85% confidence · reviewed \`a1b2c3d\`</sub>
+> <sub>🏷️ Bug fix · 🎯 85% confidence · 🔎 reviewed [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
 
 | Severity | Where | Finding | Details |
 |---|---|---|---|
@@ -155,8 +155,11 @@ test('the summary format', () => {
 <details><summary>What this PR does</summary>
 
 **Claim:** retry failed uploads up to 3 times.
+
 **Impact:** uploads that fail once still fail.
+
 **Scope:** \`packages/upload\`, both platforms.
+
 **Not checked:** no tests or builds were run.
 
 </details>
@@ -173,7 +176,7 @@ const info = { sha: 'abc1234', repo: 'acme/widgets', models: 'claude-haiku-4', e
 test('a looks-good review with no findings: a TIP card with one chip, and no table', () => {
   const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info);
   expect(body).toContain('> [!TIP]\n> ![Looks good](https://shaft.axonpack.dev/status/looks-good.svg)\n');
-  expect(body).toContain('\n> <kbd>✅ No findings</kbd>\n');
+  expect(body).toContain('\n> **Findings** &nbsp; <kbd>✅ No findings</kbd>\n');
   expect(body).not.toContain('| Severity |');
   expect(body).not.toContain('fixed</kbd>');
 });
@@ -192,7 +195,7 @@ test('blocking is a CAUTION card; a check the project turned off shows ➖', () 
   const placed = place([finding({ severity: 'blocking', step: 'security' })], files, 'summary');
   const body = renderSummary({ ...review, verdict: 'blocking' }, placed, undefined, { ...info, checks: ['correctness', 'tests'] });
   expect(body).toContain('> [!CAUTION]\n> ![Blocking](https://shaft.axonpack.dev/status/blocking.svg)\n');
-  expect(body).toContain('> <kbd>🔴 1 blocking</kbd>\n');
+  expect(body).toContain('> **Findings** &nbsp; <kbd>🔴 1 blocking</kbd>\n');
   expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>➖ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>✅ Tests</kbd> <kbd>➖ Docs</kbd> <kbd>❌ Security</kbd>\n');
 });
 

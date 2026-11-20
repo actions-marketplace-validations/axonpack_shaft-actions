@@ -24174,11 +24174,11 @@ function card(review, placed, fixed, f) {
     `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
     ...headline.map((l) => `> ${l}`),
     ">",
-    `> ${countChips.join(" ")}`,
+    `> **Findings** &nbsp; ${countChips.join(" ")}`,
     ">",
-    `> ${checkChips.join(" ")}`,
+    `> **Checks** &nbsp; ${checkChips.join(" ")}`,
     ">",
-    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed \`${f.sha.slice(0, 7)}\``].filter(Boolean).join(" · ")}</sub>`
+    `> <sub>${[type && `\uD83C\uDFF7️ ${type}`, `\uD83C\uDFAF ${review.confidence}% confidence`, `\uD83D\uDD0E reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
   ].join(`
 `);
 }
@@ -24264,6 +24264,7 @@ function renderSummary(raw, placed, prior, f) {
     out.push("", walkthrough(raw.walkthrough));
   if (review.claim) {
     out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
+
 `)));
   }
   out.push("", footer(f));

@@ -297,8 +297,8 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
 
 The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. On a later push, the comment switches to `reviewing.svg` while the review runs. GitHub sends no email when a comment is edited. Under it are the headline and these chips:
 
-- The number of blocking, should-fix and nit findings, and how many earlier findings this push fixed.
-- One chip per check:
+- **Findings**: the number of blocking, should-fix and nit findings, and how many earlier findings this push fixed.
+- **Checks**: one chip per check:
 
   | Chip | Meaning |
   |---|---|
@@ -311,7 +311,7 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
 - Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
 - When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
 
-The card's last line gives the kind of change, the model's confidence and the reviewed commit.
+The card's last line gives the kind of change (🏷️), the model's confidence (🎯) and the reviewed commit (🔎), linked to the commit on GitHub.
 
 ### Progress while the review runs
 
