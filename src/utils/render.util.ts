@@ -364,7 +364,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
       '',
       details(
         'What this PR does',
-        [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join('\n'),
+        [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join('\n\n'),
       ),
     );
   }

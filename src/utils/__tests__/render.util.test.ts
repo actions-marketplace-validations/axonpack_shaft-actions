@@ -155,8 +155,11 @@ test('the summary format', () => {
 <details><summary>What this PR does</summary>
 
 **Claim:** retry failed uploads up to 3 times.
+
 **Impact:** uploads that fail once still fail.
+
 **Scope:** \`packages/upload\`, both platforms.
+
 **Not checked:** no tests or builds were run.
 
 </details>

@@ -24262,6 +24262,7 @@ function renderSummary(raw, placed, prior, f) {
     out.push("", walkthrough(raw.walkthrough));
   if (review.claim) {
     out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
+
 `)));
   }
   out.push("", footer(f));
