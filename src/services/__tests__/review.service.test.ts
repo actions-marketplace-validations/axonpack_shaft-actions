@@ -26,7 +26,7 @@ vi.doMock('../agent.service', async (actual) => ({
     runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes });
     if (agentError) throw agentError;
     const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: ['correctness', 'tests'], not_checked: 'n' };
-    return { review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
+    return { reply: review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
   },
 }));
 const { collectContext } = await import('../context.service');

@@ -61,6 +61,15 @@ vi.doMock('../services/review.service', () => ({
   },
 }));
 
+let replied: Record<string, unknown> | undefined;
+const answer = { answer: 'It retries in `src/retry.ts:42`.', comment_url: 'https://github.com/acme/widgets/pull/12#issuecomment-9' };
+vi.doMock('../services/reply.service', () => ({
+  replyToComment: async (o: Record<string, unknown>) => {
+    replied = o;
+    return { model: 'claude-sonnet-5-5', effort: 'medium', tokens, costUsd: 0.05, output: answer };
+  },
+}));
+
 const tokens = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
 const output = { headline: 'h', claim: 'c', impact: 'i', scope: 's', not_checked: 'n', type: 'feature', confidence: 90, comment_url: '', checks: [], findings: [], fixed: 0 };
 const outcome = { verdict: 'looks-good', findings: 0, summaryUrl: '', model: 'sonnet', effort: 'medium', bySeverity: { blocking: 0, should_fix: 0, nit: 0 }, tokens, costUsd: 0.42, output };
@@ -110,6 +119,7 @@ beforeEach(() => {
   jobSummary = '';
   finished = false;
   reviewed = undefined;
+  replied = undefined;
   reviewError = undefined;
   process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
 });
@@ -255,6 +265,44 @@ test("/review by someone without write access starts nothing, and the notice say
   expect(notices).toEqual(['maintainer has no write access, so no review was started. Only people with write access can start one with /review.']);
   expect(checkedOut).toEqual([]);
   expect(reviewed).toBeUndefined();
+});
+
+const replyGrant = { ...grant, run_url: 'https://shaft.axonpack.dev/runs/8', job: { type: 'reply', version: 1, options: {}, checks: [], prompt: { template: '# Reply {{question}}', passes: [] } } };
+const asksQuestion = { ...comment, comment: { ...comment.comment, body: '/ask why retry?' } };
+
+test('/ask by someone with write access answers at the head commit with the Reply prompt, and reports the answer with no verdict', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = asksQuestion;
+  api(Response.json(replyGrant));
+  await main();
+  expect(failed).toEqual([]);
+  expect(asked).toEqual({ job: 'reply', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat' } });
+  expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 12, 'ghs_shaft']]);
+  expect(replied).toMatchObject({
+    number: 12,
+    ask: { id: 501, text: '/ask why retry?' },
+    asker: 'maintainer',
+    template: '# Reply {{question}}',
+    claude: { kind: 'oauth', value: 'sk-ant-oat-shaft' },
+    effort: 'auto',
+    maxTurns: 30,
+    timeoutMinutes: 15,
+    env: ['NODE_OPTIONS'],
+    dashboardRunUrl: 'https://shaft.axonpack.dev/runs/8',
+  });
+  expect(reviewed).toBeUndefined();
+  expect(reported).toEqual({ model: 'claude-sonnet-5-5', effort: 'medium', duration_ms: expect.any(Number), tokens, output: answer });
+});
+
+test("/ask by someone without write access answers nothing, and the notice says who can", async () => {
+  context.eventName = 'issue_comment';
+  context.payload = asksQuestion;
+  permission = 'read';
+  api(Response.json(replyGrant));
+  await main();
+  expect(notices).toEqual(["maintainer has no write access, so the question wasn't answered. Only people with write access can ask with /ask."]);
+  expect(checkedOut).toEqual([]);
+  expect(replied).toBeUndefined();
 });
 
 test("an API error fails the step with the API's message, and the job summary shows its card, message and link", async () => {

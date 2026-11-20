@@ -9,12 +9,19 @@ export type Route =
    * none, and its `actor` needs write access. `fork` is undefined when the payload doesn't say.
    */
   | { mode: 'review'; number: number; event?: ReviewEvent; fork?: boolean; actor?: string }
-  | { mode: 'task'; number: number; actor: string }
+  | { mode: 'task'; number: number; actor: string; ask: Ask }
   /** `/ask`: answer, never change code. */
-  | { mode: 'reply'; number: number; actor: string }
+  | { mode: 'reply'; number: number; actor: string; ask: Ask }
   /** `/help`: post the list of commands. */
   | { mode: 'help'; number: number; actor: string }
   | { mode: 'skip'; reason: string; notice?: boolean };
+
+/**
+ * The comment a `/ask` or `/fix` came in, which the answer goes under: its ID and text (a review's
+ * body for `pull_request_review`). On a line of the diff, also its file and line, and `thread`, the
+ * ID of the thread's first comment, which GitHub takes a reply to.
+ */
+export type Ask = { id: number; text: string; path?: string; line?: number; thread?: number };
 
 /** The pull_request actions that start a review, and the event each one is for the Axon Shaft API. */
 const REVIEW_EVENTS: Record<string, ReviewEvent> = { opened: 'opened', reopened: 'opened', synchronize: 'push', ready_for_review: 'ready' };
@@ -71,8 +78,14 @@ export function route(eventName: string, payload: any): Route {
   if (command === 'review' && onPr) return { mode: 'review', number: number!, fork: pr ? isFork(pr) : undefined, actor };
   if (command === 'review') return { mode: 'skip', reason: '/review works on a pull request, not an issue.', notice: true };
   if (command === 'help') return { mode: 'help', number: number!, actor };
-  if (command === 'ask') return { mode: 'reply', number: number!, actor };
-  return { mode: 'task', number: number!, actor };
+  const c = eventName === 'pull_request_review' ? payload.review : payload.comment;
+  const ask: Ask =
+    eventName === 'pull_request_review_comment'
+      ? { id: c.id, text, path: c.path, line: c.line ?? c.original_line ?? undefined, thread: c.in_reply_to_id ?? c.id }
+      : { id: c.id, text };
+  if (command === 'ask' && !onPr) return { mode: 'skip', reason: '/ask works on a pull request, not an issue.', notice: true };
+  if (command === 'ask') return { mode: 'reply', number: number!, actor, ask };
+  return { mode: 'task', number: number!, actor, ask };
 }
 
 /**

@@ -15,7 +15,7 @@ export type Choice = {
 };
 
 export type PickInput = {
-  mode: 'review' | 'task';
+  mode: 'review' | 'reply' | 'task';
   depth?: string;
   files?: ChangedFile[];
   /** From the dashboard. */
@@ -72,6 +72,7 @@ export function pick(input: PickInput): Choice {
 
   const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
   if (input.mode === 'task') row = { model: 'opus', effort: 'high', reason: 'task' };
+  else if (input.mode === 'reply') row = { model: 'sonnet', effort: 'medium', reason: 'question' };
   else if (hot) row = { model: 'opus', effort: 'high', reason: `${size}, touches ${hot.filename}` };
   else if (input.depth === 'deep') row = { model: 'opus', effort: 'high', reason: `${size}, deep` };
   else if (lines > 1000 || files.length > 30) row = { model: 'opus', effort: 'medium', reason: `${size}, ${files.length} files` };

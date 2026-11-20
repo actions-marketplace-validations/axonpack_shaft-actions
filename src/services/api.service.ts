@@ -15,8 +15,8 @@ export type Pass = { name: string; description: string; prompt: string };
 
 /**
  * The project's job: `options` filled in with the catalog's defaults, `checks` the keys of the
- * catalog checks it keeps on, and `prompt` the whole review prompt, whose `{{slots}}` the action
- * fills with the run's data, plus the deep review's `passes`.
+ * catalog checks it keeps on, and `prompt` the job's whole prompt (a review's or a reply's), whose
+ * `{{slots}}` the action fills with the run's data, plus the deep review's `passes`.
  */
 export type GrantJob = {
   type: string;
@@ -65,8 +65,10 @@ export type RunOutput = {
   fixed: number;
 };
 
-/** What `POST /v1/runs` takes: a finished review, or a run that failed after it opened. */
-export type RunSummary = RunDone | { error: { code: string; message: string }; duration_ms: number };
+/** What `POST /v1/runs` takes: a finished review or reply, or a run that failed after it opened. */
+export type RunSummary = RunDone | ReplyDone | { error: { code: string; message: string }; duration_ms: number };
+/** A finished reply: no verdict or findings, and its answer as `output`. */
+type ReplyDone = Pick<RunDone, 'model' | 'effort' | 'duration_ms' | 'tokens' | 'cost_usd'> & { output: { answer: string; comment_url: string } };
 type RunDone = {
   verdict: string;
   model: string;

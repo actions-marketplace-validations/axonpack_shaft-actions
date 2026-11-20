@@ -1,15 +1,17 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
 import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
+import type { Tokens } from './services/agent.service';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
+import { replyToComment } from './services/reply.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
 import { failureMarkdown, ShaftFailure } from './utils/failure.util';
 import { redact } from './utils/render.util';
 
-/** A setting from the Axon Shaft API, checked before the review starts. */
+/** A setting from the Axon Shaft API, checked before the run starts. */
 function oneOf(name: string, allowed: string[], value: unknown): string {
   if (typeof value === 'string' && allowed.includes(value)) return value;
   throw new ShaftFailure('api_error', `The Axon Shaft API sent ${name} "${value}", which isn't one of ${allowed.join(', ')}. Check the repo's settings on the dashboard.`, DASHBOARD_URL);
@@ -48,12 +50,16 @@ async function run(): Promise<void> {
   }
   const octokit = getOctokit(grant.github_token);
 
-  if (r.mode !== 'review') {
+  if (r.mode !== 'review' && r.mode !== 'reply') {
     if (!(await hasWriteAccess(octokit, owner, repo, r.actor))) return core.notice(`${r.actor} has no write access, so nothing was started.`);
-    return core.notice(`${r.mode === 'reply' ? 'Reply' : 'Task'} mode is not built yet.`);
+    return core.notice('Task mode is not built yet.');
   }
   if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
-    return core.notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);
+    const what =
+      r.mode === 'review'
+        ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}`
+        : "the question wasn't answered. Only people with write access can ask with /ask";
+    return core.notice(`${r.actor} has no write access, so ${what}.`);
   }
   const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64')];
   reportFailure = (e) =>
@@ -65,7 +71,8 @@ async function run(): Promise<void> {
   if (context.eventName !== 'pull_request') await step('Check out the pull request', async () => checkoutHead(cwd, r.number, grant.github_token));
 
   const { settings, job } = grant;
-  const out = await reviewPullRequest({
+  // What a review and a reply both run with.
+  const common = {
     octokit,
     owner,
     repo,
@@ -74,36 +81,41 @@ async function run(): Promise<void> {
     secrets,
     model: String(settings.model ?? ''),
     effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
-    depth: oneOf('depth', ['standard', 'deep'], job.options.depth),
-    nits: oneOf('nits', ['summary', 'inline', 'off'], job.options.nits),
     // Not set on the dashboard (the API's default, or none): the review picks a cap from the diff's size.
     maxTurns: settings.maxTurns == null || settings.maxTurnsDefault === true ? undefined : positive('maxTurns', settings.maxTurns),
     timeoutMinutes: positive('timeLimit', settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),
     env: globs(settings.env),
-    gates: globs(settings.gates),
     bot: APP_BOT,
-    prompt: job.prompt,
-    checks: job.checks,
     dryRun,
     runUrl: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
     dashboardRunUrl: grant.run_url,
     cwd,
+  };
+  // What the run used, for the dashboard; the cost only on an API key.
+  const usage = (o: { tokens: Tokens; costUsd: number }) => ({
+    duration_ms: Date.now() - started,
+    tokens: o.tokens,
+    ...(grant.claude_token.kind === 'api_key' ? { cost_usd: o.costUsd } : {}),
+  });
+
+  if (r.mode === 'reply') {
+    const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });
+    return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
+  }
+  const out = await reviewPullRequest({
+    ...common,
+    depth: oneOf('depth', ['standard', 'deep'], job.options.depth),
+    nits: oneOf('nits', ['summary', 'inline', 'off'], job.options.nits),
+    gates: globs(settings.gates),
+    prompt: job.prompt,
+    checks: job.checks,
   });
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
-  await reportRun({
-    verdict: out.verdict,
-    model: out.model,
-    effort: out.effort,
-    findings: out.bySeverity,
-    duration_ms: Date.now() - started,
-    tokens: out.tokens,
-    ...(grant.claude_token.kind === 'api_key' ? { cost_usd: out.costUsd } : {}),
-    output: out.output,
-  });
+  await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, ...usage(out), output: out.output });
 }
 
 /** Fail the step; a known failure also puts its card, message and link in the job summary. */

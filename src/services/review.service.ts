@@ -4,7 +4,7 @@ import { ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
-import { runAgent, type Tokens } from './agent.service';
+import { REVIEW_FORMAT, runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import { CATEGORY_CONCLUSION, categoryCheck, gateResults, GATES_CHECK, gatesConclusion, postCategoryChecks, postGatesCheck } from './check-runs.service';
 import { step } from './step.service';
@@ -20,6 +20,7 @@ import {
   startSummary,
   unposted,
 } from '../utils/render.util';
+import { diffText, fillSlots, trustedComments } from '../utils/prompt.util';
 
 export type ReviewOptions = {
   /** Unused on a dry run with a context built by hand. */
@@ -70,8 +71,7 @@ export type ReviewOutcome = {
 };
 
 /** One step down when the plan behind the token can't use the picked model. */
-const FALLBACK: Record<string, string> = { opus: 'sonnet,haiku', sonnet: 'haiku' };
-const MAX_DIFF = 200_000; // ponytail: a bigger diff is cut; the model reads the rest from the checkout
+export const FALLBACK: Record<string, string> = { opus: 'sonnet,haiku', sonnet: 'haiku' };
 
 /**
  * The models the action chose, named as the run reported them (an alias such as `sonnet` becomes
@@ -108,24 +108,12 @@ export function guidesText(guides: Context['guides']): string {
  */
 export function buildPrompt(ctx: Context, prior: State | undefined, o: { template: string; focus: string[]; skipped: number }): string {
   const { pr } = ctx;
-  let diff = ctx.files
-    .map(
-      (f) =>
-        `diff --git a/${f.filename} b/${f.filename} (${f.status}${matches(f.filename, o.focus) ? ', focus' : ''})\n${f.patch ?? '(no patch: binary or too large, read the file)'}`,
-    )
-    .join('\n');
-  if (diff.length > MAX_DIFF) diff = `${diff.slice(0, MAX_DIFF)}\n(the diff is cut here; read the remaining files from the checkout)`;
-  const comments = [...ctx.comments, ...ctx.reviewComments]
-    // Only people inside the repo reach the prompt: anyone else could write instructions aimed at the model.
-    .filter((c) => c.trusted)
-    .map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? '?'}` : ''}: ${c.body.slice(0, 2000)}`)
-    .join('\n');
   const previous = prior?.findings.length
     ? `Findings from the review of \`${prior.sha.slice(0, 7)}\` (fingerprint, severity, place, title):\n\n${prior.findings
         .map((f) => `- ${f.fp} ${f.severity} \`${f.file}:${f.line}\` ${f.title}`)
         .join('\n')}`
     : '';
-  const slots: Record<string, string | number> = {
+  return fillSlots(o.template, {
     repo: `${ctx.owner}/${ctx.repo}`,
     number: pr.number,
     head: pr.head,
@@ -138,14 +126,8 @@ export function buildPrompt(ctx: Context, prior: State | undefined, o: { templat
     author: pr.author,
     body: pr.body,
     commits: ctx.commits.map((m) => `- ${m}`).join('\n'),
-    comments,
-    diff,
-  };
-  // One pass with a function: a `$` in the data is never a replacement pattern, and a `{{slot}}` in the data stays as written.
-  return o.template.replace(/\{\{(\w+)\}\}/g, (slot, name: string) => {
-    if (!Object.hasOwn(slots, name)) return slot;
-    const value = String(slots[name]);
-    return value.trim() ? value : 'None.';
+    comments: trustedComments([...ctx.comments, ...ctx.reviewComments]),
+    diff: diffText(ctx.files, o.focus),
   });
 }
 
@@ -212,7 +194,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env,
-    }),
+    }, REVIEW_FORMAT),
     );
   } catch (e) {
     // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
@@ -223,8 +205,8 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     throw e;
   }
   // Only the project's own gates, each with the review's result; any other gates in the reply are dropped.
-  const gates = o.gates?.length ? gateResults(o.gates, result.review.gates) : undefined;
-  const review = { ...result.review, gates };
+  const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
+  const review = { ...result.reply, gates };
   core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
   core.startGroup('Post the review');
 
