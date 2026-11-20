@@ -1,5 +1,19 @@
 # shaft
 
+## 1.7.0
+
+### Minor Changes
+
+- a684178: - **Advisory links**: a Known vulnerabilities finding links each advisory ID to its page, GitHub's advisory page for a `GHSA-` ID or the record on osv.dev for any other. The finding's row in the summary and on its check run links to its most severe advisory, and the check run's details link goes there too. The run report sends the link to the Axon Shaft API with the finding.
+- 1a389e8: - **Facts for nine more checklists**: eight new pre-steps hand the model facts, placed after the steps in the prompt. Changelog and changeset gets the changed packages and the changesets that name them. Docs gets the docs files changed and the READMEs above changed code that stayed the same. Tests gets each changed source file with its changed test, an existing one, or none. File and folder structure gets each new file's folder, suffix and name case. Does what it says gets the lines changed by area and kind of file. Personal data and logs, and Logs and metrics, get the log, metric, analytics and error-report calls the diff adds. Feature flags gets the flags read and dropped and where the repo still names them. Type safety gets the type escapes added and the repo's settings for them. The scripts read only the diff and the checkout's files, and never run the repo's code.
+- 0f47be7: - **More pre-step facts**: What else it can break, Unused code, Unchecked generated code, Public API, Access control, Translations, Theme and design tokens, and Native and store now get facts from a script, placed after the steps in the prompt. They list the files that name each changed export, new exports no other file names, imports no manifest lists, exports before and after, new routes with the auth checks near them, locale keys the other locales lack, raw colours and sizes, and native changes with the runtime version before and after. The scripts read only the diff and the checkout, and never run the repo's code.
+- ce10fa0: - **Labels for the skip filter**: the action sends the pull request's label names to the Axon Shaft API, from the pull request or, for a comment, its issue. With them, the Code review's new "Skip pull requests with these labels" filter can skip a pull request labelled `skip-review`, `no-review`, `skip-ai-review` or `do-not-review`, or whatever list the project sets. Comment `/review` to review a labelled pull request anyway.
+
+### Patch Changes
+
+- 7c1d587: - **What this PR does**: the Claim, Impact, Scope and Not checked lines in the summary's folded section each sit in their own paragraph, with a blank line between them.
+  - **Summary card**: the two chip rows are labelled Findings and Checks, and the last line marks the kind of change, the confidence and the reviewed commit with an icon each, with the commit linked to GitHub.
+
 ## 1.6.0
 
 ### Minor Changes
