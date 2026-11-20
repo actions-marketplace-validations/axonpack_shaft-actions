@@ -15,7 +15,7 @@ vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
   },
 }));
 const { ENV_ALLOW } = await import('../../consts/env.const');
-const { cliEnv, deepAgents, runAgent, sumTokens, toolTarget } = await import('../agent.service');
+const { cliEnv, deepAgents, REVIEW_FORMAT, runAgent, sumTokens, toolTarget } = await import('../agent.service');
 
 beforeEach(() => {
   reply = [];
@@ -74,15 +74,15 @@ test('a deep run gives the SDK the passes as agents; a standard one gives none',
   const review = { verdict: 'looks-good', headline: 'h', findings: [] };
   reply = [{ type: 'result', subtype: 'success', structured_output: review, modelUsage: {}, total_cost_usd: 0 }];
   const pass = { name: 'breakage', description: 'd', prompt: 'p' };
-  await runAgent('prompt', { ...options, subagentModel: 'sonnet', passes: [pass] });
-  await runAgent('prompt', options);
+  await runAgent('prompt', { ...options, subagentModel: 'sonnet', passes: [pass] }, REVIEW_FORMAT);
+  await runAgent('prompt', options, REVIEW_FORMAT);
   expect(Object.keys(asked[0].options.agents as object)).toEqual(['breakage']);
   expect(asked[1].options.agents).toBeUndefined();
 });
 
 test('a run past the time limit is review_timed_out, linking the dashboard', async () => {
   reply = 'hang';
-  expect(await failure(runAgent('prompt', { ...options, timeoutMinutes: 0.0005 }))).toEqual({
+  expect(await failure(runAgent('prompt', { ...options, timeoutMinutes: 0.0005 }, REVIEW_FORMAT))).toEqual({
     code: 'review_timed_out',
     message: 'The review ran past its 0.0005-minute time limit. Raise the time limit on the dashboard, or rerun the job.',
     url: 'https://shaft.axonpack.dev',
@@ -91,22 +91,31 @@ test('a run past the time limit is review_timed_out, linking the dashboard', asy
 
 test('a reply that misses the schema twice is review_invalid_reply', async () => {
   reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'maybe' }, result: '', modelUsage: {}, total_cost_usd: 0 }];
-  expect(await failure(runAgent('prompt', options))).toMatchObject({ code: 'review_invalid_reply', url: undefined });
+  expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toMatchObject({ code: 'review_invalid_reply', url: undefined });
   expect(asked).toHaveLength(2);
 });
 
 test('an SDK error, or anything else that breaks the run, is review_failed', async () => {
   reply = [{ type: 'result', subtype: 'error_max_turns', errors: ['Reached the turn limit.'] }];
-  expect(await failure(runAgent('prompt', options))).toEqual({
+  expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toEqual({
     code: 'review_failed',
     message: 'The review failed: The Agent SDK run ended with error_max_turns: Reached the turn limit. Rerun the job; the job log has the details.',
     url: undefined,
   });
   reply = new Error('Claude Code process exited with code 1.');
-  expect(await failure(runAgent('prompt', options))).toMatchObject({
+  expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toMatchObject({
     code: 'review_failed',
     message: 'The review failed: Claude Code process exited with code 1. Rerun the job; the job log has the details.',
   });
+});
+
+test("another job's format: its schema goes to the SDK, its check gives the reply, and its name is in the failures", async () => {
+  const format = { name: 'reply', schema: { type: 'object' }, parse: (x: unknown) => (x as { answer?: string })?.answer };
+  reply = [{ type: 'result', subtype: 'success', structured_output: { answer: 'In src/a.ts:3.' }, modelUsage: {}, total_cost_usd: 0 }];
+  expect((await runAgent('prompt', options, format)).reply).toBe('In src/a.ts:3.');
+  expect((asked[0].options as { outputFormat?: unknown }).outputFormat).toEqual({ type: 'json_schema', schema: { type: 'object' } });
+  reply = 'hang';
+  expect((await failure(runAgent('prompt', { ...options, timeoutMinutes: 0.0005 }, format))).message).toMatch(/^The reply ran past its/);
 });
 
 test('the tokens are the sum over every model the run used', () => {
@@ -128,7 +137,7 @@ test('each tool call goes to the log, a deep pass\'s named after it', async () =
     { type: 'result', subtype: 'success', structured_output: { verdict: 'looks-good', headline: 'h', findings: [] }, modelUsage: {}, total_cost_usd: 0 },
   ];
   infos.length = 0;
-  await runAgent('prompt', options).catch(() => {});
+  await runAgent('prompt', options, REVIEW_FORMAT).catch(() => {});
   expect(infos).toEqual(['Read src/pay.ts', 'Task Security pass', '[security] Grep exec\\(']);
   expect(toolTarget({ command: 'bun   test\n --watch' })).toBe('bun test --watch');
   expect(toolTarget({ file_path: 'x'.repeat(300) })).toHaveLength(200);

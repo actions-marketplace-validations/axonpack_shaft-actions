@@ -4,7 +4,7 @@ A GitHub Action that reviews pull requests with Claude, using the Claude Agent S
 The model reads the code and returns its findings as JSON. The action posts one summary comment, which it edits on every push, and one review with inline comments.
 
 > [!NOTE]
-> Task and Reply (`/fix`, `/ask` and `/axonshaft <prompt>` in a comment) are not built yet.
+> Task (`/fix` and `/axonshaft <prompt>` in a comment) isn't built yet.
 
 ## Quick start
 
@@ -78,6 +78,8 @@ After the review, the action sends the run to the dashboard, where it has its ow
 - the verdict, the model, the finding counts and the tokens used;
 - the review card: the headline, each check's result and every finding, as the PR comment has them.
 
+After a reply, it sends the model, the tokens used and the answer.
+
 A run that fails after the API opened it sends its error instead. If recording the run fails, the action logs a warning and the run still passes.
 
 ### When a run posts nothing
@@ -118,7 +120,7 @@ A comment starts Axon Shaft with a command at the start of a line. It works in t
 |---|---|
 | `/review` | Reviews the pull request's latest commit now. Works on any pull request, from a fork or not, whatever the "When it runs" and "Pull requests from forks" settings say. On an issue it ends with a notice. |
 | `/fix` | Fixes what the last review found, or what follows the command. Not built yet: the run ends with a notice. |
-| `/ask <question>` | Answers a question about the code without changing it. Not built yet: the run ends with a notice. |
+| `/ask <question>` | Answers a question about the code where it was asked, citing `file:line`, and never changes anything. Works on a pull request; on an issue it ends with a notice. See [Answering a question](#answering-a-question). |
 | `/axonshaft <prompt>` | A direct prompt: Axon Shaft answers or makes the change. Not built yet: the run ends with a notice. |
 | `/help` | `axonshaft[bot]` posts the list of commands on the pull request or issue, once. |
 
@@ -132,7 +134,7 @@ Who can run a command:
 `axonshaft[bot]` reacts to the comment that started a run, so the commenter can see it was picked up and how it ended:
 
 - 👀 when the run starts. For `/review`, `/fix`, `/ask` and `/axonshaft`, it comes after the write access check, so a comment from someone without write access gets no reaction. `/help` gets it from anyone.
-- When the run ends, the 👀 is replaced with 🚀 if the run did its job, or 😕 if it failed or did nothing, such as a command that isn't built yet or a run the API stopped.
+- When the run ends, the 👀 is replaced with 🚀 if the run did its job (for `/ask`, once the answer is posted), or 😕 if it failed or did nothing, such as a command that isn't built yet or a run the API stopped.
 
 GitHub has no reactions on a review's body, so a command in a review gets none, and neither does a pull request event. If GitHub refuses a reaction, the job log warns and the run carries on; if removing the 👀 fails, it stays next to the new one. A dry run logs the reactions and adds none.
 
@@ -141,6 +143,18 @@ What counts as a command:
 - A command in a quote, in inline code or in a code block doesn't count.
 - A longer word such as `/reviewer` doesn't count.
 - Another bot that uses the same command will also start.
+
+## Answering a question
+
+`/ask <question>` runs the project's Reply job from the dashboard, with its prompt.
+
+- A question on a line of the diff is answered in that line's thread. A question in the conversation tab or in a review's body gets a comment on the pull request.
+- The model reads the pull request's head commit with the review's read-only tools and environment (see [What the review can do](#what-the-review-can-do)). It can't edit, commit or push.
+- The prompt has the question and the line it's on, the PR's title, body, commits and diff after `skip`, and the other comments of people inside the repo (see [What the review can do](#what-the-review-can-do)).
+- The answer cites `file:line` for its claims. It ends with the same footer line as the summary comment and is cut at 20,000 characters.
+- With the model and effort on `auto`, it runs on `sonnet` at `medium` effort. With no turn limit set, the limit is 30.
+- The dashboard gets the run with the model, the tokens and the answer. A reply has no verdict.
+- When the model's session fails, the failure's card is posted where the question was asked, and the step fails.
 
 ## Inputs
 
@@ -355,9 +369,9 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 |---|---|
 | `missing_id_token` | The workflow has no `permissions: id-token: write`, so the action can't sign in to the API. |
 | `api_unreachable` | The action couldn't reach the API, or the API took over 30 seconds to answer. |
-| `review_timed_out` | The review ran past the time limit set on the dashboard. The link opens the dashboard. |
-| `review_invalid_reply` | The model's reply didn't match the review format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
-| `review_failed` | The review stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
+| `review_timed_out` | The review or reply ran past the time limit set on the dashboard. The link opens the dashboard. |
+| `review_invalid_reply` | The model's reply didn't match the review or reply format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
+| `review_failed` | The review or reply stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
 
 ### Runs that end with a notice
 
@@ -366,7 +380,8 @@ These end with a notice, and the step passes:
 - a fork's pull request on `pull_request`;
 - a job that's off for the event;
 - a fork's pull request the dashboard holds back;
-- a `/review` from someone without write access;
+- a `/review` or `/ask` from someone without write access;
+- a `/ask` on an issue;
 - a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap.
 
 Any other error, such as GitHub's API failing, fails the step with that error's message.

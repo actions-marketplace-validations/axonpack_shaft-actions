@@ -23915,6 +23915,8 @@ function pick(input) {
   const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
   if (input.mode === "task")
     row = { model: "opus", effort: "high", reason: "task" };
+  else if (input.mode === "reply")
+    row = { model: "sonnet", effort: "medium", reason: "question" };
   else if (hot)
     row = { model: "opus", effort: "high", reason: `${size}, touches ${hot.filename}` };
   else if (input.depth === "deep")
@@ -23940,9 +23942,246 @@ function pick(input) {
   };
 }
 
-// src/consts/settings.const.ts
-var GUIDE_FILES = ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "CONVENTIONS.md", ".github/pull_request_template.md", "README.md"];
-var GUIDE_CAP = { file: 8000, total: 30000 };
+// src/utils/prompt.util.ts
+var MAX_DIFF = 200000;
+function diffText(files, focus) {
+  const diff = files.map((f) => `diff --git a/${f.filename} b/${f.filename} (${f.status}${matches(f.filename, focus) ? ", focus" : ""})
+${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
+`);
+  return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}
+(the diff is cut here; read the remaining files from the checkout)` : diff;
+}
+var trustedComments = (comments) => comments.filter((c) => c.trusted).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
+`);
+function fillSlots(template, slots) {
+  return template.replace(/\{\{(\w+)\}\}/g, (slot, name) => {
+    if (!Object.hasOwn(slots, name))
+      return slot;
+    const value = String(slots[name]);
+    return value.trim() ? value : "None.";
+  });
+}
+
+// src/utils/render.util.ts
+import { createHash } from "node:crypto";
+
+// src/utils/tokens.util.ts
+var billedTokens = (t) => Math.round(t.input + t.output + 1.25 * t.cache_write + 0.1 * t.cache_read);
+
+// src/utils/render.util.ts
+var SUMMARY_MARKER = "<!-- shaft:summary -->";
+var VERDICTS = ["blocking", "needs-changes", "looks-good"];
+var SEVERITIES = ["blocking", "should-fix", "nit"];
+var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security", "rules"];
+var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
+var WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
+var GATE_STATUSES = ["met", "not_met", "not_applicable"];
+var GATES_MAX = 10;
+function diffLines(patch) {
+  const lines = new Map;
+  let right = 0;
+  for (const l of patch?.split(`
+`) ?? []) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
+    if (hunk)
+      right = Number(hunk[1]);
+    else if (l.startsWith("+") || l.startsWith(" "))
+      lines.set(right++, l.slice(1));
+  }
+  return lines;
+}
+function fingerprint(f, code = "") {
+  return createHash("sha256").update(`${f.file}
+${f.title.trim().toLowerCase()}
+${code.replace(/\s+/g, " ").trim()}`).digest("hex").slice(0, 6);
+}
+function place(findings, files, nits) {
+  const byFile = new Map(files.map((f) => [f.filename, diffLines(f.patch)]));
+  return findings.filter((f) => nits !== "off" || f.severity !== "nit").map((f) => {
+    const lines = byFile.get(f.file);
+    const end = Math.max(f.end_line ?? f.line, f.line);
+    let inDiff = !!lines;
+    for (let n = f.line;inDiff && n <= end; n++)
+      inDiff = lines.has(n);
+    return { ...f, fp: fingerprint(f, lines?.get(f.line)), inline: inDiff && (f.severity !== "nit" || nits === "inline") };
+  });
+}
+var SEVERITY_LABEL = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
+var SEVERITY_DOT = { blocking: "\uD83D\uDD34", "should-fix": "\uD83D\uDFE1", nit: "⚪" };
+var VERDICT_LABEL = { blocking: "Blocking", "needs-changes": "Needs changes", "looks-good": "Looks good" };
+var VERDICT_ALERT = { blocking: "CAUTION", "needs-changes": "WARNING", "looks-good": "TIP" };
+var statusCard = (status, label) => `![${label}](${STATUS_CARDS_URL}/${status}.svg)`;
+var CHECK_LABEL = {
+  correctness: "Correctness",
+  breakage: "Breakage",
+  standards: "Standards",
+  tests: "Tests",
+  docs: "Docs",
+  security: "Security",
+  rules: "\uD83D\uDCCC Your checks"
+};
+var loc = (f) => `${f.file}:${f.line}${f.end_line && f.end_line > f.line ? `-${f.end_line}` : ""}`;
+var where = (f) => `\`${loc(f)}\``;
+var fence = (s, lang = "") => `\`\`\`${lang}
+${s.replace(/\n$/, "")}
+\`\`\``;
+var cell = (s) => s.replace(/\|/g, "\\|").replace(/\s*[\r\n]+\s*/g, " ");
+var html = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var prose = (s) => s.replace(/<!--/g, "&lt;!--").replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, "").replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, "");
+var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+function inlineBody(f) {
+  const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
+  if (f.suggestion)
+    parts.push(fence(f.suggestion, "suggestion"));
+  return `${parts.join(`
+
+`)}
+
+<!-- shaft:finding ${f.fp} -->`;
+}
+function stateLine(state) {
+  return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
+}
+function parseState(body) {
+  const m = body && /(?:^|\n)<!-- shaft:state ([^\n]*) -->\s*$/.exec(body);
+  if (!m)
+    return;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return;
+  }
+}
+var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
+function usage(t, costUsd) {
+  const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
+  if (costUsd !== undefined)
+    return `$${costUsd.toFixed(2)} · ${total} tokens`;
+  const billed = formatTokens(billedTokens(t));
+  return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
+}
+function footer(f) {
+  const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
+  const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : "";
+  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
+}
+var chip = (text) => `<kbd>${text}</kbd>`;
+var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
+function checkStates(review, placed, checks) {
+  return STEPS.flatMap((key) => {
+    const found = placed.filter((p) => p.step === key);
+    if (key === "rules" && !found.length)
+      return [];
+    const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : checks && !checks.includes(key) ? "off" : review.checked.includes(key) ? "passed" : "not_checked";
+    return [{ key, label: CHECK_LABEL[key], state }];
+  });
+}
+function card(review, placed, fixed, f) {
+  const n = (s) => placed.filter((p) => p.severity === s).length;
+  const countChips = [
+    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
+    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
+    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
+    !placed.length && chip("✅ No findings"),
+    fixed && chip(`✅ ${fixed} fixed`)
+  ].filter(Boolean);
+  const checkChips = checkStates(review, placed, f.checks).map((c) => chip(`${CHECK_MARK[c.state]} ${c.label}`));
+  const headline = html(review.headline).split(/\r?\n/);
+  const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
+  const alert = VERDICT_ALERT[review.verdict];
+  return [
+    `> [!${alert}]`,
+    `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
+    ...headline.map((l) => `> ${l}`),
+    ">",
+    `> ${countChips.join(" ")}`,
+    ">",
+    `> ${checkChips.join(" ")}`,
+    ">",
+    `> <sub>${type} · ${review.confidence}% confidence · reviewed \`${f.sha.slice(0, 7)}\`</sub>`
+  ].join(`
+`);
+}
+function table(rows, f) {
+  const link = (p) => {
+    const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : "";
+    return `[${where(p)}](https://github.com/${f.repo}/blob/${f.sha}/${encodeURI(p.file)}#L${p.line}${end})`;
+  };
+  return [
+    "| Severity | Where | Finding | Details |",
+    "|---|---|---|---|",
+    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.title)} | ${p.inline ? "inline" : cell(p.body)} |`)
+  ].join(`
+`);
+}
+var findingsTable = (found, f) => table(found.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) })), f);
+var details = (summary, body) => `<details><summary>${summary}</summary>
+
+${body}
+
+</details>`;
+var GATE_MARK = { met: "✓", not_met: "✗", not_applicable: "–" };
+function gatesTable(gates) {
+  const rows = gates.map((g) => `| ${GATE_MARK[g.status]} | ${cell(prose(g.gate))} | ${cell(prose(g.reason))} |`);
+  return ["| | Gate | Why |", "|---|---|---|", ...rows].join(`
+`);
+}
+function walkthrough(w) {
+  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ""))}\``).join("<br>")} | ${cell(prose(a.summary))} |`);
+  const diagram = w.diagram ? ["", fence(prose(w.diagram), "mermaid")] : [];
+  return details("Walkthrough", ["| Area | Files | What changed |", "|---|---|---|", ...rows, ...diagram].join(`
+`));
+}
+function startSummary(sha, prior) {
+  return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
+`);
+}
+function failedSummary(failure, prior) {
+  return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ""].filter(Boolean).join(`
+`);
+}
+function renderSummary(raw, placed, prior, f) {
+  const { headline, claim, impact, scope, not_checked } = raw;
+  const review = { ...raw, headline: prose(headline), claim: prose(claim), impact: prose(impact), scope: prose(scope), not_checked: prose(not_checked) };
+  const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
+  const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
+  const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
+  if (raw.gates?.length) {
+    const met = raw.gates.filter((g) => g.status !== "not_met").length;
+    out.push("", `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, "", gatesTable(raw.gates));
+  }
+  const main = shown.filter((p) => p.severity !== "nit");
+  const nits = shown.filter((p) => p.severity === "nit");
+  if (main.length)
+    out.push("", table(main, f));
+  for (const p of placed.filter((p) => !p.inline && p.suggestion)) {
+    out.push("", details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion)));
+  }
+  if (nits.length)
+    out.push("", details(plural(nits.length, "nit"), table(nits, f)));
+  if (fixed.length)
+    out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
+  if (f.skipped)
+    out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
+  if (raw.walkthrough?.areas.length)
+    out.push("", walkthrough(raw.walkthrough));
+  out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
+`)), "", footer(f));
+  const state = {
+    sha: f.sha,
+    findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title }))
+  };
+  return `${out.join(`
+`).slice(0, 60000)}
+${stateLine(state)}`;
+}
+function redact(text, secrets) {
+  return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join("***"), text);
+}
+function unposted(placed, reviewComments, bot) {
+  const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
+  return placed.filter((p) => p.inline && !posted.has(p.fp));
+}
 
 // src/services/agent.service.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
@@ -57995,227 +58234,6 @@ var package_default = {
   }
 };
 
-// src/utils/render.util.ts
-import { createHash } from "node:crypto";
-
-// src/utils/tokens.util.ts
-var billedTokens = (t) => Math.round(t.input + t.output + 1.25 * t.cache_write + 0.1 * t.cache_read);
-
-// src/utils/render.util.ts
-var SUMMARY_MARKER = "<!-- shaft:summary -->";
-var VERDICTS = ["blocking", "needs-changes", "looks-good"];
-var SEVERITIES = ["blocking", "should-fix", "nit"];
-var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security", "rules"];
-var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
-var WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
-var GATE_STATUSES = ["met", "not_met", "not_applicable"];
-var GATES_MAX = 10;
-function diffLines(patch) {
-  const lines = new Map;
-  let right = 0;
-  for (const l of patch?.split(`
-`) ?? []) {
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
-    if (hunk)
-      right = Number(hunk[1]);
-    else if (l.startsWith("+") || l.startsWith(" "))
-      lines.set(right++, l.slice(1));
-  }
-  return lines;
-}
-function fingerprint(f, code = "") {
-  return createHash("sha256").update(`${f.file}
-${f.title.trim().toLowerCase()}
-${code.replace(/\s+/g, " ").trim()}`).digest("hex").slice(0, 6);
-}
-function place(findings, files, nits) {
-  const byFile = new Map(files.map((f) => [f.filename, diffLines(f.patch)]));
-  return findings.filter((f) => nits !== "off" || f.severity !== "nit").map((f) => {
-    const lines = byFile.get(f.file);
-    const end = Math.max(f.end_line ?? f.line, f.line);
-    let inDiff = !!lines;
-    for (let n = f.line;inDiff && n <= end; n++)
-      inDiff = lines.has(n);
-    return { ...f, fp: fingerprint(f, lines?.get(f.line)), inline: inDiff && (f.severity !== "nit" || nits === "inline") };
-  });
-}
-var SEVERITY_LABEL = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
-var SEVERITY_DOT = { blocking: "\uD83D\uDD34", "should-fix": "\uD83D\uDFE1", nit: "⚪" };
-var VERDICT_LABEL = { blocking: "Blocking", "needs-changes": "Needs changes", "looks-good": "Looks good" };
-var VERDICT_ALERT = { blocking: "CAUTION", "needs-changes": "WARNING", "looks-good": "TIP" };
-var statusCard = (status, label) => `![${label}](${STATUS_CARDS_URL}/${status}.svg)`;
-var CHECK_LABEL = {
-  correctness: "Correctness",
-  breakage: "Breakage",
-  standards: "Standards",
-  tests: "Tests",
-  docs: "Docs",
-  security: "Security",
-  rules: "\uD83D\uDCCC Your checks"
-};
-var loc = (f) => `${f.file}:${f.line}${f.end_line && f.end_line > f.line ? `-${f.end_line}` : ""}`;
-var where = (f) => `\`${loc(f)}\``;
-var fence = (s, lang = "") => `\`\`\`${lang}
-${s.replace(/\n$/, "")}
-\`\`\``;
-var cell = (s) => s.replace(/\|/g, "\\|").replace(/\s*[\r\n]+\s*/g, " ");
-var html = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-var prose = (s) => s.replace(/<!--/g, "&lt;!--").replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, "").replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, "");
-var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-function inlineBody(f) {
-  const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
-  if (f.suggestion)
-    parts.push(fence(f.suggestion, "suggestion"));
-  return `${parts.join(`
-
-`)}
-
-<!-- shaft:finding ${f.fp} -->`;
-}
-function stateLine(state) {
-  return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
-}
-function parseState(body) {
-  const m = body && /(?:^|\n)<!-- shaft:state ([^\n]*) -->\s*$/.exec(body);
-  if (!m)
-    return;
-  try {
-    return JSON.parse(m[1]);
-  } catch {
-    return;
-  }
-}
-var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
-function usage(t, costUsd) {
-  const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
-  if (costUsd !== undefined)
-    return `$${costUsd.toFixed(2)} · ${total} tokens`;
-  const billed = formatTokens(billedTokens(t));
-  return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
-}
-function footer(f) {
-  const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : "";
-  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
-}
-var chip = (text) => `<kbd>${text}</kbd>`;
-var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
-function checkStates(review, placed, checks) {
-  return STEPS.flatMap((key) => {
-    const found = placed.filter((p) => p.step === key);
-    if (key === "rules" && !found.length)
-      return [];
-    const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : checks && !checks.includes(key) ? "off" : review.checked.includes(key) ? "passed" : "not_checked";
-    return [{ key, label: CHECK_LABEL[key], state }];
-  });
-}
-function card(review, placed, fixed, f) {
-  const n = (s) => placed.filter((p) => p.severity === s).length;
-  const countChips = [
-    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
-    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
-    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
-    !placed.length && chip("✅ No findings"),
-    fixed && chip(`✅ ${fixed} fixed`)
-  ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks).map((c) => chip(`${CHECK_MARK[c.state]} ${c.label}`));
-  const headline = html(review.headline).split(/\r?\n/);
-  const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
-  const alert = VERDICT_ALERT[review.verdict];
-  return [
-    `> [!${alert}]`,
-    `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
-    ...headline.map((l) => `> ${l}`),
-    ">",
-    `> ${countChips.join(" ")}`,
-    ">",
-    `> ${checkChips.join(" ")}`,
-    ">",
-    `> <sub>${type} · ${review.confidence}% confidence · reviewed \`${f.sha.slice(0, 7)}\`</sub>`
-  ].join(`
-`);
-}
-function table(rows, f) {
-  const link = (p) => {
-    const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : "";
-    return `[${where(p)}](https://github.com/${f.repo}/blob/${f.sha}/${encodeURI(p.file)}#L${p.line}${end})`;
-  };
-  return [
-    "| Severity | Where | Finding | Details |",
-    "|---|---|---|---|",
-    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.title)} | ${p.inline ? "inline" : cell(p.body)} |`)
-  ].join(`
-`);
-}
-var findingsTable = (found, f) => table(found.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) })), f);
-var details = (summary, body) => `<details><summary>${summary}</summary>
-
-${body}
-
-</details>`;
-var GATE_MARK = { met: "✓", not_met: "✗", not_applicable: "–" };
-function gatesTable(gates) {
-  const rows = gates.map((g) => `| ${GATE_MARK[g.status]} | ${cell(prose(g.gate))} | ${cell(prose(g.reason))} |`);
-  return ["| | Gate | Why |", "|---|---|---|", ...rows].join(`
-`);
-}
-function walkthrough(w) {
-  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ""))}\``).join("<br>")} | ${cell(prose(a.summary))} |`);
-  const diagram = w.diagram ? ["", fence(prose(w.diagram), "mermaid")] : [];
-  return details("Walkthrough", ["| Area | Files | What changed |", "|---|---|---|", ...rows, ...diagram].join(`
-`));
-}
-function startSummary(sha, prior) {
-  return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
-`);
-}
-function failedSummary(failure, prior) {
-  return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ""].filter(Boolean).join(`
-`);
-}
-function renderSummary(raw, placed, prior, f) {
-  const { headline, claim, impact, scope, not_checked } = raw;
-  const review = { ...raw, headline: prose(headline), claim: prose(claim), impact: prose(impact), scope: prose(scope), not_checked: prose(not_checked) };
-  const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
-  const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
-  const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
-  if (raw.gates?.length) {
-    const met = raw.gates.filter((g) => g.status !== "not_met").length;
-    out.push("", `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, "", gatesTable(raw.gates));
-  }
-  const main = shown.filter((p) => p.severity !== "nit");
-  const nits = shown.filter((p) => p.severity === "nit");
-  if (main.length)
-    out.push("", table(main, f));
-  for (const p of placed.filter((p) => !p.inline && p.suggestion)) {
-    out.push("", details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion)));
-  }
-  if (nits.length)
-    out.push("", details(plural(nits.length, "nit"), table(nits, f)));
-  if (fixed.length)
-    out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
-  if (f.skipped)
-    out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
-  if (raw.walkthrough?.areas.length)
-    out.push("", walkthrough(raw.walkthrough));
-  out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
-`)), "", footer(f));
-  const state = {
-    sha: f.sha,
-    findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title }))
-  };
-  return `${out.join(`
-`).slice(0, 60000)}
-${stateLine(state)}`;
-}
-function redact(text, secrets) {
-  return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join("***"), text);
-}
-function unposted(placed, reviewComments, bot) {
-  const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
-  return placed.filter((p) => p.inline && !posted.has(p.fp));
-}
-
 // src/consts/env.const.ts
 var ENV_ALLOW = [
   "PATH",
@@ -58424,6 +58442,7 @@ function cliEnv(claude, names = []) {
   };
 }
 var deepAgents = (model, effort, passes) => Object.fromEntries(passes.map(({ name, description, prompt }) => [name, { description, prompt, tools: ["Read", "Grep", "Glob"], model, effort }]));
+var REVIEW_FORMAT = { name: "review", schema: SCHEMA, parse: parseReview };
 var sumTokens = (usage) => Object.values(usage).reduce((t, u) => ({
   input: t.input + u.inputTokens,
   output: t.output + u.outputTokens,
@@ -58435,7 +58454,7 @@ function toolTarget(input) {
   const line = String(v).replace(/\s+/g, " ").trim();
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
-async function once(prompt, o, controller) {
+async function once(prompt, o, schema, controller) {
   const deep = !!o.subagentModel && !!o.passes?.length;
   let result;
   const passes = new Map;
@@ -58454,7 +58473,7 @@ async function once(prompt, o, controller) {
       permissionMode: "dontAsk",
       settingSources: [],
       persistSession: false,
-      outputFormat: { type: "json_schema", schema: SCHEMA },
+      outputFormat: { type: "json_schema", schema },
       agents: deep ? deepAgents(o.subagentModel, o.effort, o.passes) : undefined,
       abortController: controller,
       env: cliEnv(o.claude, o.env),
@@ -58477,38 +58496,42 @@ async function once(prompt, o, controller) {
   }
   return result;
 }
-async function runAgent(prompt, o) {
+async function runAgent(prompt, o, format) {
   const controller = new AbortController;
   const timer = setTimeout(() => controller.abort(), o.timeoutMinutes * 60000);
   try {
     for (let attempt = 1;; attempt++) {
-      const result = await once(prompt, o, controller);
+      const result = await once(prompt, o, format.schema, controller);
       if (result?.subtype === "success") {
-        const review = parseReview(result.structured_output);
-        if (review)
-          return { review, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd, tokens: sumTokens(result.modelUsage) };
+        const reply = format.parse(result.structured_output);
+        if (reply)
+          return { reply, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd, tokens: sumTokens(result.modelUsage) };
       } else if (result && result.subtype !== "error_max_structured_output_retries") {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join("; ")}`);
       }
       const raw = result?.subtype === "success" ? result.structured_output ?? result.result : result?.errors;
-      warning(`The reply didn't match the review schema (attempt ${attempt}):
+      warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}):
 ${JSON.stringify(raw, null, 2)}`);
       if (attempt === 2) {
-        throw new ShaftFailure("review_invalid_reply", "The model's reply didn't match the review format twice, so nothing was posted. Rerun the job; both replies are in the job log.");
+        throw new ShaftFailure("review_invalid_reply", `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job; both replies are in the job log.`);
       }
     }
   } catch (e) {
     if (controller.signal.aborted) {
-      throw new ShaftFailure("review_timed_out", `The review ran past its ${o.timeoutMinutes}-minute time limit. Raise the time limit on the dashboard, or rerun the job.`, DASHBOARD_URL);
+      throw new ShaftFailure("review_timed_out", `The ${format.name} ran past its ${o.timeoutMinutes}-minute time limit. Raise the time limit on the dashboard, or rerun the job.`, DASHBOARD_URL);
     }
     if (e instanceof ShaftFailure)
       throw e;
     const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, "");
-    throw new ShaftFailure("review_failed", `The review failed: ${why}. Rerun the job; the job log has the details.`);
+    throw new ShaftFailure("review_failed", `The ${format.name} failed: ${why}. Rerun the job; the job log has the details.`);
   } finally {
     clearTimeout(timer);
   }
 }
+
+// src/consts/settings.const.ts
+var GUIDE_FILES = ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "CONVENTIONS.md", ".github/pull_request_template.md", "README.md"];
+var GUIDE_CAP = { file: 8000, total: 30000 };
 
 // src/services/route.service.ts
 var REVIEW_EVENTS = { opened: "opened", reopened: "opened", synchronize: "push", ready_for_review: "ready" };
@@ -58550,9 +58573,13 @@ function route(eventName, payload) {
     return { mode: "skip", reason: "/review works on a pull request, not an issue.", notice: true };
   if (command === "help")
     return { mode: "help", number, actor };
+  const c = eventName === "pull_request_review" ? payload.review : payload.comment;
+  const ask = eventName === "pull_request_review_comment" ? { id: c.id, text, path: c.path, line: c.line ?? c.original_line ?? undefined, thread: c.in_reply_to_id ?? c.id } : { id: c.id, text };
+  if (command === "ask" && !onPr)
+    return { mode: "skip", reason: "/ask works on a pull request, not an issue.", notice: true };
   if (command === "ask")
-    return { mode: "reply", number, actor };
-  return { mode: "task", number, actor };
+    return { mode: "reply", number, actor, ask };
+  return { mode: "task", number, actor, ask };
 }
 function pullRequestOf(payload) {
   const pr = payload.pull_request;
@@ -58735,7 +58762,6 @@ function step(name, fn) {
 
 // src/services/review.service.ts
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
-var MAX_DIFF = 200000;
 function chosenModels(used, choice, deep) {
   const named = (want) => used.find((m) => m === want || m.includes(want));
   const fallbacks = choice.autoModel ? FALLBACK[choice.model]?.split(",") ?? [] : [];
@@ -58764,19 +58790,11 @@ ${text.slice(0, room)}${cut}
 }
 function buildPrompt(ctx, prior, o) {
   const { pr } = ctx;
-  let diff = ctx.files.map((f) => `diff --git a/${f.filename} b/${f.filename} (${f.status}${matches(f.filename, o.focus) ? ", focus" : ""})
-${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
-`);
-  if (diff.length > MAX_DIFF)
-    diff = `${diff.slice(0, MAX_DIFF)}
-(the diff is cut here; read the remaining files from the checkout)`;
-  const comments = [...ctx.comments, ...ctx.reviewComments].filter((c) => c.trusted).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
-`);
   const previous = prior?.findings.length ? `Findings from the review of \`${prior.sha.slice(0, 7)}\` (fingerprint, severity, place, title):
 
 ${prior.findings.map((f) => `- ${f.fp} ${f.severity} \`${f.file}:${f.line}\` ${f.title}`).join(`
 `)}` : "";
-  const slots = {
+  return fillSlots(o.template, {
     repo: `${ctx.owner}/${ctx.repo}`,
     number: pr.number,
     head: pr.head,
@@ -58790,14 +58808,8 @@ ${prior.findings.map((f) => `- ${f.fp} ${f.severity} \`${f.file}:${f.line}\` ${f
     body: pr.body,
     commits: ctx.commits.map((m) => `- ${m}`).join(`
 `),
-    comments,
-    diff
-  };
-  return o.template.replace(/\{\{(\w+)\}\}/g, (slot, name) => {
-    if (!Object.hasOwn(slots, name))
-      return slot;
-    const value = String(slots[name]);
-    return value.trim() ? value : "None.";
+    comments: trustedComments([...ctx.comments, ...ctx.reviewComments]),
+    diff: diffText(ctx.files, o.focus)
   });
 }
 async function resolveThreads(octokit, ctx, fps, bot) {
@@ -58886,7 +58898,7 @@ async function postReview(ctx, o, canCheck, progress) {
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env
-    }));
+    }, REVIEW_FORMAT));
   } catch (e) {
     if (e instanceof ShaftFailure) {
       e.url ??= o.runUrl;
@@ -58894,8 +58906,8 @@ async function postReview(ctx, o, canCheck, progress) {
     }
     throw e;
   }
-  const gates = o.gates?.length ? gateResults(o.gates, result.review.gates) : undefined;
-  const review = { ...result.review, gates };
+  const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
+  const review = { ...result.reply, gates };
   info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
@@ -59011,6 +59023,96 @@ ${clean(body)}`);
   };
 }
 
+// src/services/reply.service.ts
+var ANSWER_MAX = 20000;
+var REPLY_MARKER = "<!-- shaft:reply -->";
+var ANSWER_FORMAT = {
+  name: "reply",
+  schema: { type: "object", additionalProperties: false, required: ["answer"], properties: { answer: { type: "string" } } },
+  parse: (x) => {
+    const answer = x?.answer;
+    return typeof answer === "string" && answer.trim() ? answer : undefined;
+  }
+};
+function buildReplyPrompt(ctx, ask, asker, o) {
+  const { pr } = ctx;
+  const path = ask.path?.replace(/[`\r\n]/g, "");
+  return fillSlots(o.template, {
+    repo: `${ctx.owner}/${ctx.repo}`,
+    number: pr.number,
+    head: pr.head,
+    base: pr.base,
+    sha: pr.headSha,
+    place: path ? `on \`${path}\`${ask.line ? ` line ${ask.line}` : ""}` : "in the pull request's conversation",
+    asker,
+    question: ask.text,
+    title: pr.title,
+    author: pr.author,
+    body: pr.body,
+    commits: ctx.commits.map((m) => `- ${m}`).join(`
+`),
+    comments: trustedComments([...ctx.comments, ...ctx.reviewComments].filter((c) => c.id !== ask.id)),
+    diff: diffText(ctx.files, o.focus)
+  });
+}
+async function replyToComment(o) {
+  const ctx = await step("Read the pull request", () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
+  const clean = (text) => redact(text, o.secrets);
+  const post = async (body) => {
+    if (o.dryRun) {
+      info(`--- reply
+${body}`);
+      return "";
+    }
+    const req = { owner: o.owner, repo: o.repo, body: clean(body) };
+    const { data } = o.ask.thread ? await o.octokit.rest.pulls.createReplyForReviewComment({ ...req, pull_number: o.number, comment_id: o.ask.thread }) : await o.octokit.rest.issues.createComment({ ...req, issue_number: o.number });
+    return data.html_url;
+  };
+  const choice = pick({ mode: "reply", model: o.model, effort: o.effort, maxTurns: o.maxTurns });
+  info(`Answering with ${choice.model}, effort ${choice.effort}`);
+  const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
+  let result;
+  try {
+    result = await step("Answer", () => runAgent(buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, { template: o.template, focus: o.focus }), {
+      claude: o.claude,
+      model: choice.model,
+      effort: choice.effort,
+      fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
+      maxTurns: choice.maxTurns,
+      timeoutMinutes: o.timeoutMinutes,
+      cwd: o.cwd,
+      env: o.env
+    }, ANSWER_FORMAT));
+  } catch (e) {
+    if (e instanceof ShaftFailure) {
+      e.url ??= o.runUrl;
+      await post(`${failureMarkdown(e)}
+
+${REPLY_MARKER}`);
+    }
+    throw e;
+  }
+  const answer = clean(prose(result.reply)).slice(0, ANSWER_MAX);
+  const models = chosenModels(result.models, choice, false);
+  const sub = footer({
+    sha: ctx.pr.headSha,
+    repo: `${o.owner}/${o.repo}`,
+    runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
+    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : ""),
+    effort: choice.effort,
+    reason: choice.reason,
+    tokens: result.tokens,
+    costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined
+  });
+  const commentUrl = await post(`${answer}
+
+${sub}
+
+${REPLY_MARKER}`);
+  return { model: models.main, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
+}
+
 // src/main.ts
 function oneOf(name, allowed, value) {
   if (typeof value === "string" && allowed.includes(value))
@@ -59053,14 +59155,15 @@ ${grant.comment}`);
     return notice(grant.reason);
   }
   const octokit = getOctokit(grant.github_token);
-  if (r.mode !== "review") {
+  if (r.mode !== "review" && r.mode !== "reply") {
     if (!await hasWriteAccess(octokit, owner, repo, r.actor))
       return notice(`${r.actor} has no write access, so nothing was started.`);
     reaction = await reactStart(octokit, context2, dryRun);
-    return notice(`${r.mode === "reply" ? "Reply" : "Task"} mode is not built yet.`);
+    return notice("Task mode is not built yet.");
   }
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
-    return notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);
+    const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : "the question wasn't answered. Only people with write access can ask with /ask";
+    return notice(`${r.actor} has no write access, so ${what}.`);
   }
   reaction = await reactStart(octokit, context2, dryRun);
   const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString("base64")];
@@ -59071,7 +59174,7 @@ ${grant.comment}`);
   if (context2.eventName !== "pull_request")
     await step("Check out the pull request", async () => checkoutHead(cwd, r.number, grant.github_token));
   const { settings, job } = grant;
-  const out = await reviewPullRequest({
+  const common = {
     octokit,
     owner,
     repo,
@@ -59080,36 +59183,40 @@ ${grant.comment}`);
     secrets,
     model: String(settings.model ?? ""),
     effort: oneOf("effort", ["auto", "low", "medium", "high", "xhigh", "max"], settings.effort),
-    depth: oneOf("depth", ["standard", "deep"], job.options.depth),
-    nits: oneOf("nits", ["summary", "inline", "off"], job.options.nits),
     maxTurns: settings.maxTurns == null || settings.maxTurnsDefault === true ? undefined : positive("maxTurns", settings.maxTurns),
     timeoutMinutes: positive("timeLimit", settings.timeLimit),
     skip: globs(settings.skip),
     focus: globs(settings.focus),
     env: globs(settings.env),
-    gates: globs(settings.gates),
     bot: APP_BOT,
-    prompt: job.prompt,
-    checks: job.checks,
     dryRun,
     runUrl: `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`,
     dashboardRunUrl: grant.run_url,
     cwd
+  };
+  const usage = (o) => ({
+    duration_ms: Date.now() - started,
+    tokens: o.tokens,
+    ...grant.claude_token.kind === "api_key" ? { cost_usd: o.costUsd } : {}
+  });
+  if (r.mode === "reply") {
+    const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });
+    done = true;
+    return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
+  }
+  const out = await reviewPullRequest({
+    ...common,
+    depth: oneOf("depth", ["standard", "deep"], job.options.depth),
+    nits: oneOf("nits", ["summary", "inline", "off"], job.options.nits),
+    gates: globs(settings.gates),
+    prompt: job.prompt,
+    checks: job.checks
   });
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);
   setOutput("summary_url", out.summaryUrl);
   done = true;
-  await reportRun({
-    verdict: out.verdict,
-    model: out.model,
-    effort: out.effort,
-    findings: out.bySeverity,
-    duration_ms: Date.now() - started,
-    tokens: out.tokens,
-    ...grant.claude_token.kind === "api_key" ? { cost_usd: out.costUsd } : {},
-    output: out.output
-  });
+  await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, ...usage(out), output: out.output });
 }
 async function fail(e) {
   setFailed(e instanceof Error ? e.message : String(e));

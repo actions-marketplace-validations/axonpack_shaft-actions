@@ -185,7 +185,8 @@ function usage(t: NonNullable<Footer['tokens']>, costUsd?: number): string {
   return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
 }
 
-function footer(f: Footer): string {
+/** The line under what we post: links to the run's dashboard page and log, the model, effort, usage and why they were picked. */
+export function footer(f: Footer): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
   const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : '';
   return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;

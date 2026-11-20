@@ -7,6 +7,11 @@ test('task mode: opus, high', () => {
   expect(pick({ mode: 'task', files: [file('src/a.ts')] })).toMatchObject({ model: 'opus', effort: 'high' });
 });
 
+test('reply mode: sonnet, medium, with the full turn cap whatever the diff, and what the dashboard sets wins', () => {
+  expect(pick({ mode: 'reply', files: [file('src/auth/session.ts')] })).toMatchObject({ model: 'sonnet', effort: 'medium', maxTurns: 30, reason: 'question' });
+  expect(pick({ mode: 'reply', model: 'opus', effort: 'high', maxTurns: 8 })).toMatchObject({ model: 'opus', effort: 'high', maxTurns: 8 });
+});
+
 test('a sensitive path: opus, high', () => {
   for (const f of ['src/auth/session.ts', '.github/workflows/ci.yml', 'db/migrations/001.sql', 'lib/crypto.ts', 'src/payments/charge.ts']) {
     expect(pick({ mode: 'review', files: [file('README.md'), file(f)] })).toMatchObject({ model: 'opus', effort: 'high' });

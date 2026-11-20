@@ -57,10 +57,33 @@ test('/review in a comment on a PR: a review with no event, by the commenter', (
   expect(quiet(route('issue_comment', { ...asks('/review'), sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
 });
 
-test('comments and reviews with /fix or /axonshaft: task', () => {
-  expect(route('issue_comment', comment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
-  expect(route('pull_request_review_comment', reviewComment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
-  expect(route('pull_request_review', review)).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
+test('comments and reviews with /fix or /axonshaft: task, with the comment it came in', () => {
+  expect(route('issue_comment', comment)).toEqual({ mode: 'task', number: 12, actor: 'maintainer', ask: { id: 501, text: '/fix the failing test please' } });
+  expect(route('pull_request_review_comment', reviewComment)).toEqual({
+    mode: 'task',
+    number: 12,
+    actor: 'maintainer',
+    ask: { id: 601, text: '/axonshaft can you rename this?', path: 'src/retry.ts', line: 42, thread: 601 },
+  });
+  expect(route('pull_request_review', review)).toEqual({
+    mode: 'task',
+    number: 12,
+    actor: 'maintainer',
+    ask: { id: 701, text: 'Looks close.\n/axonshaft add a test for the retry path.' },
+  });
+});
+
+test('/ask on a line: a reply under the first comment of its thread, at the line, or the original line when the code moved', () => {
+  const asks = (c: object) => ({ ...reviewComment, comment: { ...reviewComment.comment, body: '/ask why retry here?', ...c } });
+  expect(route('pull_request_review_comment', asks({}))).toEqual({
+    mode: 'reply',
+    number: 12,
+    actor: 'maintainer',
+    ask: { id: 601, text: '/ask why retry here?', path: 'src/retry.ts', line: 42, thread: 601 },
+  });
+  expect(route('pull_request_review_comment', asks({ id: 602, in_reply_to_id: 600, line: null, original_line: 40 }))).toMatchObject({
+    ask: { id: 602, line: 40, thread: 600 },
+  });
 });
 
 test('a comment without the mention, an edit, or a bot comment exits quietly', () => {
@@ -119,13 +142,14 @@ test('a slash command at the start of a line: /review on a PR reviews; /fix is a
   const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
   expect(route('issue_comment', says('/review'))).toEqual({ mode: 'review', number: 12, fork: undefined, actor: 'maintainer' });
   expect(route('issue_comment', says('Thanks!\n  /review please'))).toMatchObject({ mode: 'review' });
-  expect(route('issue_comment', says('/fix the null check'))).toEqual({ mode: 'task', number: 12, actor: 'maintainer' });
-  expect(route('issue_comment', says('/ask why is this async?'))).toEqual({ mode: 'reply', number: 12, actor: 'maintainer' });
+  expect(route('issue_comment', says('/fix the null check'))).toMatchObject({ mode: 'task', number: 12, actor: 'maintainer' });
+  expect(route('issue_comment', says('/ask why is this async?'))).toEqual({ mode: 'reply', number: 12, actor: 'maintainer', ask: { id: 501, text: '/ask why is this async?' } });
   expect(route('issue_comment', says('/help'))).toEqual({ mode: 'help', number: 12, actor: 'maintainer' });
   expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '/review' } })).toMatchObject({ mode: 'review' });
-  // /review on an issue has no pull request to review.
-  const onIssue = { ...says('/review'), issue: { ...comment.issue, pull_request: undefined } };
-  expect(route('issue_comment', onIssue)).toMatchObject({ mode: 'skip', notice: true });
+  // /review and /ask on an issue have no pull request to read.
+  const onIssue = (body: string) => ({ ...says(body), issue: { ...comment.issue, pull_request: undefined } });
+  expect(route('issue_comment', onIssue('/review'))).toMatchObject({ mode: 'skip', notice: true });
+  expect(route('issue_comment', onIssue('/ask why?'))).toEqual({ mode: 'skip', reason: '/ask works on a pull request, not an issue.', notice: true });
 });
 
 test('a command inside a sentence, a quote, inline code or a code block, or a longer word, starts nothing', () => {
