@@ -7,3 +7,4 @@
 - **What a commit may hold**: a change under `.github/` (in any case) is refused, and the model can't edit files there. So is a change of more than 200 files, a file over 1 MB or more than 10 MB in all. A change to a `package.json`, a Makefile or a lock file is listed in the reply under "Read before merging". Values of the project's Environment variables are masked in the log and taken out of the reply.
 - **Push mode is enforced before the session**: Disabled, a fork's pull request or a branch that is the default branch ends with a reply and a notice saying why, and the run reports `push_failed`. Nothing is ever pushed to the default branch or with `--force`.
 - `/fix` and `/axonshaft` on an issue end with a notice.
+- **Read the bot's commit before merging**: its push starts the repo's CI on the pull request like any push. Tasks start from the Conversation tab, since a comment in a review thread runs the pull request's own workflow.

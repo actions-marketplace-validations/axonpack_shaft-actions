@@ -23901,6 +23901,13 @@ function checkoutFiles(cwd) {
     }
   };
 }
+function savedCredentials(cwd) {
+  try {
+    return /extraheader|credential|:\/\/[^\s/@]*:[^\s/@]+@/i.test(readFileSync2(join(cwd, ".git", "config"), "utf8"));
+  } catch {
+    return false;
+  }
+}
 
 // src/services/reaction.service.ts
 function triggerComment(eventName, payload) {
@@ -24279,7 +24286,7 @@ import { execFileSync as execFileSync3 } from "node:child_process";
 import { existsSync as existsSync5 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { tmpdir } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as DQ } from "node:module";
@@ -58346,6 +58353,8 @@ var GIT_DENIED = /^--(no-in|ou|ext)/;
 var INSTALL = / (ci|install)\b/;
 var isRepoCommand = (command, commands) => commands.some((c) => command === c || !INSTALL.test(c) && command.startsWith(`${c} `));
 function toolDenial(tool, input, cwd, commands) {
+  if (input.run_in_background)
+    return "Nothing runs in the background: run it in the foreground.";
   const outside = (p) => typeof p === "string" && !insideCheckout(p, cwd);
   if (tool === "Read" && (typeof input.file_path !== "string" || outside(input.file_path)))
     return "Only files in the checkout can be read.";
@@ -58386,16 +58395,27 @@ function toolDenial(tool, input, cwd, commands) {
 
 // src/services/sandbox.service.ts
 import { execFileSync as execFileSync2 } from "node:child_process";
-import { existsSync as existsSync4 } from "node:fs";
+import { accessSync, constants as constants4, existsSync as existsSync4, statSync as statSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { isAbsolute as isAbsolute3, relative as relative2 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join4, relative as relative2 } from "node:path";
 var BWRAP_MIN = [0, 6];
 var under2 = (path, dir) => !relative2(dir, path).startsWith("..") && !isAbsolute3(relative2(dir, path));
+var bin = { bwrap: "bwrap", env: "env", pkill: "pkill" };
+function which2(name) {
+  for (const dir of (process.env.PATH ?? "").split(":").filter((d) => isAbsolute3(d))) {
+    try {
+      const file = join4(dir, name);
+      accessSync(file, constants4.X_OK);
+      if (statSync2(file).isFile())
+        return file;
+    } catch {}
+  }
+}
 function sandboxArgs(cwd) {
   const home = process.env.HOME || homedir2();
   const temp = process.env.RUNNER_TEMP;
   const hidden = temp && !under2(temp, home) ? [home, temp] : [home];
-  const tools = (process.env.PATH ?? "").split(":").filter((p) => isAbsolute3(p) && under2(p, home) && !under2(p, cwd) && existsSync4(p));
+  const tools = (process.env.PATH ?? "").split(":").filter((p) => isAbsolute3(p) && under2(p, home) && relative2(home, p) !== "" && !(temp && under2(temp, p)) && !under2(p, cwd) && existsSync4(p));
   return [
     "--die-with-parent",
     "--new-session",
@@ -58431,21 +58451,30 @@ function sandboxArgs(cwd) {
     "/tmp"
   ];
 }
-var inSandbox = (cwd, file, args, o) => execFileSync2("bwrap", [...sandboxArgs(cwd), "--", file, ...args], { ...o, cwd });
-var sandboxPrefix = (cwd) => ["env", "-u", "ANTHROPIC_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", "bwrap", ...sandboxArgs(cwd), "--"].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
+var inSandbox = (cwd, file, args, o) => execFileSync2(bin.bwrap, [...sandboxArgs(cwd), "--", file, ...args], { ...o, cwd });
+var sandboxPrefix = (cwd) => [bin.env, "-u", "ANTHROPIC_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", bin.bwrap, ...sandboxArgs(cwd), "--"].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
+function endSandboxes() {
+  try {
+    execFileSync2(bin.pkill, ["-KILL", "-u", String(process.getuid?.()), "-x", "bwrap"], { stdio: "ignore" });
+  } catch {}
+}
 function prepareSandbox(cwd) {
   if (process.platform !== "linux")
     return `A change needs a Linux runner, for its sandbox. This one runs ${process.platform}.`;
   const run = (file, args) => execFileSync2(file, args, { encoding: "utf8", stdio: "pipe", timeout: 5 * 60000 });
   try {
-    try {
-      run("bwrap", ["--version"]);
-    } catch {
+    if (!which2("bwrap")) {
       info("Installing bubblewrap, for the sandbox the change runs in");
       run("sudo", ["-n", "apt-get", "update", "-qq"]);
       run("sudo", ["-n", "env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y", "-qq", "--no-install-recommends", "bubblewrap"]);
     }
-    const version = /(\d+)\.(\d+)/.exec(run("bwrap", ["--version"]))?.slice(1).map(Number) ?? [0, 0];
+    for (const name of Object.keys(bin)) {
+      const path = which2(name);
+      if (!path)
+        return `The runner has no ${name} on its PATH, and the sandbox needs it, so nothing was changed.`;
+      bin[name] = path;
+    }
+    const version = /(\d+)\.(\d+)/.exec(run(bin.bwrap, ["--version"]))?.slice(1).map(Number) ?? [0, 0];
     if (version[0] < BWRAP_MIN[0] || version[0] === BWRAP_MIN[0] && version[1] < BWRAP_MIN[1]) {
       return `The runner has bubblewrap ${version.join(".")}, and the sandbox needs ${BWRAP_MIN.join(".")} or later.`;
     }
@@ -58592,8 +58621,8 @@ function claudeBinary() {
   try {
     return createRequire2(import.meta.url).resolve(file);
   } catch {}
-  const dir = join4(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
-  const bin = join4(dir, "node_modules", file);
+  const dir = join5(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
+  const bin = join5(dir, "node_modules", file);
   if (!existsSync5(bin)) {
     info(`Installing ${name}@${SDK_VERSION}`);
     execFileSync3("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
@@ -58605,6 +58634,8 @@ function cliEnv(claude, names = []) {
     ...runnerEnv(names),
     [claude.kind === "oauth" ? "CLAUDE_CODE_OAUTH_TOKEN" : "ANTHROPIC_API_KEY"]: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
+    CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: "1",
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}`
   };
 }
@@ -58635,7 +58666,7 @@ async function once(prompt, o, schema, controller) {
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
       tools: deep ? [...READ_TOOLS, "Agent"] : edit ? EDIT_TOOLS : READ_TOOLS,
-      allowedTools: deep ? [...ALLOWED, "Agent"] : edit ? EDIT_TOOLS : ALLOWED,
+      allowedTools: deep ? [...ALLOWED, "Agent"] : edit ? EDIT_TOOLS.filter((t) => t !== "Bash") : ALLOWED,
       disallowedTools: DENIED2,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: "dontAsk",
@@ -58867,7 +58898,7 @@ ${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${
 `;
 
 // src/services/prestep/deps-diff.service.ts
-import { dirname as dirname3, join as join5 } from "node:path";
+import { dirname as dirname3, join as join6 } from "node:path";
 
 // src/utils/lockfile.util.ts
 var NPM_REGISTRY = /^https?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)(?:\/|$)/;
@@ -59001,8 +59032,8 @@ var LOCKFILES = [
 // src/services/prestep/deps-diff.service.ts
 var LOCK_MAX = 20000000;
 var FACTS_MAX = 16000;
-var privateNpm = (checkout, dir) => [...new Set([".", dir])].some((d) => [".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml"].some((f) => [...(checkout.read(join5(d, f)) ?? "").matchAll(/^\s*(?:registry|npmRegistryServer)\s*[=:\s]\s*["']?([^"'\s]+)/gm)].some((m) => !NPM_REGISTRY.test(m[1]))));
-var goOwner = (checkout, dir) => /^module\s+(\S+?\/[^/\s]+)/m.exec(checkout.read(join5(dir, "go.mod")) ?? "")?.[1];
+var privateNpm = (checkout, dir) => [...new Set([".", dir])].some((d) => [".npmrc", ".yarnrc", ".yarnrc.yml", "bunfig.toml"].some((f) => [...(checkout.read(join6(d, f)) ?? "").matchAll(/^\s*(?:registry|npmRegistryServer)\s*[=:\s]\s*["']?([^"'\s]+)/gm)].some((m) => !NPM_REGISTRY.test(m[1]))));
+var goOwner = (checkout, dir) => /^module\s+(\S+?\/[^/\s]+)/m.exec(checkout.read(join6(dir, "go.mod")) ?? "")?.[1];
 function byName(pins) {
   const out = new Map;
   for (const p of pins) {
@@ -59863,20 +59894,31 @@ function pushDenial(mode, t) {
   if (t.branch !== t.pullBranch)
     return `Push mode is Restricted, so Axon Shaft pushes only to the pull request's branch, ${t.pullBranch}, not ${t.branch}.`;
 }
-function commitDenial(paths) {
-  const bad = paths.find((p) => p.startsWith("/") || p.split("/").some((s) => s === ".." || s === ".git"));
+var COMMIT_MAX = { files: 200, fileBytes: 1024 * 1024, totalBytes: 10 * 1024 * 1024 };
+var mb2 = (bytes) => `${bytes / 1024 / 1024} MB`;
+function commitDenial(changes) {
+  const paths = changes.map((c) => c.path);
+  const bad = paths.find((p) => p.startsWith("/") || p.split("/").some((s) => s === ".." || s.toLowerCase() === ".git"));
   if (bad)
     return `The change names ${bad}, outside the files a commit can hold, so nothing was pushed.`;
-  const github = paths.filter((p) => p.startsWith(".github/"));
+  const github = paths.filter((p) => /^\.github(\/|$)/i.test(p));
   if (github.length)
     return `The change touches ${github.join(", ")}, and Axon Shaft never commits anything under .github/, so nothing was pushed.`;
+  if (changes.length > COMMIT_MAX.files)
+    return `The change has ${changes.length} files, more than the ${COMMIT_MAX.files} one commit from Axon Shaft may hold, so nothing was pushed.`;
+  const big = changes.find((c) => (c.content?.length ?? 0) > COMMIT_MAX.fileBytes);
+  if (big)
+    return `${big.path} is over ${mb2(COMMIT_MAX.fileBytes)}, the most one file in a commit may be, so nothing was pushed.`;
+  const total = changes.reduce((n, c) => n + (c.content?.length ?? 0), 0);
+  if (total > COMMIT_MAX.totalBytes)
+    return `The change adds up to over ${mb2(COMMIT_MAX.totalBytes)}, the most one commit may hold, so nothing was pushed.`;
 }
 var RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|npm-shrinkwrap\.json)$/;
 var runsCode = (paths) => paths.filter((p) => RUNS_CODE.test(p));
 
 // src/services/commands.service.ts
 import { existsSync as existsSync6, readFileSync as readFileSync4 } from "node:fs";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
 var LOCKS = [
   ["bun.lock", "bun", "bun install --frozen-lockfile"],
@@ -59885,12 +59927,12 @@ var LOCKS = [
   ["yarn.lock", "yarn", "yarn install --frozen-lockfile"],
   ["package-lock.json", "npm", "npm ci"]
 ];
-var read = (cwd, file) => existsSync6(join6(cwd, file)) ? readFileSync4(join6(cwd, file), "utf8") : undefined;
+var read = (cwd, file) => existsSync6(join7(cwd, file)) ? readFileSync4(join7(cwd, file), "utf8") : undefined;
 function repoCommands(cwd) {
   const out = [];
   const pkg = read(cwd, "package.json");
   if (pkg) {
-    const [, pm, install] = LOCKS.find(([lock]) => existsSync6(join6(cwd, lock))) ?? ["", "npm", "npm install"];
+    const [, pm, install] = LOCKS.find(([lock]) => existsSync6(join7(cwd, lock))) ?? ["", "npm", "npm install"];
     let scripts = {};
     try {
       scripts = JSON.parse(pkg).scripts ?? {};
@@ -59922,29 +59964,41 @@ function runCheck(cwd, command, env = []) {
 }
 
 // src/services/push.service.ts
-import { lstatSync as lstatSync3, readFileSync as readFileSync5, readlinkSync as readlinkSync2 } from "node:fs";
-import { dirname as dirname4, join as join7 } from "node:path";
+import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2 } from "node:fs";
+import { dirname as dirname4, join as join8 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
   assertHead(cwd, base);
   const paths = git(cwd, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]).split("\x00").filter(Boolean).map((l) => l.slice(3));
-  const why = commitDenial(paths) ?? paths.map((p) => insideCheckout(dirname4(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
+  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname4(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
   if (why)
     throw new ShaftFailure("push_failed", why);
-  return paths.map((path) => {
-    const file = join7(cwd, path);
-    let st;
+  const changes = paths.map((path) => {
+    const file = join8(cwd, path);
+    let fd;
     try {
-      st = lstatSync3(file);
-    } catch {
-      return { path };
+      fd = openSync2(file, constants5.O_RDONLY | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
+    } catch (e) {
+      const code = e.code;
+      if (code === "ENOENT")
+        return { path };
+      if (code === "ELOOP")
+        return { path, mode: "120000", content: Buffer.from(readlinkSync2(file)) };
+      throw new ShaftFailure("push_failed", `${path} couldn't be read (${code}), so nothing was pushed.`);
     }
-    if (st.isSymbolicLink())
-      return { path, mode: "120000", content: Buffer.from(readlinkSync2(file)) };
-    if (!st.isFile())
-      throw new ShaftFailure("push_failed", `${path} isn't a file or a link, so nothing was pushed.`);
-    return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync5(file) };
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile())
+        throw new ShaftFailure("push_failed", `${path} isn't a file or a link, so nothing was pushed.`);
+      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync5(fd) };
+    } finally {
+      closeSync2(fd);
+    }
   });
+  const big = commitDenial(changes);
+  if (big)
+    throw new ShaftFailure("push_failed", big);
+  return changes;
 }
 var head = (cwd) => git(cwd, ["rev-parse", "HEAD"]).trim();
 function assertHead(cwd, base) {
@@ -59988,6 +60042,12 @@ var TASK_FORMAT = {
     return ok ? r : undefined;
   }
 };
+var CREDENTIALS_IN_CHECKOUT = "The checkout's .git/config holds a GitHub credential, which the model could read, so nothing was changed. Set `persist-credentials: false` on the workflow's actions/checkout step.";
+function selfHosted() {
+  if (process.env.RUNNER_ENVIRONMENT === "github-hosted")
+    return;
+  return "Axon Shaft makes changes only on GitHub-hosted runners, and this job runs on a self-hosted one, so nothing was changed. Run the Axon Shaft job on `runs-on: ubuntu-latest`.";
+}
 function taskRequest(ask, findings) {
   if (!findings.length)
     return ask.text;
@@ -60021,6 +60081,20 @@ ${TASK_MARKER}`);
 ${TASK_MARKER}`);
     return { refused: why, code: "nothing_to_fix" };
   }
+  const hosted = selfHosted();
+  if (hosted) {
+    await post(`${failureMarkdown(new ShaftFailure("self_hosted_unsupported", hosted))}
+
+${TASK_MARKER}`);
+    return { refused: hosted, code: "self_hosted_unsupported" };
+  }
+  if (savedCredentials(o.cwd)) {
+    warning(CREDENTIALS_IN_CHECKOUT);
+    await post(`${failureMarkdown(new ShaftFailure("credentials_in_checkout", CREDENTIALS_IN_CHECKOUT))}
+
+${TASK_MARKER}`);
+    return { refused: CREDENTIALS_IN_CHECKOUT, code: "credentials_in_checkout" };
+  }
   const unsandboxed = await step("Start the sandbox", async () => prepareSandbox(o.cwd));
   if (unsandboxed) {
     await post(`${failureMarkdown(new ShaftFailure("sandbox_unavailable", unsandboxed))}
@@ -60050,7 +60124,7 @@ ${TASK_MARKER}`);
       cwd: o.cwd,
       env: o.env,
       commands
-    }, TASK_FORMAT));
+    }, TASK_FORMAT).finally(endSandboxes));
     const lines = [prose(result.reply.answer)];
     const changes = readChanges(o.cwd, base);
     if (changes.length) {
