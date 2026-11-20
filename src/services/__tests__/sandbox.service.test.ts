@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, test, vi } from 'vitest';
@@ -26,7 +26,18 @@ test('the sandbox has its own PID namespace and /proc, dies with its parent, and
   expect(args).toContain(`--tmpfs ${home} --tmpfs ${process.env.RUNNER_TEMP}`);
   expect(args).toContain(`--ro-bind ${join(home, '.tools')} ${join(home, '.tools')}`);
   expect(args).toMatch(new RegExp(`--bind ${cwd} ${cwd} --chdir ${cwd}`));
-  expect(sandboxPrefix(cwd)).toMatch(/^'env' '-u' 'ANTHROPIC_API_KEY' '-u' 'CLAUDE_CODE_OAUTH_TOKEN' 'bwrap' '--die-with-parent' .* '--'$/);
+  expect(sandboxPrefix(cwd)).toMatch(/^'(\/[^']+\/)?env' '-u' 'ANTHROPIC_API_KEY' '-u' 'CLAUDE_CODE_OAUTH_TOKEN' '(\/[^']+\/)?bwrap' '--die-with-parent' .* '--'$/);
+});
+
+test('a PATH folder that is home itself, or holds the runner temp folder, is never bound back over the empty home', () => {
+  const saved = { PATH: process.env.PATH, RUNNER_TEMP: process.env.RUNNER_TEMP };
+  process.env.RUNNER_TEMP = join(home, 'work', '_temp');
+  process.env.PATH = [home, join(home, 'work'), join(home, '.tools'), saved.PATH].join(':');
+  const args = sandboxArgs(cwd).join(' ');
+  Object.assign(process.env, saved);
+  expect(args).toContain(`--ro-bind ${join(home, '.tools')} `);
+  expect(args).not.toContain(`--ro-bind ${home} `);
+  expect(args).not.toContain(`--ro-bind ${join(home, 'work')} `);
 });
 
 // bubblewrap runs only on Linux. These run in a Linux container (see the README's Development section) or on a runner.
@@ -95,6 +106,22 @@ describe.skipIf(!!reason)('in bubblewrap', () => {
       out = (e as { stdout: string }).stdout;
     }
     check(out);
+  });
+
+  test('bubblewrap, env and pkill are the ones found before any repo code ran, whatever the PATH holds later', () => {
+    expect(sandboxPrefix(cwd)).toMatch(/^'\/[^']+\/env' .* '\/[^']+\/bwrap' /);
+    // A bwrap the checkout puts first on the PATH, as a session could.
+    mkdirSync(join(cwd, 'bin'), { recursive: true });
+    writeFileSync(join(cwd, 'bin', 'bwrap'), `#!/bin/sh\ntouch ${join(cwd, 'planted-ran')}\n`, { mode: 0o755 });
+    const saved = process.env.PATH;
+    process.env.PATH = `${join(cwd, 'bin')}:${saved}`;
+    try {
+      expect(inSandbox(cwd, 'echo', ['ok'], { encoding: 'utf8' })).toBe('ok\n');
+      expect(sandboxPrefix(cwd)).not.toContain(join(cwd, 'bin'));
+    } finally {
+      process.env.PATH = saved;
+    }
+    expect(existsSync(join(cwd, 'planted-ran'))).toBe(false);
   });
 
   test('once the session ends, no sandbox outlives it: a command left running, and what it started, are killed', async () => {

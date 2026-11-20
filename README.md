@@ -183,7 +183,8 @@ What counts as a command:
   - in a PID namespace with its own `/proc`, so they can't see or read the runner, the Claude Code CLI or the action, or their environment;
   - with no-new-privs and no capabilities, so `sudo` and setuid programs don't work;
   - with the whole system read-only, and the checkout the only folder they can write;
-  - with an empty home folder, `/tmp`, `/run` (which holds the Docker socket) and runner temp folder. Tools on the `PATH` under home stay, read-only;
+  - with an empty home folder, `/tmp`, `/run` (which holds the Docker socket) and runner temp folder. Tool folders on the `PATH` under home stay, read-only, except home itself and a folder that holds the runner temp folder;
+  - started through `bwrap`, `env` and `pkill` found on the `PATH` before the session, so a program the session puts on the `PATH` is never run in their place;
   - with the network on, for the install;
   - and killed, with everything they started, when the session ends, before the action reads the change.
 - The project's Push mode decides where the commit may go, and the action checks it before the session starts:
