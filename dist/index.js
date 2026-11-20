@@ -59661,6 +59661,24 @@ var localeKeys = async ({ files, checkout, base }) => {
   return capFacts(lines, "");
 };
 
+// src/services/prestep/raw-values.service.ts
+var STYLED = ["**/*.{tsx,jsx,ts,js,mjs,vue,svelte,astro,html,css,scss,sass,less}"];
+var THEME = ["**/*{theme,Theme,tokens,Tokens,colors,Colors,palette,Palette}*", "**/{theme,themes,tokens}/**", "**/tailwind.config.*"];
+var RAW = /(?<![&\w])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})\b|\b(?:rgba?|hsla?)\([^)]*\)|\b\d+(?:\.\d+)?px\b|\b(?:margin|padding|gap|fontSize|lineHeight|letterSpacing|borderRadius|borderWidth|width|height|top|left|right|bottom)\w*\s*:\s*\d+(?:\.\d+)?\b/g;
+var COMMENT2 = /^\s*(?:\/\/|\/\*|\*|<!--)/;
+var THEMES_MAX = 10;
+var rawValues = async ({ files, checkout }) => {
+  const lines = files.filter((f) => matches(f.filename, STYLED) && !matches(f.filename, THEME)).flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+    const found = COMMENT2.test(text) ? [] : [...new Set(text.match(RAW))];
+    return found.length ? [`- ${f.filename}:${line} ${found.join(", ")}`] : [];
+  }));
+  if (!lines.length)
+    return "The added lines of UI and style files have no raw colour or size.";
+  const themes = checkout.find(THEME).filter((p) => matches(p, STYLED) || p.endsWith(".json")).sort();
+  const where = themes.length ? `Theme and token files in the repo: ${themes.slice(0, THEMES_MAX).join(", ")}${themes.length > THEMES_MAX ? ` and ${themes.length - THEMES_MAX} more` : ""}.` : "The repo has no file named for a theme, tokens, colours or a palette.";
+  return capFacts([where, "Raw values on added lines:", ...lines], "");
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
 var FACTS = {
@@ -59670,7 +59688,8 @@ var FACTS = {
   imports,
   "exports-diff": exportsDiff,
   routes,
-  "locale-keys": localeKeys
+  "locale-keys": localeKeys,
+  "raw-values": rawValues
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
