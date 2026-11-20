@@ -250,9 +250,11 @@ The card's last line gives the kind of change, the model's confidence and the re
 The action shows that a review is running without anything that emails people:
 
 - A check run named `Axon Shaft / review` on the reviewed commit. It's in progress while the review runs. It then passes, with a link to the summary comment, or fails, with the failure's message and a link to the run.
+
+  The check is updated once at the start of each step. Its title is the current step, such as "Reviewing with Sonnet, effort medium" or "Posting the review". Its summary lists the steps, with ✓ on the ones done and the current one in bold, and says how far into the review that step started.
 - An 👀 reaction on the `/review` comment, when a comment started the review. Every command gets one; see [Reactions on the comment](#reactions-on-the-comment).
 
-The check run needs Checks (write) on the run's token. Without it the review still posts, the job log warns once, and the action skips the other check runs. A dry run logs both and posts neither.
+The check run needs Checks (write) on the run's token. Without it the review still posts, the job log warns once, and the action skips the other check runs. If GitHub refuses a step's update, the job log warns once and the check gets no more step updates. The review carries on, and the check still gets its result at the end. A dry run logs the check, each step's title and the reaction, and posts none of them.
 
 ### The merge gates check
 

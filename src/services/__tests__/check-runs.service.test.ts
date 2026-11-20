@@ -6,7 +6,7 @@ beforeEach(() => {
   warnings.length = 0;
 });
 vi.doMock('@actions/core', () => ({ warning: (s: string) => warnings.push(s) }));
-const { gateResults, gatesConclusion, postCategoryChecks, postCheck, postGatesCheck } = await import('../check-runs.service');
+const { gateResults, gatesConclusion, postCategoryChecks, postCheck, postGatesCheck, progressSummary } = await import('../check-runs.service');
 
 const met: Gate = { gate: 'A migration has a rollback', status: 'met', reason: 'It has one.' };
 const notMet: Gate = { gate: 'Docs are updated', status: 'not_met', reason: 'They are not.' };
@@ -125,4 +125,8 @@ test('a check run starts in progress, then the update by its id completes it; a 
   create.mockRejectedValueOnce(new Error('Resource not accessible by integration'));
   expect(await postCheck(octokit, 'o', 'r', 'abc1234', { name: 'Axon Shaft / review', title: 't', summary: 's' }, (s) => s)).toBeUndefined();
   expect(warnings).toHaveLength(1);
+});
+
+test('the progress summary marks the steps done and the current one, with when it started', () => {
+  expect(progressSummary('Review', 65_400)).toBe('- ✓ Read the pull request\n- ▶ **Review**\n- Post the review\n\nThis step started 1m 05s into the review.');
 });

@@ -26,6 +26,18 @@ type Conclusion = 'success' | 'failure' | 'neutral' | 'skipped';
 /** The check run that shows a review in progress, then its result. */
 export const REVIEW_CHECK = 'Axon Shaft / review';
 
+/** The review's steps in the order they run, named as in the job log. */
+export const REVIEW_STEPS = ['Read the pull request', 'Review', 'Post the review'] as const;
+export type ReviewStep = (typeof REVIEW_STEPS)[number];
+
+/** The review check's summary while it runs: ✓ on the steps done, the current one in bold, and when it started. */
+export function progressSummary(current: ReviewStep, ms: number): string {
+  const at = REVIEW_STEPS.indexOf(current);
+  const s = Math.round(ms / 1000);
+  const steps = REVIEW_STEPS.map((name, i) => (i < at ? `- ✓ ${name}` : i === at ? `- ▶ **${name}**` : `- ${name}`));
+  return `${steps.join('\n')}\n\nThis step started ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s into the review.`;
+}
+
 /**
  * Posts a check run on the reviewed commit: in progress without a conclusion, completed with one,
  * and an update of run `id` when given. Returns the run's id, or undefined when GitHub refused it.

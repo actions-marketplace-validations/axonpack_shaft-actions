@@ -39,12 +39,14 @@ const file = (filename: string, patch = '@@ -1 +1 @@\n-a\n+b') => ({ filename, s
 
 /**
  * A fake Octokit for one PR from `feature` into `main`. It records the base-branch files read, the
- * summary comments written, and every call that posts something, in order.
+ * summary comments written, every call that posts something, in order, and the check summaries.
+ * `refuseChecks` refuses every check run, or with `progress` only the review check's progress updates.
  */
-function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guides: Record<string, string> = {}, refuseChecks = false) {
+function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guides: Record<string, string> = {}, refuseChecks: boolean | 'progress' = false) {
   const refs: string[] = [];
   const written: string[] = [];
   const posted: string[] = [];
+  const summaries: string[] = [];
   const [listFiles, listCommits, listComments, listReviewComments] = [0, 1, 2, 3].map(() => async () => ({}));
   const lists = new Map<unknown, unknown[]>([
     [listFiles, files],
@@ -57,8 +59,9 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
     posted.push(`${kind}: ${body.split('\n')[1]}`);
     return { data: { id: 1, html_url: 'https://github.com/o/r/pull/7#issuecomment-1' } };
   };
-  const check = (kind: string) => async (c: { name: string; status: string; conclusion?: string; details_url?: string; output: { title: string } }) => {
-    if (refuseChecks) throw new Error('Resource not accessible by integration');
+  const check = (kind: string) => async (c: { name: string; status: string; conclusion?: string; details_url?: string; output: { title: string; summary: string } }) => {
+    if (refuseChecks === true || (refuseChecks && kind === 'update' && !c.conclusion)) throw new Error('Resource not accessible by integration');
+    summaries.push(c.output.summary);
     posted.push(`check ${kind}: ${c.name} ${c.conclusion ?? c.status} "${c.output.title}" ${c.details_url ?? ''}`.trim());
     return { data: { id: 5 } };
   };
@@ -66,6 +69,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
     refs,
     written,
     posted,
+    summaries,
     paginate: async (fn: unknown) => lists.get(fn),
     rest: {
       pulls: {
@@ -101,7 +105,7 @@ async function review(
     guides?: Record<string, string>;
     dryRun?: boolean;
     gates?: string[];
-    refuseChecks?: boolean;
+    refuseChecks?: boolean | 'progress';
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
@@ -224,6 +228,7 @@ test('a failed review creates the summary with its card, message and the run lin
   ]);
   expect(progress()).toEqual([
     STARTED,
+    STEPS[0],
     "create: ![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",
     'check update: Axon Shaft / review failure "The review failed" https://github.com/o/r/actions/runs/9',
   ]);
@@ -233,10 +238,28 @@ test('a failed review creates the summary with its card, message and the run lin
 const progress = () => fake.posted.filter((p) => !/Axon Shaft \/ (?!review)/.test(p));
 const SUMMARY_URL = 'https://github.com/o/r/pull/7#issuecomment-1';
 const STARTED = 'check create: Axon Shaft / review in_progress "Reviewing abc1234" https://github.com/o/r/actions/runs/9';
+/** The review check's update at the start of each step after the read. */
+const STEPS = ['check update: Axon Shaft / review in_progress "Reviewing with Sonnet, effort medium"', 'check update: Axon Shaft / review in_progress "Posting the review"'];
 
 test("a first review creates no comment until the result, and the review check shows it's running", async () => {
   await review([file('src/a.ts')], { dryRun: false });
+  expect(progress()).toEqual([STARTED, ...STEPS, expect.stringMatching(/^create: > \[!TIP\]/), `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`]);
+});
+
+test('each step updates the review check once, in order, with the steps done and the current one', async () => {
+  await review([file('src/a.ts')], { dryRun: false });
+  expect(fake.summaries.slice(1, 3).map((s) => s.split('\n\n')[0])).toEqual([
+    '- ✓ Read the pull request\n- ▶ **Review**\n- Post the review',
+    '- ✓ Read the pull request\n- ✓ Review\n- ▶ **Post the review**',
+  ]);
+  expect(fake.summaries[1]).toMatch(/\n\nThis step started 0m 0\ds into the review\.$/);
+});
+
+test('a refused progress update warns once, skips the later ones, and the review still finishes', async () => {
+  await review([file('src/a.ts')], { dryRun: false, refuseChecks: 'progress' });
   expect(progress()).toEqual([STARTED, expect.stringMatching(/^create: > \[!TIP\]/), `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`]);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("Couldn't post the Axon Shaft / review check");
 });
 
 test('a later review edits its summary to Reviewing at the start, which emails no one', async () => {
@@ -245,6 +268,7 @@ test('a later review edits its summary to Reviewing at the start, which emails n
   expect(progress()).toEqual([
     STARTED,
     'update: ![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)',
+    ...STEPS,
     expect.stringMatching(/^update: > \[!TIP\]/),
     `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`,
   ]);
@@ -254,6 +278,8 @@ test('a dry run posts nothing and logs the review check', async () => {
   await review([file('src/a.ts')]);
   expect(fake.posted).toEqual([]);
   expect(logs).toContain('Would start the Axon Shaft / review check');
+  expect(logs).toContain('Would update the Axon Shaft / review check: Reviewing with Sonnet, effort medium');
+  expect(logs).toContain('Would update the Axon Shaft / review check: Posting the review');
 });
 
 test('a token without Checks write warns once, and the review still posts', async () => {

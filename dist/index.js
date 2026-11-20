@@ -58573,6 +58573,16 @@ function gateResults(gates, reported = []) {
 }
 var gatesConclusion = (gates) => gates.some((g) => g.status === "not_met") ? "failure" : "success";
 var REVIEW_CHECK = "Axon Shaft / review";
+var REVIEW_STEPS = ["Read the pull request", "Review", "Post the review"];
+function progressSummary(current, ms) {
+  const at = REVIEW_STEPS.indexOf(current);
+  const s = Math.round(ms / 1000);
+  const steps = REVIEW_STEPS.map((name, i) => i < at ? `- ✓ ${name}` : i === at ? `- ▶ **${name}**` : `- ${name}`);
+  return `${steps.join(`
+`)}
+
+This step started ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s into the review.`;
+}
 async function postCheck(octokit, owner, repo, sha, c, clean) {
   const run = {
     owner,
@@ -58725,12 +58735,21 @@ async function reviewContext(ctx, o) {
     const started = { name: REVIEW_CHECK, title: `Reviewing ${sha.slice(0, 7)}`, summary: "The review is running.", detailsUrl: o.runUrl };
     check = await postCheck(octokit, owner, repo, sha, started, clean);
   }
+  const startedAt = Date.now();
+  let live = true;
+  const progress = async (now, title) => {
+    if (o.dryRun)
+      return info(`Would update the ${REVIEW_CHECK} check: ${title}`);
+    if (!check || !live)
+      return;
+    live = await postCheck(octokit, owner, repo, sha, { name: REVIEW_CHECK, id: check, title, summary: progressSummary(now, Date.now() - startedAt) }, clean) !== undefined;
+  };
   const finish = async (c) => {
     if (check)
       await postCheck(octokit, owner, repo, sha, { name: REVIEW_CHECK, id: check, ...c }, clean);
   };
   try {
-    const out = await postReview(ctx, o, o.dryRun || check !== undefined);
+    const out = await postReview(ctx, o, o.dryRun || check !== undefined, progress);
     await finish({ conclusion: "success", title: `Reviewed ${sha.slice(0, 7)}`, summary: `${out.output.headline}
 
 [The summary comment](${out.summaryUrl})`, detailsUrl: out.summaryUrl });
@@ -58741,7 +58760,7 @@ async function reviewContext(ctx, o) {
     throw e;
   }
 }
-async function postReview(ctx, o, canCheck) {
+async function postReview(ctx, o, canCheck, progress) {
   const { octokit } = o;
   const sha = ctx.pr.headSha;
   const clean = (text) => redact(text, o.secrets);
@@ -58761,6 +58780,8 @@ async function postReview(ctx, o, canCheck) {
   };
   if (summary)
     await writeSummary(startSummary(sha, prior));
+  const model = /^[a-z]+$/.test(choice.model) ? choice.model[0].toUpperCase() + choice.model.slice(1) : choice.model;
+  await progress("Review", `Reviewing with ${model}, effort ${choice.effort}`);
   let result;
   try {
     result = await step("Review", () => runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
@@ -58785,6 +58806,7 @@ async function postReview(ctx, o, canCheck) {
   const gates = o.gates?.length ? gateResults(o.gates, result.review.gates) : undefined;
   const review = { ...result.review, gates };
   info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
+  await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
