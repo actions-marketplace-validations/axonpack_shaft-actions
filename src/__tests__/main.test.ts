@@ -221,7 +221,7 @@ test("pull_request sends the event, fork: false and the pull request, and review
     job: 'review',
     event: 'opened',
     fork: false,
-    pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat', base: 'main', association: 'MEMBER', bot: false },
+    pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat', base: 'main', association: 'MEMBER', bot: false, labels: [] },
   });
   expect(checkedOut).toEqual([]);
   expect(reactions).toEqual([]);
@@ -233,7 +233,7 @@ test("pull_request_target is a review too: a fork's PR sends fork: true, and its
   api(Response.json(grant));
   await main();
   expect(failed).toEqual([]);
-  expect(asked).toEqual({ job: 'review', event: 'push', fork: true, pull_request: { number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger', base: 'main', association: 'FIRST_TIME_CONTRIBUTOR', bot: false },
+  expect(asked).toEqual({ job: 'review', event: 'push', fork: true, pull_request: { number: 13, title: 'Fix typo', branch: 'patch-1', author: 'stranger', base: 'main', association: 'FIRST_TIME_CONTRIBUTOR', bot: false, labels: [] },
   });
   expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 13, 'ghs_shaft']]);
   expect(reviewed).toMatchObject({ number: 13 });
@@ -295,7 +295,7 @@ test('/review by someone with write access reviews the PR, with no event and the
   api(Response.json(grant));
   await main();
   expect(failed).toEqual([]);
-  expect(asked).toEqual({ job: 'review', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat' } });
+  expect(asked).toEqual({ job: 'review', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat', labels: [] } });
   expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 12, 'ghs_shaft']]);
   expect(reviewed).toMatchObject({ number: 12 });
 });
@@ -382,7 +382,7 @@ test('/ask by someone with write access answers at the head commit with the Repl
   api(Response.json(replyGrant));
   await main();
   expect(failed).toEqual([]);
-  expect(asked).toEqual({ job: 'reply', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat' } });
+  expect(asked).toEqual({ job: 'reply', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat', labels: [] } });
   expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 12, 'ghs_shaft']]);
   expect(replied).toMatchObject({
     number: 12,
@@ -438,7 +438,7 @@ test("/fix asks for a task grant with no push token, runs it with the project's 
   api(Response.json(taskGrant));
   await main();
   expect(failed).toEqual([]);
-  expect(asked).toEqual({ job: 'task', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat' } });
+  expect(asked).toEqual({ job: 'task', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat', labels: [] } });
   expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 12, 'ghs_shaft']]);
   expect(tasked).toMatchObject({
     ask: { id: 501, text: '/fix the failing test please' },
