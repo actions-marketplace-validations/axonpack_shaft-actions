@@ -72,8 +72,6 @@ export type ReviewOutcome = {
 /** One step down when the plan behind the token can't use the picked model. */
 const FALLBACK: Record<string, string> = { opus: 'sonnet,haiku', sonnet: 'haiku' };
 const MAX_DIFF = 200_000; // ponytail: a bigger diff is cut; the model reads the rest from the checkout
-/** Only these people's comments reach the prompt: anyone else could write instructions aimed at the model. */
-const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 
 /**
  * The models the action chose, named as the run reported them (an alias such as `sonnet` becomes
@@ -118,7 +116,8 @@ export function buildPrompt(ctx: Context, prior: State | undefined, o: { templat
     .join('\n');
   if (diff.length > MAX_DIFF) diff = `${diff.slice(0, MAX_DIFF)}\n(the diff is cut here; read the remaining files from the checkout)`;
   const comments = [...ctx.comments, ...ctx.reviewComments]
-    .filter((c) => TRUSTED.includes(c.association))
+    // Only people inside the repo reach the prompt: anyone else could write instructions aimed at the model.
+    .filter((c) => c.trusted)
     .map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? '?'}` : ''}: ${c.body.slice(0, 2000)}`)
     .join('\n');
   const previous = prior?.findings.length

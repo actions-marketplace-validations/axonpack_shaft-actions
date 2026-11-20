@@ -1,13 +1,15 @@
+import * as core from '@actions/core';
 import type { ChangedFile } from '../utils/auto-pick.util';
 import type { Octokit } from '../types/octokit.type';
 import { GUIDE_FILES } from '../consts/settings.const';
 import { SUMMARY_MARKER } from '../utils/render.util';
+import { hasWriteAccess } from './route.service';
 
 export type Comment = {
   id: number;
   author: string;
-  /** GitHub's `author_association`: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE and so on. */
-  association: string;
+  /** Whether the author is inside the repo (`insider`), so the review reads the comment. */
+  trusted: boolean;
   body: string;
   html_url: string;
   path?: string;
@@ -29,15 +31,42 @@ export type Context = {
   guides: { path: string; text: string }[];
 };
 
-const comment = (c: any): Comment => ({
+const toComment = (c: any, trusted: boolean): Comment => ({
   id: c.id,
   author: c.user?.login ?? 'ghost',
-  association: c.author_association ?? 'NONE',
+  trusted,
   body: c.body ?? '',
   html_url: c.html_url,
   path: c.path,
   line: c.line,
 });
+
+/** Associations that put an author inside the repo without asking GitHub. */
+const INSIDE = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
+/**
+ * Whether a comment's author is inside the repo. `author_association` misses write access through an
+ * org team and shows a private org member as CONTRIBUTOR or NONE, so anyone it leaves out is asked
+ * about on the permission endpoint, once per login: admin or write counts. A failed call counts as
+ * outside, with a warning. Bots are never asked.
+ */
+function insider(octokit: Octokit, owner: string, repo: string): (c: any) => Promise<boolean> {
+  const asked = new Map<string, Promise<boolean>>();
+  return async (c) => {
+    if (INSIDE.includes(c.author_association)) return true;
+    const login: string | undefined = c.user?.login;
+    if (!login || c.user.type === 'Bot') return false;
+    if (!asked.has(login))
+      asked.set(
+        login,
+        hasWriteAccess(octokit, owner, repo, login).catch((e: Error) => {
+          core.warning(`Couldn't check ${login}'s access to the repo, so their comments are left out of the review: ${e.message}`);
+          return false;
+        }),
+      );
+    return asked.get(login)!;
+  };
+}
 
 /**
  * A file as the base branch has it, through the API; undefined when it has none. Never the
@@ -71,7 +100,9 @@ export async function collectContext(
     octokit.paginate(octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }),
     octokit.paginate(octokit.rest.pulls.listReviewComments, q),
   ]);
-  const comments = issueComments.map(comment);
+  const trusted = insider(octokit, owner, repo);
+  const comment = async (c: any) => toComment(c, await trusted(c));
+  const comments = await Promise.all(issueComments.map(comment));
   const summary = comments.find((c) => c.author === bot && c.body.startsWith(SUMMARY_MARKER));
   return {
     owner,
@@ -88,7 +119,7 @@ export async function collectContext(
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),
     comments: comments.filter((c) => c !== summary),
-    reviewComments: reviewComments.map(comment),
+    reviewComments: await Promise.all(reviewComments.map(comment)),
     summary,
     guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter(
       (g): g is { path: string; text: string } => typeof g.text === 'string' && !!g.text.trim(),
