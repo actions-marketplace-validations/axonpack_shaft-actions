@@ -63,14 +63,17 @@ export type State = { sha: string; findings: StateFinding[] };
 /** A finding after our code decided where it goes. */
 export type Placed = Finding & { fp: string; inline: boolean };
 
-/** Right-side line numbers in a unified diff patch, with their text. */
-export function diffLines(patch: string | undefined): Map<number, string> {
+/** Right-side line numbers in a unified diff patch, with their text: every line, or only the added ones. */
+export function diffLines(patch: string | undefined, addedOnly = false): Map<number, string> {
   const lines = new Map<number, string>();
   let right = 0;
   for (const l of patch?.split('\n') ?? []) {
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
     if (hunk) right = Number(hunk[1]);
-    else if (l.startsWith('+') || l.startsWith(' ')) lines.set(right++, l.slice(1));
+    else if (l.startsWith('+') || l.startsWith(' ')) {
+      if (!addedOnly || l.startsWith('+')) lines.set(right, l.slice(1));
+      right++;
+    }
   }
   return lines;
 }
@@ -259,7 +262,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     '>',
     `> ${checkChips.join(' ')}`,
     '>',
-    `> <sub>${type} · ${review.confidence}% confidence · reviewed \`${f.sha.slice(0, 7)}\`</sub>`,
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed \`${f.sha.slice(0, 7)}\``].filter(Boolean).join(' · ')}</sub>`,
   ].join('\n');
 }
 
@@ -346,15 +349,17 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
-  out.push(
-    '',
-    details(
-      'What this PR does',
-      [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join('\n'),
-    ),
-    '',
-    footer(f),
-  );
+  // A run with no model call has no claim to show.
+  if (review.claim) {
+    out.push(
+      '',
+      details(
+        'What this PR does',
+        [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join('\n'),
+      ),
+    );
+  }
+  out.push('', footer(f));
   const state: State = {
     sha: f.sha,
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),

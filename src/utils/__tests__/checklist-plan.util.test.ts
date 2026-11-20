@@ -21,6 +21,12 @@ test('paths match files under dot folders and dotfiles, so ** is any change', ()
   expect(runs(['**/*.ts'], 'src/a.md')).toBe(false);
 });
 
+test('a script checklist runs when the action has its script', () => {
+  const secrets = { ...checklist('secrets', ['**'], 'script'), prestep: 'secrets' };
+  expect(planChecklists([secrets], [{ filename: 'a.ts' }], ['secrets'])[0]!.skip).toBeUndefined();
+  expect(planChecklists([secrets], [{ filename: 'a.ts' }], ['pr-meta'])[0]!.skip).toBe(NOT_YET);
+});
+
 test('with no changed files nothing runs', () => {
   expect(planChecklists([checklist('c', ['**'])], [])[0]!.skip).toBe(NO_MATCH);
 });

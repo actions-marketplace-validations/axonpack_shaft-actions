@@ -23833,6 +23833,8 @@ async function reportRun(summary) {
 
 // src/services/checkout.service.ts
 import { execFileSync } from "node:child_process";
+import { globSync, lstatSync, readFileSync as readFileSync2, realpathSync } from "node:fs";
+import { join, sep as sep2 } from "node:path";
 function checkoutHead(cwd, number, token) {
   const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
   const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
@@ -23840,6 +23842,22 @@ function checkoutHead(cwd, number, token) {
   const depth = git("rev-parse", "--is-shallow-repository") === "true" ? ["--depth=1"] : [];
   git("-c", `http.extraheader=AUTHORIZATION: basic ${basic}`, "fetch", "--no-tags", ...depth, "origin", `refs/pull/${number}/head`);
   git("checkout", "--quiet", "--detach", "FETCH_HEAD");
+}
+var READ_MAX = 1e6;
+function checkoutFiles(cwd) {
+  const root = realpathSync(cwd) + sep2;
+  return {
+    find: (globs) => globSync(globs, { cwd, exclude: (p) => /(^|\/)(node_modules|\.git)$/.test(p) }),
+    read: (path) => {
+      try {
+        const full = join(cwd, path);
+        const stat = lstatSync(full);
+        return stat.isFile() && stat.size <= READ_MAX && realpathSync(full).startsWith(root) ? readFileSync2(full, "utf8") : undefined;
+      } catch {
+        return;
+      }
+    }
+  };
 }
 
 // src/services/reaction.service.ts
@@ -23977,7 +23995,7 @@ var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
 var WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
 var GATE_STATUSES = ["met", "not_met", "not_applicable"];
 var GATES_MAX = 10;
-function diffLines(patch) {
+function diffLines(patch, addedOnly = false) {
   const lines = new Map;
   let right = 0;
   for (const l of patch?.split(`
@@ -23985,8 +24003,11 @@ function diffLines(patch) {
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
     if (hunk)
       right = Number(hunk[1]);
-    else if (l.startsWith("+") || l.startsWith(" "))
-      lines.set(right++, l.slice(1));
+    else if (l.startsWith("+") || l.startsWith(" ")) {
+      if (!addedOnly || l.startsWith("+"))
+        lines.set(right, l.slice(1));
+      right++;
+    }
   }
   return lines;
 }
@@ -24106,7 +24127,7 @@ function card(review, placed, fixed, f) {
     ">",
     `> ${checkChips.join(" ")}`,
     ">",
-    `> <sub>${type} · ${review.confidence}% confidence · reviewed \`${f.sha.slice(0, 7)}\`</sub>`
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed \`${f.sha.slice(0, 7)}\``].filter(Boolean).join(" · ")}</sub>`
   ].join(`
 `);
 }
@@ -24186,8 +24207,11 @@ function renderSummary(raw, placed, prior, f) {
     out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length)
     out.push("", walkthrough(raw.walkthrough));
-  out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
-`)), "", footer(f));
+  if (review.claim) {
+    out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
+`)));
+  }
+  out.push("", footer(f));
   const state = {
     sha: f.sha,
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title }))
@@ -24209,7 +24233,7 @@ import { execFileSync as execFileSync2 } from "node:child_process";
 import { existsSync as existsSync4 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { tmpdir } from "node:os";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as DQ } from "node:module";
@@ -58282,12 +58306,12 @@ function runnerEnv(names = []) {
 }
 
 // src/utils/tool-guard.util.ts
-import { realpathSync as realpathSync2 } from "node:fs";
+import { realpathSync as realpathSync3 } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute as isAbsolute2, relative, resolve as resolve2, sep as sep3 } from "node:path";
+import { isAbsolute as isAbsolute2, relative, resolve as resolve2, sep as sep4 } from "node:path";
 function real(path) {
   try {
-    return realpathSync2(path);
+    return realpathSync3(path);
   } catch {
     return path;
   }
@@ -58295,7 +58319,7 @@ function real(path) {
 var DENIED = ["/proc", "/sys", process.env.RUNNER_TEMP, process.env.RUNNER_TOOL_CACHE].filter((d) => !!d);
 var under = (path, dir) => {
   const rel = relative(dir, path);
-  return rel === "" || rel.split(sep3)[0] !== ".." && !isAbsolute2(rel);
+  return rel === "" || rel.split(sep4)[0] !== ".." && !isAbsolute2(rel);
 };
 function insideCheckout(path, cwd) {
   const root = real(resolve2(cwd));
@@ -58458,8 +58482,8 @@ function claudeBinary() {
   try {
     return createRequire2(import.meta.url).resolve(file);
   } catch {}
-  const dir = join2(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
-  const bin = join2(dir, "node_modules", file);
+  const dir = join3(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
+  const bin = join3(dir, "node_modules", file);
   if (!existsSync4(bin)) {
     info(`Installing ${name}@${SDK_VERSION}`);
     execFileSync2("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
@@ -58716,10 +58740,10 @@ async function collectContext(octokit, owner, repo, number, bot) {
 
 // src/utils/checklist-plan.util.ts
 var NO_MATCH = "No matching files changed";
-var NOT_YET = "Script checklists don't run in this version of the action yet";
+var NOT_YET = "This version of the action doesn't have this checklist's script yet";
 var undot = (s) => s.replace(/(^|\/)\./g, "$1");
 var touches = (file, paths) => matches(file, paths) || matches(undot(file), paths.map(undot));
-var planChecklists = (checklists, files) => checklists.map((c) => !files.some((f) => touches(f.filename, c.paths)) ? { ...c, skip: NO_MATCH } : c.mode === "script" ? { ...c, skip: NOT_YET } : c);
+var planChecklists = (checklists, files, scripts = []) => checklists.map((c) => !files.some((f) => touches(f.filename, c.paths)) ? { ...c, skip: NO_MATCH } : c.mode === "script" && !scripts.includes(c.prestep ?? "") ? { ...c, skip: NOT_YET } : c);
 var STEPS_AT_END = 'They are at the end of this prompt, under "The steps for this run".';
 var stepsBlock = (before, run, after) => `## The steps for this run
 
@@ -58727,12 +58751,158 @@ ${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${
 `)}
 `;
 
+// src/services/prestep/env-vars.service.ts
+var NAME = "([A-Z_][A-Z0-9_]*)";
+var READS = [
+  `\\b(?:process|Bun)\\.env\\.${NAME}`,
+  `\\bprocess\\.env\\[\\s*['"\`]${NAME}['"\`]`,
+  `\\bimport\\.meta\\.env\\.${NAME}`,
+  `\\bDeno\\.env\\.get\\(\\s*['"\`]${NAME}`,
+  `\\bos\\.(?:environ\\.get\\(|environ\\[|getenv\\()\\s*['"]${NAME}`,
+  `\\bos\\.(?:Getenv|LookupEnv)\\(\\s*"${NAME}"`,
+  `\\benv::var(?:_os)?\\(\\s*"${NAME}"`,
+  `\\bENV(?:\\.fetch\\(\\s*|\\[\\s*)['"]${NAME}`
+].map((r) => new RegExp(r, "g"));
+var PLATFORM = /^(?:NODE_ENV|CI|HOME|PATH|PWD|USER|SHELL|TMPDIR|TEMP|TMP|TZ|LANG|TERM|HOSTNAME|MODE|BASE_URL|DEV|PROD|SSR|(?:GITHUB|RUNNER|ACTIONS)_\w+)$/;
+var DOCUMENTED = ["**/.env.*", "**/*.env.example", "**/*.{md,mdx}"];
+var names = (text) => READS.flatMap((r) => [...text.matchAll(r)].map((m) => m[1]));
+var envVars = ({ files, checkout }) => {
+  const removed = new Set(files.flatMap((f) => names((f.patch ?? "").split(`
+`).filter((l) => l.startsWith("-")).join(`
+`))));
+  const first = new Map;
+  for (const f of files)
+    for (const [line, text] of diffLines(f.patch, true))
+      for (const name of names(text))
+        if (!PLATFORM.test(name) && !removed.has(name) && !first.has(name))
+          first.set(name, { file: f.filename, line });
+  if (!first.size)
+    return [];
+  const docs = checkout.find(DOCUMENTED).map((p) => checkout.read(p) ?? "").join(`
+`);
+  return [...first].filter(([name]) => !new RegExp(`\\b${name}\\b`).test(docs)).map(([name, at]) => ({
+    severity: "should-fix",
+    ...at,
+    title: `\`${name}\` isn't documented`,
+    body: `This line reads the env var \`${name}\`, and no \`.env\` example file or Markdown doc in the repo names it. Add it to \`.env.example\` or the docs, with what it's for.`
+  }));
+};
+
+// src/services/prestep/pr-meta.service.ts
+var TEMPLATE = ".github/pull_request_template.md";
+var HEADING = /^#{1,6}\s+(.+?)[\s#]*$/;
+var ASKS_ISSUE = /\bissues?\b|\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#/i;
+var ISSUE_REF = /(?:^|[\s(])#\d+\b|\/issues\/\d+|\b[A-Z][A-Z0-9]+-\d+\b/;
+var CONVENTIONAL = /^\w+(?:\([^)]+\))?!?: \S/;
+var norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+function sections(body) {
+  const out = new Map;
+  let current;
+  for (const l of body.replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/)) {
+    const h = HEADING.exec(l);
+    if (h)
+      out.set(current = norm(h[1]), "");
+    else if (current !== undefined)
+      out.set(current, `${out.get(current)}${l.trim()}`);
+  }
+  return out;
+}
+var prMeta = ({ pr, guides }) => {
+  const out = [];
+  const nit = (file, line, title, body) => out.push({ severity: "nit", file, line, title, body });
+  const template = guides.find((g) => g.path === TEMPLATE)?.text.split(/\r?\n/) ?? [];
+  const body = sections(pr.body);
+  template.forEach((l, i) => {
+    const h = HEADING.exec(l)?.[1];
+    if (!h)
+      return;
+    if (!body.has(norm(h)))
+      nit(TEMPLATE, i + 1, `Template section "${h}" is missing`, `The pull request template has a "${h}" section, and the description doesn't.`);
+    else if (!body.get(norm(h)))
+      nit(TEMPLATE, i + 1, `Template section "${h}" is empty`, `The description has the template's "${h}" heading with nothing under it.`);
+  });
+  const asks = template.findIndex((l) => ASKS_ISSUE.test(l));
+  if (asks >= 0 && !ISSUE_REF.test(pr.body))
+    nit(TEMPLATE, asks + 1, "No linked issue", "The pull request template asks for an issue, and the description links none.");
+  for (const g of guides) {
+    const at = g.text.split(/\r?\n/).findIndex((l) => /conventional commits?/i.test(l));
+    if (at < 0)
+      continue;
+    if (!CONVENTIONAL.test(pr.title))
+      nit(g.path, at + 1, "Title isn't a Conventional Commit", `\`${g.path}\` asks for Conventional Commits, and the title doesn't start with a type such as \`fix:\` or \`feat(scope):\`.`);
+    break;
+  }
+  return out;
+};
+
+// src/services/prestep/schema-pairs.service.ts
+var MIGRATION = ["**/migrations/**", "**/drizzle/**", "**/*.sql"];
+var SCHEMA2 = ["**/*.schema.ts", "**/schema.prisma"];
+var TABLES = /\b(?:pg|mysql|sqlite|singlestore)Table\s*\(|from\s+['"]drizzle-orm/;
+var isSchema = (path, text) => path.endsWith("schema.prisma") || TABLES.test(text ?? "");
+var firstAdded = (patch) => diffLines(patch, true).keys().next().value ?? 1;
+var schemaPairs = ({ files, checkout }) => {
+  const migrations = files.filter((f) => matches(f.filename, MIGRATION));
+  const schemas = files.filter((f) => matches(f.filename, SCHEMA2) && !migrations.includes(f) && !onlyComments(f.patch) && isSchema(f.filename, checkout.read(f.filename) ?? f.patch));
+  if (schemas.length && !migrations.length) {
+    return schemas.map((f) => ({
+      severity: "blocking",
+      file: f.filename,
+      line: firstAdded(f.patch),
+      title: "Schema changed with no migration",
+      body: `\`${f.filename}\` changes the database schema, and the pull request has no migration. Generate one with the repo's migration tool and commit it with this change.`
+    }));
+  }
+  if (migrations.length && !schemas.length && checkout.find(SCHEMA2).some((p) => isSchema(p, checkout.read(p)))) {
+    const f = migrations.find((m) => m.filename.endsWith(".sql")) ?? migrations[0];
+    return [
+      {
+        severity: "blocking",
+        file: f.filename,
+        line: firstAdded(f.patch),
+        title: "Migration with no schema change",
+        body: `The pull request changes migrations (${migrations.map((m) => `\`${m.filename}\``).join(", ")}) and no schema file. Update the schema to match, or say in the description why this migration stands alone.`
+      }
+    ];
+  }
+  return [];
+};
+
+// src/services/prestep/secrets.service.ts
+var KINDS = [
+  ["a private key", /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/],
+  ["an AWS access key", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/],
+  ["a GitHub token", /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})/],
+  ["an Anthropic API key", /\bsk-ant-[A-Za-z0-9_-]{20,}/],
+  ["an OpenAI API key", /\bsk-[A-Za-z0-9_-]*T3BlbkFJ[A-Za-z0-9_-]+/],
+  ["a Stripe secret key", /\b[sr]k_live_[A-Za-z0-9]{20,}/],
+  ["a Slack token", /\bxox[abposr]-[A-Za-z0-9-]{10,}/],
+  ["a Slack webhook URL", /hooks\.slack\.com\/services\/T[A-Za-z0-9]+\/B[A-Za-z0-9]+\/[A-Za-z0-9]+/],
+  ["a Google API key", /\bAIza[0-9A-Za-z_-]{35}/],
+  ["an npm token", /\bnpm_[A-Za-z0-9]{36}\b/]
+];
+var PLACEHOLDER = /(.)\1{5}|example/i;
+var secrets = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => KINDS.filter(([, format]) => {
+  const m = format.exec(text);
+  return m && !PLACEHOLDER.test(m[0]);
+}).map(([kind]) => ({
+  severity: "blocking",
+  file: f.filename,
+  line,
+  title: `Possible ${kind.replace(/^an? /, "")} in an added line`,
+  body: `This line adds what looks like ${kind}. The value isn't shown here. If it's real, rotate it now, since it's already in the branch's history, and load it from a secret or an env var instead.`
+}))));
+
+// src/services/prestep/prestep.service.ts
+var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs };
+var runScripts = (run, input) => run.flatMap((c) => SCRIPTS[c.prestep](input).map((f) => ({ ...f, step: c.key })));
+
 // src/services/check-runs.service.ts
 var GATES_CHECK = "Axon Shaft / gates";
-var norm = (s) => s.trim().toLowerCase();
+var norm2 = (s) => s.trim().toLowerCase();
 function gateResults(gates, reported = []) {
   return gates.map((gate, i) => {
-    const r = reported.find((g) => norm(g.gate) === norm(gate)) ?? reported[i];
+    const r = reported.find((g) => norm2(g.gate) === norm2(gate)) ?? reported[i];
     return r ? { ...r, gate } : { gate, status: "not_met", reason: "The review didn't report on this gate." };
   });
 }
@@ -58917,8 +59087,10 @@ async function postReview(ctx, o, canCheck, progress) {
   const prior = parseState(ctx.summary?.body);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
-  const planned = Array.isArray(o.checklists) && typeof o.prompt.open === "string" ? planChecklists(o.checklists, files) : undefined;
+  const planned = Array.isArray(o.checklists) && typeof o.prompt.open === "string" ? planChecklists(o.checklists, files, Object.keys(SCRIPTS)) : undefined;
   const fired = planned?.filter((c) => !c.skip);
+  const scripted = fired?.filter((c) => c.mode === "script") ?? [];
+  const modelled = fired?.filter((c) => c.mode !== "script");
   const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
@@ -58973,37 +59145,47 @@ ${clean(body)}`);
       }
     };
   }
-  const pack = buildPrompt({ ...ctx, files }, prior, { template: fired ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
-  const prompt = fired ? `${pack}
-${stepsBlock(o.prompt.before ?? [], fired, o.prompt.after ?? [])}` : pack;
-  if (summary)
-    await writeSummary(startSummary(sha, prior));
-  const model = /^[a-z]+$/.test(choice.model) ? choice.model[0].toUpperCase() + choice.model.slice(1) : choice.model;
-  await progress("Review", `Reviewing with ${model}, effort ${choice.effort}`);
+  const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, { files, pr: ctx.pr, guides: ctx.guides, checkout: checkoutFiles(o.cwd) })) : [];
+  const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
   let result;
-  try {
-    result = await step("Review", () => runAgent(prompt, {
-      claude: o.claude,
-      model: choice.model,
-      effort: choice.effort,
-      fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
-      subagentModel: choice.subagentModel,
-      passes,
-      maxTurns: choice.maxTurns,
-      timeoutMinutes: o.timeoutMinutes,
-      cwd: o.cwd,
-      env: o.env
-    }, fired ? { ...REVIEW_FORMAT, schema: reviewSchema(fired.map((c) => c.key)) } : REVIEW_FORMAT));
-  } catch (e) {
-    if (e instanceof ShaftFailure) {
-      e.url ??= o.runUrl;
-      await writeSummary(failedSummary(e, prior));
+  if (useModel) {
+    const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+    const prompt = modelled ? `${pack}
+${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}` : pack;
+    if (summary)
+      await writeSummary(startSummary(sha, prior));
+    const model = /^[a-z]+$/.test(choice.model) ? choice.model[0].toUpperCase() + choice.model.slice(1) : choice.model;
+    await progress("Review", `Reviewing with ${model}, effort ${choice.effort}`);
+    try {
+      result = await step("Review", () => runAgent(prompt, {
+        claude: o.claude,
+        model: choice.model,
+        effort: choice.effort,
+        fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
+        subagentModel: choice.subagentModel,
+        passes,
+        maxTurns: choice.maxTurns,
+        timeoutMinutes: o.timeoutMinutes,
+        cwd: o.cwd,
+        env: o.env
+      }, modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT));
+    } catch (e) {
+      if (e instanceof ShaftFailure) {
+        e.url ??= o.runUrl;
+        await writeSummary(failedSummary(e, prior));
+      }
+      throw e;
     }
-    throw e;
+    info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
+  } else {
+    const headline = `Only script checklists ran (${scripted.map((c) => c.name).join(", ")}), so no model was called.`;
+    const reply = { verdict: "looks-good", type: "", confidence: 100, headline, claim: "", impact: "", scope: "", findings: [], resolved: [], checked: [], not_checked: "" };
+    result = { reply, models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
   }
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
-  const review = { ...result.reply, gates };
-  info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
+  const { reply } = result;
+  const verdict = scriptFindings.some((f) => f.severity === "blocking") ? "blocking" : scriptFindings.some((f) => f.severity === "should-fix") && reply.verdict === "looks-good" ? "needs-changes" : reply.verdict;
+  const review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.map((c) => c.key)] };
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
@@ -59039,7 +59221,7 @@ ${c.body}`);
         p.inline = false;
     }
   }
-  const models = chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0);
+  const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : { main: "no model call", fellBack: false, subagents: [] };
   const body = renderSummary(review, placed, prior, {
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
@@ -59048,10 +59230,10 @@ ${c.body}`);
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
     models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
-    effort: choice.effort,
-    reason: choice.reason,
-    tokens: result.tokens,
-    costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined,
+    effort: useModel ? choice.effort : "scripts only",
+    reason: useModel ? choice.reason : scripted.map((c) => c.key).join(", "),
+    tokens: useModel ? result.tokens : undefined,
+    costUsd: useModel && o.claude.kind === "api_key" ? result.costUsd : undefined,
     skipped
   });
   if (o.dryRun)
@@ -59084,7 +59266,7 @@ ${clean(body)}`);
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? "" : summary?.html_url ?? "",
     checks: states.slice(0, 40),
-    ...fired && { passes: [{ name: "main", model: models.main, tokens: result.tokens, checklists: fired.slice(0, 40).map((c) => c.key) }] },
+    ...modelled && { passes: useModel ? [{ name: "main", model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] },
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,
@@ -59103,8 +59285,8 @@ ${clean(body)}`);
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== "nit").length,
     summaryUrl: o.dryRun ? "" : summary?.html_url ?? "",
-    model: [models.main, ...models.subagents].join(", "),
-    effort: choice.effort,
+    model: useModel ? [models.main, ...models.subagents].join(", ") : "none",
+    effort: useModel ? choice.effort : "none",
     tokens: result.tokens,
     costUsd: result.costUsd,
     bySeverity: {

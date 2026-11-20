@@ -5,7 +5,9 @@ import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
-import { REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
+import { type AgentResult, REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
+import { checkoutFiles } from './checkout.service';
+import { runScripts, SCRIPTS } from './prestep/prestep.service';
 import { type Context, collectContext } from './context.service';
 import {
   CATEGORY_CONCLUSION,
@@ -32,6 +34,7 @@ import {
   type Placed,
   redact,
   renderSummary,
+  type Review,
   type State,
   startSummary,
   unposted,
@@ -227,8 +230,11 @@ async function postReview(
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
   // Only the checklists whose paths match a changed file run; the others get a skipped check run.
-  const planned = Array.isArray(o.checklists) && typeof o.prompt.open === 'string' ? planChecklists(o.checklists, files) : undefined;
+  const planned = Array.isArray(o.checklists) && typeof o.prompt.open === 'string' ? planChecklists(o.checklists, files, Object.keys(SCRIPTS)) : undefined;
   const fired = planned?.filter((c) => !c.skip);
+  // Script checklists' findings are their result: they never reach the model.
+  const scripted = fired?.filter((c) => c.mode === 'script') ?? [];
+  const modelled = fired?.filter((c) => c.mode !== 'script');
   const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
@@ -282,43 +288,62 @@ async function postReview(
     };
   }
 
-  // With checklists the run's data comes first and the steps last, so the part before them reads the same whatever runs.
-  const pack = buildPrompt({ ...ctx, files }, prior, { template: fired ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
-  const prompt = fired ? `${pack}\n${stepsBlock(o.prompt.before ?? [], fired, o.prompt.after ?? [])}` : pack;
+  const scriptFindings = scripted.length
+    ? await step('Run the script checklists', async () => runScripts(scripted, { files, pr: ctx.pr, guides: ctx.guides, checkout: checkoutFiles(o.cwd) }))
+    : [];
+  // With only script checklists to run, no model is called, unless merge gates need judging.
+  const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
 
-  // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
-  if (summary) await writeSummary(startSummary(sha, prior));
-  // An alias reads as a name (`sonnet` as Sonnet); a full model ID stays as written.
-  const model = /^[a-z]+$/.test(choice.model) ? choice.model[0]!.toUpperCase() + choice.model.slice(1) : choice.model;
-  await progress('Review', `Reviewing with ${model}, effort ${choice.effort}`);
-  let result;
-  try {
-    result = await step('Review', () =>
-      runAgent(prompt, {
-      claude: o.claude,
-      model: choice.model,
-      effort: choice.effort,
-      fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
-      subagentModel: choice.subagentModel,
-      passes,
-      maxTurns: choice.maxTurns,
-      timeoutMinutes: o.timeoutMinutes,
-      cwd: o.cwd,
-      env: o.env,
-    }, fired ? { ...REVIEW_FORMAT, schema: reviewSchema(fired.map((c) => c.key)) } : REVIEW_FORMAT),
-    );
-  } catch (e) {
-    // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
-    if (e instanceof ShaftFailure) {
-      e.url ??= o.runUrl;
-      await writeSummary(failedSummary(e, prior));
+  let result: AgentResult<Review>;
+  if (useModel) {
+    // With checklists the run's data comes first and the steps last, so the part before them reads the same whatever runs.
+    const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+    const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}` : pack;
+
+    // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
+    if (summary) await writeSummary(startSummary(sha, prior));
+    // An alias reads as a name (`sonnet` as Sonnet); a full model ID stays as written.
+    const model = /^[a-z]+$/.test(choice.model) ? choice.model[0]!.toUpperCase() + choice.model.slice(1) : choice.model;
+    await progress('Review', `Reviewing with ${model}, effort ${choice.effort}`);
+    try {
+      result = await step('Review', () =>
+        runAgent(prompt, {
+        claude: o.claude,
+        model: choice.model,
+        effort: choice.effort,
+        fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
+        subagentModel: choice.subagentModel,
+        passes,
+        maxTurns: choice.maxTurns,
+        timeoutMinutes: o.timeoutMinutes,
+        cwd: o.cwd,
+        env: o.env,
+      }, modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT),
+      );
+    } catch (e) {
+      // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
+      if (e instanceof ShaftFailure) {
+        e.url ??= o.runUrl;
+        await writeSummary(failedSummary(e, prior));
+      }
+      throw e;
     }
-    throw e;
+    core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
+  } else {
+    const headline = `Only script checklists ran (${scripted.map((c) => c.name).join(', ')}), so no model was called.`;
+    const reply: Review = { verdict: 'looks-good', type: '', confidence: 100, headline, claim: '', impact: '', scope: '', findings: [], resolved: [], checked: [], not_checked: '' };
+    result = { reply, models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
   }
   // Only the project's own gates, each with the review's result; any other gates in the reply are dropped.
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
-  const review = { ...result.reply, gates };
-  core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
+  const { reply } = result;
+  // A script's blocking or should-fix finding raises the verdict the model gave.
+  const verdict = scriptFindings.some((f) => f.severity === 'blocking')
+    ? 'blocking'
+    : scriptFindings.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
+      ? 'needs-changes'
+      : reply.verdict;
+  const review: Review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.map((c) => c.key)] };
   await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 
@@ -353,7 +378,7 @@ async function postReview(
     }
   }
 
-  const models = chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0);
+  const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : { main: 'no model call', fellBack: false, subagents: [] };
   const body = renderSummary(review, placed, prior, {
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
@@ -365,11 +390,11 @@ async function postReview(
       models.main +
       (models.fellBack ? ` (${choice.model} unavailable)` : '') +
       (models.subagents.length ? ` · subagents: ${models.subagents.join(', ')}` : ''),
-    effort: choice.effort,
-    reason: choice.reason,
-    tokens: result.tokens,
+    effort: useModel ? choice.effort : 'scripts only',
+    reason: useModel ? choice.reason : scripted.map((c) => c.key).join(', '),
+    tokens: useModel ? result.tokens : undefined,
     // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
-    costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
+    costUsd: useModel && o.claude.kind === 'api_key' ? result.costUsd : undefined,
     skipped,
   });
   if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
@@ -402,7 +427,7 @@ async function postReview(
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
     checks: states.slice(0, 40),
-    ...(fired && { passes: [{ name: 'main', model: models.main, tokens: result.tokens, checklists: fired.slice(0, 40).map((c) => c.key) }] }),
+    ...(modelled && { passes: useModel ? [{ name: 'main', model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] }),
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,
@@ -421,8 +446,8 @@ async function postReview(
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== 'nit').length,
     summaryUrl: o.dryRun ? '' : (summary?.html_url ?? ''),
-    model: [models.main, ...models.subagents].join(', '),
-    effort: choice.effort,
+    model: useModel ? [models.main, ...models.subagents].join(', ') : 'none',
+    effort: useModel ? choice.effort : 'none',
     tokens: result.tokens,
     costUsd: result.costUsd,
     bySeverity: {

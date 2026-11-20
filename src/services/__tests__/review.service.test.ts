@@ -489,7 +489,7 @@ test('with checklists, only those whose paths match run: their steps after the d
   expect(outcome.output.checks).toEqual([
     { key: 'correctness', label: 'The correctness list', state: 'failed' },
     { key: 'migrations', label: 'The migrations list', state: 'not_checked', reason: 'No matching files changed' },
-    { key: 'secrets', label: 'The secrets list', state: 'not_checked', reason: "Script checklists don't run in this version of the action yet" },
+    { key: 'secrets', label: 'The secrets list', state: 'not_checked', reason: "This version of the action doesn't have this checklist's script yet" },
     { key: 'own-1', label: 'The own-1 list', state: 'not_checked' },
   ]);
   expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'] }]);
@@ -521,4 +521,37 @@ test('when no checklist matches, no model runs: a short summary and a skipped ch
 test('with merge gates, the model runs even when no checklist matches, so a gate is never passed unjudged', async () => {
   const { run } = await review([file('assets/logo.png')], { checklists: CHECKLISTS.slice(0, 2), open: OPEN, gates: ['Docs are updated'] });
   expect(run.steps).toEqual([]);
+});
+
+const KEY = ['AKIA', 'Q3VJ7RZ2K5WMT8PL'].join('');
+const SECRETS = { ...checklist('secrets', ['**'], 'script'), prestep: 'secrets' };
+
+test('with only script checklists to run, no model is called: the script findings go inline, in the summary and in their check run', async () => {
+  const { outcome, summary } = await review([file('src/a.ts', `@@ -1 +1,2 @@\n a\n+const key = '${KEY}';`)], { checklists: [SECRETS, checklist('migrations', ['**/migrations/**'])], open: OPEN });
+  expect(runs).toHaveLength(0);
+  expect(outcome).toMatchObject({ verdict: 'blocking', findings: 1, model: 'none', effort: 'none', costUsd: 0 });
+  expect(outcome.output.passes).toEqual([]);
+  expect(outcome.output.checks.map((c) => `${c.key}:${c.state}`)).toEqual(['secrets:failed', 'migrations:not_checked']);
+  expect(outcome.output.findings).toEqual([expect.objectContaining({ severity: 'blocking', check: 'secrets', file: 'src/a.ts', line: 2, title: 'Possible AWS access key in an added line', inline: true })]);
+  expect(logs).toContain('Would post the Axon Shaft / secrets check: failure');
+  expect(logs.some((l) => l.startsWith('--- inline comment on src/a.ts:2'))).toBe(true);
+  expect(summary).toContain('Only script checklists ran (The secrets list), so no model was called.');
+  expect(summary).toContain('no model call · scripts only · secrets</sub>');
+  expect(summary).not.toContain('What this PR does');
+  expect(logs.join('\n')).not.toContain(KEY);
+});
+
+test('script checklists stay out of the prompt and the schema, and their findings raise the verdict the model gave', async () => {
+  const { prompt, run, outcome } = await review([file('src/a.ts', `@@ -1 +1,2 @@\n a\n+const key = '${KEY}';`)], { checklists: [checklist('correctness', ['**/*.ts']), SECRETS], open: OPEN });
+  expect(run.steps).toEqual(['correctness']);
+  expect(prompt).not.toContain('**secrets.**');
+  expect(outcome.verdict).toBe('blocking');
+  expect(outcome.output.checks.map((c) => `${c.key}:${c.state}`)).toEqual(['correctness:passed', 'secrets:failed']);
+  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness'] }]);
+});
+
+test('a script checklist with no findings passes', async () => {
+  const { outcome } = await review([file('src/a.ts')], { checklists: [SECRETS], open: OPEN });
+  expect(outcome).toMatchObject({ verdict: 'looks-good', findings: 0 });
+  expect(outcome.output.checks).toEqual([{ key: 'secrets', label: 'The secrets list', state: 'passed' }]);
 });
