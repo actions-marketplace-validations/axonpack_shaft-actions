@@ -22,7 +22,7 @@ const walkthrough: Walkthrough = {
   ],
   diagram: 'flowchart LR\n  A[upload] --> B{failed?}\n  B -->|yes| A',
 };
-const info = { sha: 'abc1234', repo: 'acme/widgets', models: 'claude-haiku-4', effort: 'low', reason: '3 lines' };
+const info = { sha: 'abc1234', repo: 'acme/widgets', models: { main: 'claude-haiku-4', subagents: [] }, effort: 'low', reason: '3 lines' };
 
 test('the schema keeps walkthrough optional, with its limits', () => {
   expect(SCHEMA.required).not.toContain('walkthrough');

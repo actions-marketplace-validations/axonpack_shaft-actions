@@ -282,7 +282,7 @@ test("a bare /fix asks for the last review's open findings; an answer with no ch
   await runTask(options({ ask: { id: 3, text: '/fix' }, bare: true }));
   expect(sessions[0]!.prompt).toContain('Fix these open findings from the last review (severity, place, title):\n\n- blocking `src/retry.ts:4` Retries forever');
   expect(remote('pr')).toBe(before);
-  expect(fake.posted[0]).toMatch(/^Nothing needed changing\.\n\n<sub>/);
+  expect(fake.posted[0]).toMatch(/^Nothing needed changing\.\n\n<details><summary><sub>/);
 });
 
 test('a bare /fix with no review, or a review with nothing open, starts no session and says so in one line', async () => {

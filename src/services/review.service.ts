@@ -240,6 +240,16 @@ async function postReview(
   // Script checklists' findings are their result: they never reach the model.
   const scripted = fired?.filter((c) => c.mode === 'script') ?? [];
   const modelled = fired?.filter((c) => c.mode !== 'script');
+  // What the footer says about the run, whichever way it goes.
+  const facts = {
+    sha,
+    repo: `${ctx.owner}/${ctx.repo}`,
+    runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
+    lines: files.reduce((n, f) => n + f.additions + f.deletions, 0),
+    files: files.length,
+    skipped,
+  };
   const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
@@ -261,7 +271,7 @@ async function postReview(
   // No checklist runs: no model call, unless merge gates need judging, since a gate is never passed by omission.
   if (planned && !fired!.length && !o.gates?.length) {
     const states = planned.map((c): CheckItem => ({ key: c.key, label: c.name, state: 'not_checked', reason: c.skip }));
-    const body = idleSummary(states, prior, { sha, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
+    const body = idleSummary(states, prior, { ...facts, checklists: planned });
     if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
     else await writeSummary(body);
     await postChecks(states, []);
@@ -391,26 +401,22 @@ async function postReview(
     }
   }
 
-  const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : { main: 'no model call', fellBack: false, subagents: [] };
+  const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : undefined;
   const body = renderSummary(review, placed, prior, {
-    sha,
-    repo: `${ctx.owner}/${ctx.repo}`,
+    ...facts,
     checks: o.checks,
     checklists: planned,
-    runUrl: o.runUrl,
-    dashboardRunUrl: o.dashboardRunUrl,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
-    models:
-      models.main +
-      (models.fellBack ? ` (${choice.model} unavailable)` : '') +
-      (models.subagents.length ? ` · subagents: ${models.subagents.join(', ')}` : ''),
-    effort: useModel ? choice.effort : 'scripts only',
-    reason: useModel ? choice.reason : scripted.map((c) => c.key).join(', '),
-    tokens: useModel ? result.tokens : undefined,
-    // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
-    costUsd: useModel && o.claude.kind === 'api_key' ? result.costUsd : undefined,
-    skipped,
+    ...(models && {
+      models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
+      effort: choice.effort,
+      reason: choice.reason,
+      maxTurns: choice.maxTurns,
+      tokens: result.tokens,
+      // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
+      costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
+    }),
   });
   if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
   else await writeSummary(body);
@@ -442,7 +448,7 @@ async function postReview(
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
     checks: states.slice(0, 40),
-    ...(modelled && { passes: useModel ? [{ name: 'main', model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] }),
+    ...(modelled && { passes: models ? [{ name: 'main', model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] }),
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,
@@ -463,7 +469,7 @@ async function postReview(
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== 'nit').length,
     summaryUrl: o.dryRun ? '' : (summary?.html_url ?? ''),
-    model: useModel ? [models.main, ...models.subagents].join(', ') : 'none',
+    model: models ? [models.main, ...models.subagents].join(', ') : 'none',
     effort: useModel ? choice.effort : 'none',
     tokens: result.tokens,
     costUsd: result.costUsd,

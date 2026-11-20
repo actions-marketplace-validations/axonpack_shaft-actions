@@ -24033,7 +24033,8 @@ function fillSlots(template, slots) {
 import { createHash } from "node:crypto";
 
 // src/utils/tokens.util.ts
-var billedTokens = (t) => Math.round(t.input + t.output + 1.25 * t.cache_write + 0.1 * t.cache_read);
+var CACHE_WEIGHT = { read: 0.1, write: 1.25 };
+var billedTokens = (t) => Math.round(t.input + t.output + CACHE_WEIGHT.write * t.cache_write + CACHE_WEIGHT.read * t.cache_read);
 
 // src/utils/render.util.ts
 var SUMMARY_MARKER = "<!-- shaft:summary -->";
@@ -24130,17 +24131,48 @@ function workflowEditUrl(workflowRef, defaultBranch) {
   return m && branch ? `https://github.com/${m[1]}/edit/${encodeURI(`${branch}/${m[2]}`)}` : undefined;
 }
 var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
-function usage(t, costUsd) {
-  const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
-  if (costUsd !== undefined)
-    return `$${costUsd.toFixed(2)} · ${total} tokens`;
-  const billed = formatTokens(billedTokens(t));
-  return billed === total ? `${total} tokens` : `≈${billed} billed (${total} with cache)`;
+function modelName(id) {
+  const m = /^claude-(opus|sonnet|haiku)-(\d+(?:-\d)?)(?:-\d{8})?$/.exec(id);
+  return m ? `Claude ${m[1].charAt(0).toUpperCase()}${m[1].slice(1)} ${m[2].replace("-", ".")}` : id;
 }
+var modelCell = (id) => modelName(id) === id ? `\`${id}\`` : `${modelName(id)} (\`${id}\`)`;
 function footer(f) {
-  const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
-  const t = f.tokens ? ` · ${usage(f.tokens, f.costUsd)}` : "";
-  return `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · ${f.models} · ${f.effort}${t} · ${f.reason}</sub>`;
+  const t = f.tokens;
+  const total = t && t.input + t.output + t.cache_read + t.cache_write;
+  const cost = f.costUsd === undefined ? "" : `$${f.costUsd.toFixed(2)}`;
+  const head = f.models ? `${modelName(f.models.main)}${f.effort ? `, ${f.effort} effort` : ""}` : "no model call";
+  const tail = [t && [`${formatTokens(total)} tokens`, cost].filter(Boolean).join(" · "), f.lines !== undefined && plural(f.lines, "line")].filter(Boolean).join(", ");
+  const ran = f.checklists?.filter((c) => !c.skip).map((c) => c.name) ?? [];
+  const notRun = f.checklists?.filter((c) => c.skip).map((c) => `${c.name} (${c.skip})`) ?? [];
+  const ref = process.env.GITHUB_ACTION_REF;
+  const rows = [
+    ["Axon Shaft", f.dashboardRunUrl ? `[Run page](${f.dashboardRunUrl})` : `[Dashboard](${DASHBOARD_URL})`],
+    ["Logs", f.runUrl && `[Actions run](${f.runUrl})`],
+    ["Action", `v${ACTION_VERSION}${ref ? ` at \`${ref}\`` : ""}`],
+    ["Model", f.models ? modelCell(f.models.main) : "No model call"],
+    ["Fallback", f.models?.fellBackFrom && `The plan can't use \`${f.models.fellBackFrom}\`, so the run used the model above`],
+    ["Subagents", f.models?.subagents.map(modelCell).join(", ")],
+    ["Effort", f.effort],
+    ["Why this model", f.reason],
+    ["Turn limit", f.maxTurns],
+    ["Changed lines", f.lines],
+    ["Changed files", f.files],
+    ["Skipped by `skip`", f.skipped && plural(f.skipped, "file")],
+    ["Checklists run", ran.join(", ")],
+    ["Checklists not run", notRun.join(", ")],
+    ["Input", t && formatTokens(t.input)],
+    ["Output", t && formatTokens(t.output)],
+    ["Cache read", t && formatTokens(t.cache_read)],
+    ["Cache write", t && formatTokens(t.cache_write)],
+    ["Total", t && formatTokens(total)],
+    ["Billed, cache-weighted", t && `≈${formatTokens(billedTokens(t))}`],
+    ["Cost", cost],
+    ["Reviewed commit", `[\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`]
+  ];
+  const table = ["| | |", "|---|---|", ...rows.filter(([, v]) => v !== undefined && v !== "" && v !== 0).map(([k, v]) => `| ${k} | ${cell(String(v))} |`)];
+  const note = t ? ["", `Billed counts a cache read as ${CACHE_WEIGHT.read} of an input token and a cache write as ${CACHE_WEIGHT.write}, so it can be higher than the total when a run writes a lot of cache.`] : [];
+  return details(`<sub>${[head, tail].filter(Boolean).join(" · ")}</sub>`, [...table, ...note].join(`
+`));
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
 var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
@@ -24222,14 +24254,13 @@ function startSummary(sha, prior) {
 `);
 }
 function idleSummary(states, prior, f) {
-  const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
   return [
     SUMMARY_MARKER,
     `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
     "",
     states.map(stateChip).join(" "),
     "",
-    `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · no model call</sub>`,
+    footer(f),
     ...prior ? [stateLine(prior)] : []
   ].join(`
 `);
@@ -60290,6 +60321,15 @@ async function postReview(ctx, o, canCheck, progress) {
   const fired = planned?.filter((c) => !c.skip);
   const scripted = fired?.filter((c) => c.mode === "script") ?? [];
   const modelled = fired?.filter((c) => c.mode !== "script");
+  const facts = {
+    sha,
+    repo: `${ctx.owner}/${ctx.repo}`,
+    runUrl: o.runUrl,
+    dashboardRunUrl: o.dashboardRunUrl,
+    lines: files.reduce((n, f) => n + f.additions + f.deletions, 0),
+    files: files.length,
+    skipped
+  };
   const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
@@ -60310,7 +60350,7 @@ async function postReview(ctx, o, canCheck, progress) {
   };
   if (planned && !fired.length && !o.gates?.length) {
     const states = planned.map((c) => ({ key: c.key, label: c.name, state: "not_checked", reason: c.skip }));
-    const body = idleSummary(states, prior, { sha, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
+    const body = idleSummary(states, prior, { ...facts, checklists: planned });
     if (o.dryRun)
       info(`--- summary comment
 ${clean(body)}`);
@@ -60429,22 +60469,21 @@ ${c.body}`);
         p.inline = false;
     }
   }
-  const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : { main: "no model call", fellBack: false, subagents: [] };
+  const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : undefined;
   const body = renderSummary(review, placed, prior, {
-    sha,
-    repo: `${ctx.owner}/${ctx.repo}`,
+    ...facts,
     checks: o.checks,
     checklists: planned,
-    runUrl: o.runUrl,
-    dashboardRunUrl: o.dashboardRunUrl,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
-    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
-    effort: useModel ? choice.effort : "scripts only",
-    reason: useModel ? choice.reason : scripted.map((c) => c.key).join(", "),
-    tokens: useModel ? result.tokens : undefined,
-    costUsd: useModel && o.claude.kind === "api_key" ? result.costUsd : undefined,
-    skipped
+    ...models && {
+      models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
+      effort: choice.effort,
+      reason: choice.reason,
+      maxTurns: choice.maxTurns,
+      tokens: result.tokens,
+      costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined
+    }
   });
   if (o.dryRun)
     info(`--- summary comment
@@ -60476,7 +60515,7 @@ ${clean(body)}`);
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? "" : summary?.html_url ?? "",
     checks: states.slice(0, 40),
-    ...modelled && { passes: useModel ? [{ name: "main", model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] },
+    ...modelled && { passes: models ? [{ name: "main", model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] },
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,
@@ -60496,7 +60535,7 @@ ${clean(body)}`);
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== "nit").length,
     summaryUrl: o.dryRun ? "" : summary?.html_url ?? "",
-    model: useModel ? [models.main, ...models.subagents].join(", ") : "none",
+    model: models ? [models.main, ...models.subagents].join(", ") : "none",
     effort: useModel ? choice.effort : "none",
     tokens: result.tokens,
     costUsd: result.costUsd,
@@ -60558,9 +60597,10 @@ function answerFooter(o, sha, choice, result) {
     repo: `${o.owner}/${o.repo}`,
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
-    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : ""),
+    models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: [] },
     effort: choice.effort,
     reason: choice.reason,
+    maxTurns: choice.maxTurns,
     tokens: result.tokens,
     costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined
   });

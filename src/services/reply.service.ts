@@ -99,9 +99,10 @@ export function answerFooter(
     repo: `${o.owner}/${o.repo}`,
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
-    models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : ''),
+    models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: [] },
     effort: choice.effort,
     reason: choice.reason,
+    maxTurns: choice.maxTurns,
     tokens: result.tokens,
     // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
     costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
