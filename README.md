@@ -12,7 +12,6 @@ Axon Shaft needs its dashboard. The action holds no settings and no prompt of it
 2. Sign in on [shaft.axonpack.dev](https://shaft.axonpack.dev), add the repo as a project, and save a Claude token for the repo or its account:
    - With a Pro or Max plan, save the output of `claude setup-token`.
    - With Console billing, save an API key.
-   - An OAuth token belongs to one person's plan, so a repo that several people use is better on an API key.
 3. Add `.github/workflows/shaft.yml`:
 
    ```yaml
