@@ -1,13 +1,17 @@
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-/** The path the file system will open: symlinks followed, so a link added by the PR can't lead out of the checkout. */
+/**
+ * The path the file system will open: symlinks followed, so a link added by the PR can't lead out
+ * of the checkout. A file that doesn't exist yet is resolved through its nearest folder that does.
+ */
 function real(path: string): string {
   try {
     return realpathSync(path);
   } catch {
-    return path;
+    const up = dirname(path);
+    return up === path ? path : join(real(up), basename(path));
   }
 }
 
@@ -44,7 +48,7 @@ export const isRepoCommand = (command: string, commands: string[]): boolean =>
  * and nothing else: never the runner's environment (`/proc/self/environ` holds the Claude token),
  * home, temp or tool folders. Bash runs only plain `git diff`, `git log` and `git show`.
  *
- * A task passes the repo's `commands`: it may also edit files in the checkout (never under `.git/`),
+ * A task passes the repo's `commands`: it may also edit files in the checkout (never under `.git/` or `.github/`),
  * and run `git status` and those commands, with the same checks on their words. Nothing else runs:
  * no `git commit` or `git push`, no `gh`, and no install beyond the repo's own.
  */
@@ -59,6 +63,8 @@ export function toolDenial(tool: string, input: Record<string, unknown>, cwd: st
     if (!commands) return 'This run only reads.';
     if (typeof input.file_path !== 'string' || outside(input.file_path)) return 'Only files in the checkout can be edited.';
     if (insideCheckout(resolve(cwd, input.file_path), resolve(cwd, '.git'))) return 'Nothing under .git/ can be edited.';
+    // The workflows run with the repo's secrets, and the commit may not change them either (`commitDenial`).
+    if (insideCheckout(resolve(cwd, input.file_path), resolve(cwd, '.github'))) return 'Nothing under .github/ can be edited.';
     return;
   }
   if (tool !== 'Bash') return;

@@ -162,30 +162,44 @@ What counts as a command:
 - The request is the comment. A bare `/fix` asks for the open findings of the last review, from its summary comment. With no review yet, or nothing open in the last one, it replies with one line saying so and starts no session.
 - The model works on the pull request's head commit. It makes the smallest change that does what was asked and runs the repo's tests and lint.
 - After the session, the action commits the change as `axonshaft[bot]`, with one plain line saying what changed, and pushes it to the pull request's branch.
+- The task needs a Linux runner. Its commands run in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox, which the action installs from the runner's Ubuntu archive when it's missing (`sudo apt-get install bubblewrap`, 0.6 or later). When the sandbox can't start, for example on macOS or on a runner without `sudo` or user namespaces, the session doesn't run: the reply and a notice say why, and the run ends with `sandbox_unavailable`.
 - The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed or Failed.
 - A request that only asks a question gets an answer, and nothing is committed.
-- With the model and effort on `auto`, it runs on `opus` at `high` effort. The session gets at most 40 minutes, whatever the time limit says, because the push token lasts an hour.
+- With the model and effort on `auto`, it runs on `opus` at `high` effort.
 - The dashboard gets the run with the model, the tokens and the reply.
 
 ### What a change is allowed to do
 
 - The model never gets a GitHub token. Its environment is the review's: the Claude token, the runner variables and the project's own Environment variables.
-- It can read, edit and create files inside the checkout, but nothing under `.git/`.
+- It can read, edit and create files inside the checkout, but nothing under `.git/` or `.github/`.
 - Its commands are `git diff`, `git log`, `git show`, `git status` and the repo's own commands, read from the checkout before the session:
   - the install for the lock file, such as `bun install --frozen-lockfile` or `npm ci`, exactly as written;
   - the `package.json` scripts and `make` targets named `test`, `lint`, `check`, `typecheck`, `types`, `tsc`, `build`, `format` or `fmt`, or starting with one of those and `:`, `-`, `_` or `.`, run through the package manager, with more words allowed after them;
   - `cargo test`, `check`, `clippy`, `fmt` and `build` when there's a `Cargo.toml`, and `go test`, `vet` and `build` when there's a `go.mod`.
 - Anything else is refused: `git commit`, `git push`, `gh`, installing a package by name, and shell operators.
+- Its commands and the action's own checks run in the sandbox:
+  - in a PID namespace with its own `/proc`, so they can't see or read the runner, the Claude Code CLI or the action, or their environment;
+  - with no-new-privs and no capabilities, so `sudo` and setuid programs don't work;
+  - with the whole system read-only, and the checkout the only folder they can write;
+  - with an empty home folder, `/tmp`, `/run` (which holds the Docker socket) and runner temp folder. Tools on the `PATH` under home stay, read-only;
+  - with the network on, for the install;
+  - and stopped when the action stops.
 - The project's Push mode decides where the commit may go, and the action checks it before the session starts:
   - Disabled: nothing is pushed.
   - Restricted (the default): only the pull request's own branch, and never a fork's.
   - Enabled: any branch, but the run still pushes only to the pull request's branch.
 - Nothing is ever pushed to the default branch, in any mode, and never with `--force`.
 - When the push can't happen, because Push mode is Disabled, the pull request comes from a fork or its branch is the default branch, the session doesn't run. The reply and a notice say why, and the run ends with `push_failed` on the dashboard.
-- Before pushing, the action runs the checks again itself, with the same environment: the commands the model listed, or the install, `test` and `lint` when it listed none. When one fails, nothing is pushed, and the reply names it and shows the end of its output.
-- The push token is a second token from the API with Contents write and nothing else. It's minted only for a task, only when Push mode isn't Disabled, and the action uses it only after the session has ended.
-- The push runs from a new repo the action makes, with only the commit copied in, so the checkout's git config and hooks never run next to the token. The commit runs with the checkout's hooks off, and neither it nor the checks get a token in their environment.
+- The commit holds the files the session changed, read before the checks run, with each file's executable bit, links kept as links, and deleted files removed. These can't be committed, and the whole change is refused with `push_failed` when it has one:
+  - anything under `.github/`, since workflows run with the repo's secrets;
+  - a path outside the checkout or under `.git/`;
+  - something that isn't a file or a link, such as a submodule.
+- A change to a `package.json`, a Makefile or a lock file is committed, and the reply lists those files under "Read before merging", because they decide what runs on install and in CI.
+- Before pushing, the action runs the checks again itself, with the same environment: the commands the model listed, or the install, `test` and `lint` when it listed none. When one fails, nothing is pushed, and the reply names it and shows the end of its output. Neither the session nor the checks may move HEAD off the pull request's head commit.
+- Only after the checks pass does the action ask the API for the push token (`POST /v1/push-token`), a token with Contents write and nothing else. The API reads the pull request from GitHub again, and refuses a fork's pull request, the default branch, Push mode Disabled and someone without write access.
+- The action pushes through GitHub's API, never with git: a blob for each file, a tree on the head commit's, the commit, and then the branch moves to it without force. No git process sees the token, and the action revokes it when the push is done, whether it worked or not.
 - When the push fails, for example because someone pushed to the branch during the run, the failure card goes in the reply and the step fails with `push_failed`.
+- Values of the project's Environment variables are masked in the job log, and those of 8 characters or more are replaced with `***` in the reply, check output included.
 
 ## Inputs
 
@@ -407,7 +421,8 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `review_timed_out` | The review, reply or task ran past the time limit set on the dashboard. The link opens the dashboard. |
 | `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
-| `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session, or GitHub refused the push. |
+| `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
+| `sandbox_unavailable` | A task couldn't start its sandbox on this runner, so no session ran. The message says why. |
 
 ### Runs that end with a notice
 
@@ -419,6 +434,8 @@ These end with a notice, and the step passes:
 - a `/review`, `/ask`, `/fix` or `/axonshaft` from someone without write access;
 - a `/ask`, `/fix` or `/axonshaft` on an issue;
 - a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
+- a bare `/fix` with nothing to fix (`nothing_to_fix`);
+- a `/fix` or `/axonshaft` on a runner that can't start the sandbox (`sandbox_unavailable`);
 - a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap.
 
 Any other error, such as GitHub's API failing, fails the step with that error's message.
@@ -478,6 +495,15 @@ bun run lint
 bun run typecheck
 bun run test
 bun run build   # writes dist/index.js, which is committed
+```
+
+The sandbox tests that start bubblewrap run only on Linux, and skip elsewhere with the reason. To run them from macOS, use a Linux container with bubblewrap and git, as a user other than root. It must be `--privileged`, because Docker's masked `/proc` stops bubblewrap from mounting its own:
+
+```sh
+docker run --rm --privileged -v "$PWD":/src:ro node:24-bookworm bash -c '
+  apt-get update -qq && apt-get install -y -qq bubblewrap git >/dev/null && npm i -g -s bun
+  cp -r /src /home/node/w && rm -rf /home/node/w/node_modules && chown -R node /home/node/w
+  su node -c "cd /home/node/w && bun install && bunx vitest run src/services/__tests__/sandbox.service.test.ts"'
 ```
 
 How the code is laid out and how files are named: [CONVENTIONS.md](CONVENTIONS.md).

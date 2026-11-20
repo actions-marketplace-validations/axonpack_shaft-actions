@@ -71,9 +71,11 @@ async function run(): Promise<void> {
     return core.notice(`${r.actor} has no write access, so ${what}.`);
   }
   reaction = await reactStart(octokit, context, dryRun);
-  const secrets = [grant.claude_token.value, grant.github_token, grant.push_token]
-    .filter((t): t is string => !!t)
-    .flatMap((t) => (t === grant.claude_token.value ? [t] : [t, Buffer.from(`x-access-token:${t}`).toString('base64')]));
+  // The project's own variables pass to the model's commands and the checks, so their values are
+  // masked in the log and taken out of anything posted, like the tokens.
+  const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
+  for (const v of envValues) core.setSecret(v);
+  const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64'), ...envValues];
   reportFailure = (e) =>
     reportRun({
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
@@ -120,7 +122,6 @@ async function run(): Promise<void> {
       bare: r.bare,
       template: job.prompt.template,
       pushMode: String(settings.pushMode),
-      pushToken: grant.push_token,
       repoUrl: `${context.serverUrl}/${owner}/${repo}`,
     });
     if (!('refused' in out)) {

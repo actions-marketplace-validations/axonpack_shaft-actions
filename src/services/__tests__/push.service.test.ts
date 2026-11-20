@@ -1,89 +1,116 @@
 import * as cp from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, expect, test, vi } from 'vitest';
+import { afterAll, beforeEach, expect, test, vi } from 'vitest';
 
-// Real git, with every command line, its folder and its environment recorded.
-const runs: { cwd: string; args: string[]; env?: NodeJS.ProcessEnv }[] = [];
-vi.doMock('node:child_process', () => ({
-  execFileSync: (file: string, args: string[], o: cp.ExecFileSyncOptions) => {
-    runs.push({ cwd: String(o.cwd), args, env: o.env });
-    return cp.execFileSync(file, args, o);
+vi.doMock('@actions/core', () => ({ warning: () => {} }));
+// The sandbox runs only on Linux (sandbox.service.test.ts): here git runs as it would inside it.
+vi.doMock('../sandbox.service', () => ({ inSandbox: (cwd: string, file: string, args: string[], o: cp.ExecFileSyncOptions) => cp.execFileSync(file, args, { ...o, cwd }) }));
+/** GitHub's Git Data API, faked: every call in order, and an `updateRef` that can be made to fail. */
+const calls: [string, Record<string, unknown>][] = [];
+let refFails = false;
+vi.doMock('@actions/github', () => ({
+  getOctokit: (token: string) => {
+    const call = (name: string, data: object) => async (args: Record<string, unknown> = {}) => {
+      calls.push([name, { ...args, token }]);
+      if (name === 'updateRef' && refFails) throw new Error('Update is not a fast forward');
+      return { data };
+    };
+    return {
+      rest: {
+        git: {
+          getCommit: call('getCommit', { tree: { sha: 'base-tree' } }),
+          createBlob: call('createBlob', { sha: `blob-${calls.length}` }),
+          createTree: call('createTree', { sha: 'new-tree' }),
+          createCommit: call('createCommit', { sha: 'c0ffee' }),
+          updateRef: call('updateRef', {}),
+        },
+        apps: { revokeInstallationAccessToken: call('revoke', {}) },
+      },
+    };
   },
 }));
-vi.doMock('@actions/core', () => ({ setSecret: () => {} }));
-const { pushBranch } = await import('../push.service');
+const { pushChanges, readChanges } = await import('../push.service');
 
 const git = (cwd: string, ...args: string[]) =>
   cp.execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' }).trim();
 
-/** The repo on GitHub: main, and the pull request's branch `pr`. */
 const dir = mkdtempSync(join(tmpdir(), 'shaft-push-test-'));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
-const origin = join(dir, 'origin');
-cp.execFileSync('git', ['init', '-q', '-b', 'main', origin]);
-git(origin, 'commit', '-q', '--allow-empty', '-m', 'main 1');
-git(origin, 'checkout', '-q', '-b', 'pr');
-git(origin, 'commit', '-q', '--allow-empty', '-m', 'pr 1');
-git(origin, 'checkout', '-q', 'main');
-
-const token = 'ghs_grant';
-const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
-const leaks = (text: string) => text.includes(token) || text.includes(basic);
-
-test("a push copies HEAD into a repo the action made and pushes from there, so the checkout's hooks and config never see the token", () => {
-  for (const [name, clone] of [
-    ['push-full', []],
-    ['push-shallow', ['--depth', '1', '--branch', 'pr']],
-  ] as const) {
-    const work = join(dir, name);
-    cp.execFileSync('git', ['clone', '-q', ...clone, `file://${origin}`, work]);
-    git(work, 'checkout', '-q', '-B', 'pr', 'origin/pr');
-    git(work, 'commit', '-q', '--allow-empty', '-m', `${name} fix`);
-    // What the model could leave behind: a hook in .git/hooks and one in a hooksPath of its own.
-    const marker = join(dir, `${name}-hook-ran`);
-    const hook = `#!/bin/sh\nenv > ${marker}\n`;
-    for (const hooks of [join(work, '.git', 'hooks'), join(work, 'evil-hooks')]) {
-      mkdirSync(hooks, { recursive: true });
-      writeFileSync(join(hooks, 'pre-push'), hook);
-      chmodSync(join(hooks, 'pre-push'), 0o755);
-    }
-    git(work, 'config', 'core.hooksPath', join(work, 'evil-hooks'));
-    const temp = join(dir, `${name}-temp`);
-    mkdirSync(temp);
-    process.env.RUNNER_TEMP = temp;
-    runs.length = 0;
-
-    pushBranch(work, token, 'restricted', { branch: 'pr', pullBranch: 'pr', defaultBranch: 'main' }, `file://${origin}`);
-
-    expect(git(origin, 'rev-parse', 'refs/heads/pr')).toBe(git(work, 'rev-parse', 'HEAD'));
-    expect(existsSync(marker)).toBe(false);
-    expect(readdirSync(temp)).toEqual([]); // the action's repo is removed
-    // The token is on one command line, run in the action's repo, never in the checkout or its config.
-    const withToken = runs.filter((r) => leaks(r.args.join(' ')));
-    expect(withToken.map((r) => r.args.slice(2, 3).concat(r.args.slice(-1)))).toEqual([['push', 'refs/heads/pr:refs/heads/pr']]);
-    expect(withToken[0]!.cwd).not.toBe(work);
-    const fromCheckout = runs.filter((r) => r.cwd === work);
-    expect(fromCheckout).toHaveLength(1);
-    expect(fromCheckout[0]!.args.slice(0, 2)).toEqual(['-c', 'core.hooksPath=/dev/null']);
-    expect(Object.keys(fromCheckout[0]!.env!).every((k) => !/TOKEN|ACTIONS_|INPUT_/.test(k))).toBe(true);
-    expect(leaks(readFileSync(join(work, '.git', 'config'), 'utf8'))).toBe(false);
-  }
+let work = '';
+let n = 0;
+beforeEach(() => {
+  work = join(dir, `work-${++n}`);
+  mkdirSync(work);
+  git(work, 'init', '-q', '-b', 'pr');
+  writeFileSync(join(work, 'edit.ts'), 'a');
+  writeFileSync(join(work, 'gone.ts'), 'a');
+  git(work, 'add', '.');
+  git(work, 'commit', '-q', '-m', 'pr 1');
+  calls.length = 0;
+  refFails = false;
 });
 
-test('a rewritten history is refused, never forced, and a push the mode forbids runs no git at all', () => {
-  const work = join(dir, 'push-full');
-  const before = git(origin, 'rev-parse', 'refs/heads/pr');
-  git(work, 'commit', '-q', '--amend', '--allow-empty', '-m', 'rewritten');
-  expect(() => pushBranch(work, token, 'enabled', { branch: 'pr', pullBranch: 'pr', defaultBranch: 'main' }, `file://${origin}`)).toThrow(
-    expect.objectContaining({ code: 'push_failed', message: expect.stringMatching(/The push to pr failed: .*rejected/s) }),
-  );
-  expect(git(origin, 'rev-parse', 'refs/heads/pr')).toBe(before);
-  expect(runs.some((r) => r.args.some((a) => a === '--force' || a.startsWith('+')))).toBe(false);
+test('the changes keep each file\'s executable bit, a link as a link, and a deletion as no mode', () => {
+  writeFileSync(join(work, 'edit.ts'), 'b');
+  unlinkSync(join(work, 'gone.ts'));
+  mkdirSync(join(work, 'bin'));
+  writeFileSync(join(work, 'bin', 'run'), '#!/bin/sh\n');
+  chmodSync(join(work, 'bin', 'run'), 0o755);
+  symlinkSync('../edit.ts', join(work, 'bin', 'link'));
+  const changes = readChanges(work, git(work, 'rev-parse', 'HEAD'));
+  expect(changes.sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+    { path: 'bin/link', mode: '120000', content: Buffer.from('../edit.ts') },
+    { path: 'bin/run', mode: '100755', content: Buffer.from('#!/bin/sh\n') },
+    { path: 'edit.ts', mode: '100644', content: Buffer.from('b') },
+    { path: 'gone.ts' },
+  ]);
+});
 
-  runs.length = 0;
-  expect(() => pushBranch(work, token, 'restricted', { branch: 'main', pullBranch: 'pr', defaultBranch: 'main' }, `file://${origin}`)).toThrow(/default branch/);
-  expect(() => pushBranch(work, token, 'disabled', { branch: 'pr', pullBranch: 'pr', defaultBranch: 'main' }, `file://${origin}`)).toThrow(/turned off/);
-  expect(runs).toEqual([]);
+test('a change under .github/, or a HEAD the run moved, is refused before anything is pushed', () => {
+  const base = git(work, 'rev-parse', 'HEAD');
+  mkdirSync(join(work, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(work, '.github', 'workflows', 'ci.yml'), 'on: push');
+  expect(() => readChanges(work, base)).toThrow(expect.objectContaining({ code: 'push_failed', message: expect.stringContaining('.github/workflows/ci.yml') }));
+  rmSync(join(work, '.github'), { recursive: true });
+  git(work, 'commit', '-q', '--allow-empty', '-m', 'a check committed');
+  expect(() => readChanges(work, base)).toThrow(/moved HEAD/);
+});
+
+const request = {
+  owner: 'acme',
+  repo: 'widgets',
+  branch: 'pr',
+  base: 'abc123',
+  message: 'Retry three times',
+  author: { name: 'axonshaft[bot]', email: '4242+axonshaft[bot]@users.noreply.github.com' },
+  changes: [
+    { path: 'bin/run', mode: '100755' as const, content: Buffer.from('#!/bin/sh\n') },
+    { path: 'bin/link', mode: '120000' as const, content: Buffer.from('../edit.ts') },
+    { path: 'gone.ts' },
+  ],
+};
+
+test('the push is blobs, a tree on the base commit\'s, the commit as the bot, then the ref never forced, and the token is revoked', async () => {
+  expect(await pushChanges('ghs_push', request)).toBe('c0ffee');
+  expect(calls.map(([name]) => name)).toEqual(['getCommit', 'createBlob', 'createBlob', 'createTree', 'createCommit', 'updateRef', 'revoke']);
+  expect(calls.every(([, a]) => a.token === 'ghs_push')).toBe(true);
+  expect(calls[1]![1]).toMatchObject({ content: Buffer.from('#!/bin/sh\n').toString('base64'), encoding: 'base64' });
+  expect(calls[3]![1]).toMatchObject({
+    base_tree: 'base-tree',
+    tree: [
+      { path: 'bin/run', mode: '100755', type: 'blob', sha: expect.stringMatching(/^blob-/) },
+      { path: 'bin/link', mode: '120000', type: 'blob', sha: expect.stringMatching(/^blob-/) },
+      { path: 'gone.ts', mode: '100644', type: 'blob', sha: null },
+    ],
+  });
+  expect(calls[4]![1]).toMatchObject({ message: 'Retry three times', tree: 'new-tree', parents: ['abc123'], author: request.author });
+  expect(calls[5]![1]).toMatchObject({ ref: 'heads/pr', sha: 'c0ffee', force: false });
+});
+
+test('a branch that moved during the run is refused by GitHub, never forced, and the token is still revoked', async () => {
+  refFails = true;
+  await expect(pushChanges('ghs_push', request)).rejects.toMatchObject({ code: 'push_failed', message: 'The push to pr failed: Update is not a fast forward' });
+  expect(calls.at(-1)![0]).toBe('revoke');
 });

@@ -60,8 +60,6 @@ export type Grant =
   | {
       run: true;
       github_token: string;
-      /** A task's, when the project lets it push: Contents write only, for `pushBranch` after the session. */
-      push_token?: string;
       claude_token: ClaudeToken;
       /**
        * The dashboard's settings for this repo, already merged with the account's and the defaults.
@@ -126,22 +124,23 @@ async function post(path: string, body: unknown): Promise<Response> {
   }
 }
 
+/** The answer's JSON, or the API's error as a `ShaftFailure`: `{ error, message, url? }`, else something in front of the API answered. */
+async function answer(res: Response): Promise<unknown> {
+  const body = await res.json().catch(() => undefined);
+  if (res.ok) return body;
+  if (typeof body?.error === 'string' && typeof body.message === 'string') {
+    throw new ShaftFailure(body.error, body.message, typeof body.url === 'string' ? body.url : undefined);
+  }
+  throw new ShaftFailure('api_error', `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
+}
+
 /**
  * Whether to run, and this repo's GitHub token, Claude token, settings and job from the Axon Shaft API.
  * Both tokens are masked. It also sends this build's version and the ref the workflow runs it at
  * (`v1`, `v1.5.0`, a branch or a SHA), so the API can say when a newer release is out.
  */
 export async function fetchGrant(request: GrantRequest): Promise<Grant> {
-  const res = await post('/v1/token', { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } });
-  const body = await res.json().catch(() => undefined);
-  if (!res.ok) {
-    // The API's errors are `{ error, message, url? }`; anything else came from something in front of it.
-    if (typeof body?.error === 'string' && typeof body.message === 'string') {
-      throw new ShaftFailure(body.error, body.message, typeof body.url === 'string' ? body.url : undefined);
-    }
-    throw new ShaftFailure('api_error', `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
-  }
-  const grant = body as Grant | undefined;
+  const grant = (await answer(await post('/v1/token', { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }))) as Grant | undefined;
   if (grant?.run === false) {
     if (typeof grant.github_token === 'string') core.setSecret(grant.github_token);
     return grant;
@@ -151,6 +150,23 @@ export async function fetchGrant(request: GrantRequest): Promise<Grant> {
   }
   core.setSecret(grant.github_token);
   core.setSecret(grant.claude_token.value);
+  return grant;
+}
+
+/** What `POST /v1/push-token` returns: a token with Contents write only, and the pull request's branch as GitHub has it. */
+export type PushGrant = { push_token: string; branch: string };
+
+/**
+ * A task's push token, asked for only once its checks have passed. The API reads the run's pull
+ * request from GitHub again and refuses a fork's, the default branch and someone without write
+ * access, with `push_failed`. The token is masked.
+ */
+export async function fetchPushToken(): Promise<PushGrant> {
+  const grant = (await answer(await post('/v1/push-token', {}))) as PushGrant | undefined;
+  if (typeof grant?.push_token !== 'string' || typeof grant.branch !== 'string') {
+    throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.');
+  }
+  core.setSecret(grant.push_token);
   return grant;
 }
 

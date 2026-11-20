@@ -9,6 +9,7 @@ const notices: string[] = [];
 const infos: string[] = [];
 const warnings: string[] = [];
 let dryRun = false;
+const masked: string[] = [];
 let jobSummary = '';
 let finished = false;
 vi.doMock('@actions/core', () => ({
@@ -21,7 +22,7 @@ vi.doMock('@actions/core', () => ({
     return dryRun;
   },
   setFailed: (m: string) => failed.push(m),
-  setSecret: () => {},
+  setSecret: (s: string) => masked.push(s),
   getIDToken: async () => 'oidc',
   info: (m: string) => infos.push(m),
   notice: (m: string) => notices.push(m),
@@ -125,6 +126,7 @@ const api = (token: Response) =>
 
 /** Run the action once and wait for it to record the run, fail or end with a notice. A failure's job summary is written in the same tick as `setFailed`. */
 async function main() {
+  finished = false;
   vi.resetModules();
   await import('../main');
   await vi.waitFor(() => expect(finished || failed.length > 0 || notices.length > 0).toBe(true));
@@ -426,10 +428,12 @@ test('a failed /ask swaps the 👀 for 😕', async () => {
   await vi.waitFor(() => expect(reactions).toEqual([...SWAPPED, 'confused on 501']));
 });
 
-const taskGrant = { ...grant, push_token: 'ghs_push', settings: { ...grant.settings, pushMode: 'restricted' }, job: { type: 'task', version: 1, options: {}, checks: [], prompt: { template: '# Task {{request}}', passes: [] } } };
+const taskGrant = { ...grant, settings: { ...grant.settings, pushMode: 'restricted' }, job: { type: 'task', version: 1, options: {}, checks: [], prompt: { template: '# Task {{request}}', passes: [] } } };
 
-test('/fix asks for a task grant and runs it with the push token, which the reports never show, and reports its reply', async () => {
+test("/fix asks for a task grant with no push token, runs it with the project's variables masked and taken out of what it posts, and reports its reply", async () => {
   context.eventName = 'issue_comment';
+  process.env.NODE_OPTIONS = '--max-old-space-size=4096';
+  masked.length = 0;
   context.payload = comment;
   api(Response.json(taskGrant));
   await main();
@@ -442,11 +446,12 @@ test('/fix asks for a task grant and runs it with the push token, which the repo
     bare: false,
     template: '# Task {{request}}',
     pushMode: 'restricted',
-    pushToken: 'ghs_push',
     repoUrl: 'https://github.com/acme/widgets',
     env: ['NODE_OPTIONS'],
   });
-  expect(tasked!.secrets).toEqual(expect.arrayContaining(['ghs_push', Buffer.from('x-access-token:ghs_push').toString('base64')]));
+  expect(tasked).not.toHaveProperty('pushToken');
+  expect(tasked!.secrets).toEqual(expect.arrayContaining(['ghs_shaft', '--max-old-space-size=4096']));
+  expect(masked).toContain('--max-old-space-size=4096');
   expect(reported).toEqual({ model: 'claude-opus-5-5', effort: 'high', duration_ms: expect.any(Number), tokens, output: { answer: 'Fixed it.', comment_url: '' } });
 });
 

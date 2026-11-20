@@ -1,5 +1,5 @@
 import * as cp from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, expect, test, vi } from 'vitest';
@@ -16,6 +16,33 @@ vi.doMock('../agent.service', async (actual) => ({
     return { reply: session(options.cwd), models: [options.model], costUsd: 0.5, tokens: { input: 9000, output: 300, cache_read: 0, cache_write: 0 } };
   },
 }));
+// The sandbox runs only on Linux (sandbox.service.test.ts): here the commands run as they would inside it.
+let unsandboxed: string | undefined;
+vi.doMock('../sandbox.service', () => ({
+  prepareSandbox: () => unsandboxed,
+  inSandbox: (cwd: string, file: string, args: string[], o: cp.ExecFileSyncOptions) => cp.execFileSync(file, args, { ...o, cwd }),
+}));
+/** The push token is asked for only after the checks: each ask notes whether the check had run by then. */
+const asked: string[] = [];
+vi.doMock('../api.service', () => ({
+  fetchPushToken: async () => {
+    asked.push(existsSync(join(work, 'checked')) ? 'after the checks' : 'before the checks');
+    return { push_token: 'ghs_push', branch: 'pr' };
+  },
+}));
+/** What each push sends GitHub; it moves `pr` on the origin to a commit of the changes, as GitHub's API would. */
+const pushes: Record<string, unknown>[] = [];
+vi.doMock('../push.service', async (actual) => ({
+  ...(await actual<typeof import('../push.service')>()),
+  pushChanges: async (token: string, p: { branch: string; message: string; author: { name: string; email: string }; changes: { path: string }[] }) => {
+    pushes.push({ token, ...p });
+    const env = { ...process.env, GIT_AUTHOR_NAME: p.author.name, GIT_AUTHOR_EMAIL: p.author.email, GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
+    const tree = cp.execFileSync('git', ['rev-parse', `${p.branch}^{tree}`], { cwd: origin, encoding: 'utf8' }).trim();
+    const sha = cp.execFileSync('git', ['commit-tree', tree, '-p', p.branch, '-m', p.message], { cwd: origin, env, encoding: 'utf8' }).trim();
+    cp.execFileSync('git', ['update-ref', `refs/heads/${p.branch}`, sha], { cwd: origin });
+    return sha;
+  },
+}));
 const { checkList, runTask, TASK_FORMAT } = await import('../task.service');
 
 const git = (cwd: string, ...args: string[]) =>
@@ -28,7 +55,11 @@ const origin = join(dir, 'origin.git');
 cp.execFileSync('git', ['init', '-q', '-b', 'main', origin]);
 writeFileSync(join(origin, 'package.json'), JSON.stringify({ scripts: { test: 'node check.js', deploy: 'node deploy.js' } }));
 writeFileSync(join(origin, 'bun.lock'), '');
-writeFileSync(join(origin, 'check.js'), "if (require('fs').existsSync('broken')) { console.error('1 test failed: broken'); process.exit(1) }");
+writeFileSync(
+  join(origin, 'check.js'),
+  "const fs = require('fs'); fs.writeFileSync('checked', ''); if (fs.existsSync('broken')) { console.error('1 test failed: broken', process.env.PROJECT_SECRET); process.exit(1) }",
+);
+writeFileSync(join(origin, '.gitignore'), 'checked\n');
 git(origin, 'add', '.');
 git(origin, 'commit', '-q', '-m', 'main 1');
 git(origin, 'checkout', '-q', '-b', 'pr');
@@ -43,6 +74,9 @@ beforeEach(() => {
   process.env.RUNNER_TEMP = mkdtempSync(join(dir, 'temp-'));
   process.env.GITHUB_TOKEN = 'ghs_workflow';
   sessions.length = 0;
+  asked.length = 0;
+  pushes.length = 0;
+  unsandboxed = undefined;
 });
 
 /** A fake Octokit for PR 7 from `head` (in `headRepo`) into `main`, recording what's posted. */
@@ -110,7 +144,6 @@ const options = (o: object = {}) => ({
   dashboardRunUrl: 'https://shaft.axonpack.dev/console/acme/widgets/runs/3',
   cwd: work,
   pushMode: 'restricted',
-  pushToken: 'ghs_push',
   repoUrl: `file://${join(dir, 'origin')}`,
   ...o,
 });
@@ -120,18 +153,19 @@ const edits = (file: string) => (cwd: string) => {
   return { answer: 'Raised the retries to three in `src/retry.ts:1`.', commit_message: 'Retry failed uploads three times\nmore', checks: ['bun run test', 'git status', 'bun run deploy'] };
 };
 
-test('a change is committed as the bot, checked by our own run of its checks, pushed to the PR branch, and the reply says what changed', async () => {
+test('a change is checked by our own run of its checks, then pushed as the bot with a token asked for after them, and the reply says what changed', async () => {
   fake = octokit();
   session = edits('fix.txt');
   const before = remote('pr');
   const out = await runTask(options());
   expect(remote('pr')).not.toBe(before);
   expect(git(origin, 'log', '-1', '--format=%an <%ae>|%s', 'pr')).toBe('axonshaft[bot] <4242+axonshaft[bot]@users.noreply.github.com>|Retry failed uploads three times');
-  expect(git(origin, 'show', '--name-only', '--format=', 'pr')).toBe('fix.txt');
+  expect(pushes).toEqual([expect.objectContaining({ token: 'ghs_push', branch: 'pr', base: before, changes: [{ path: 'fix.txt', mode: '100644', content: Buffer.from('x') }] })]);
+  expect(asked).toEqual(['after the checks']);
   expect(remote('main')).toBe(git(origin, 'rev-parse', 'main'));
-  // The session got the repo's commands, the request and a 40-minute cap, and no GitHub token at all.
+  // The session got the repo's commands, the request and the time limit, and no GitHub token at all.
   const [{ prompt, options: o }] = sessions;
-  expect(o).toMatchObject({ commands: ['bun install --frozen-lockfile', 'bun run test'], timeoutMinutes: 40, cwd: work });
+  expect(o).toMatchObject({ commands: ['bun install --frozen-lockfile', 'bun run test'], timeoutMinutes: 90, cwd: work });
   expect(prompt).toContain('/fix retry three times');
   expect(prompt).toContain('- `bun run test`');
   expect(JSON.stringify(o)).not.toMatch(/ghs_/);
@@ -144,18 +178,47 @@ test('a change is committed as the bot, checked by our own run of its checks, pu
   expect(out).toMatchObject({ model: 'opus', effort: 'high', output: { comment_url: 'https://github.com/acme/widgets/pull/7#issuecomment-9' } });
 });
 
-test('when a check fails nothing is pushed, and the reply names the check and shows its output', async () => {
+test("when a check fails no push token is asked for, and the reply names the check and shows its output without the project's values", async () => {
   fake = octokit();
   session = edits('broken');
+  process.env.PROJECT_SECRET = 'project-secret-value';
   const before = remote('pr');
-  await runTask(options());
+  await runTask(options({ env: ['PROJECT_SECRET'], secrets: ['sk-ant-oat-secret', 'project-secret-value'] }));
   expect(remote('pr')).toBe(before);
+  expect(asked).toEqual([]);
   expect(fake.posted[0]).toContain('Nothing was pushed, because a check failed.');
   expect(fake.posted[0]).toContain('| `bun run test` | Failed |');
-  expect(fake.posted[0]).toContain('1 test failed: broken');
+  expect(fake.posted[0]).toContain('1 test failed: broken ***');
+  expect(fake.posted[0]).not.toContain('project-secret-value');
 });
 
-test("a fork's PR, the default branch, push mode Disabled or no push token: nothing runs or is pushed, and the reply says why", async () => {
+test('a change under .github/ is refused before the checks; one to package scripts or a lock file is flagged in the reply', async () => {
+  fake = octokit();
+  session = (cwd) => {
+    mkdirSync(join(cwd, '.github'));
+    writeFileSync(join(cwd, '.github', 'ci.yml'), 'on: push');
+    return { answer: 'Done.', commit_message: 'Add CI', checks: [] };
+  };
+  await expect(runTask(options())).rejects.toMatchObject({ code: 'push_failed' });
+  expect(fake.posted[0]).toContain('never commits anything under .github/');
+  expect(asked).toEqual([]);
+
+  rmSync(join(work, '.github'), { recursive: true });
+  fake = octokit();
+  session = edits('bun.lock');
+  await runTask(options());
+  expect(fake.posted[0]).toContain('**Read before merging:** `bun.lock` decides what runs on install and in CI.');
+});
+
+test("a runner that can't start the sandbox runs no session, and the reply says why", async () => {
+  fake = octokit();
+  unsandboxed = 'A change needs a Linux runner, for its sandbox. This one runs darwin.';
+  expect(await runTask(options())).toEqual({ refused: unsandboxed, code: 'sandbox_unavailable' });
+  expect(fake.posted[0]).toMatch(/errors\/sandbox_unavailable\.svg/);
+  expect(sessions).toEqual([]);
+});
+
+test("a fork's PR, the default branch or push mode Disabled: nothing runs or is pushed, and the reply says why", async () => {
   session = edits('fix.txt');
   const before = remote('pr');
   for (const [o, why] of [
@@ -163,7 +226,6 @@ test("a fork's PR, the default branch, push mode Disabled or no push token: noth
     [{ fake: octokit('main') }, 'Axon Shaft never pushes to the default branch, main.'],
     [{ fake: octokit('main'), pushMode: 'enabled' }, 'Axon Shaft never pushes to the default branch, main.'],
     [{ fake: octokit(), pushMode: 'disabled' }, 'Pushing is turned off for this project.'],
-    [{ fake: octokit(), pushToken: undefined }, 'The Axon Shaft API sent no push token.'],
   ] as const) {
     fake = o.fake;
     const out = await runTask(options({ ...o, fake: undefined }));

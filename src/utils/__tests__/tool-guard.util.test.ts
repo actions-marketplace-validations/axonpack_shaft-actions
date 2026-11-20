@@ -51,14 +51,15 @@ test('Bash: --no-index, --output, external diff tools, outside paths and shell o
   }
 });
 
-test("a task: edits stay in the checkout and out of .git/; Bash adds git status and the repo's commands, with more words except after an install", () => {
+test("a task: edits stay in the checkout and out of .git/ and .github/; Bash adds git status and the repo's commands, with more words except after an install", () => {
   const commands = ['bun install --frozen-lockfile', 'bun run test', 'make lint'];
   const task = (tool: string, input: object) => toolDenial(tool, input as Record<string, unknown>, cwd, commands);
   for (const ok of ['src/a.ts', 'src/new.ts', join(cwd, 'src/a.ts')]) {
     expect(task('Edit', { file_path: ok }), ok).toBeUndefined();
     expect(task('Write', { file_path: ok }), ok).toBeUndefined();
   }
-  for (const bad of ['.git/config', '.git/hooks/pre-commit', join(cwd, '.git/HEAD'), '../x.ts', '/etc/passwd', 'hosts', '~/.bashrc']) expect(task('Write', { file_path: bad }), bad).toBeDefined();
+  for (const bad of ['.git/config', '.git/hooks/pre-commit', join(cwd, '.git/HEAD'), '../x.ts', '/etc/passwd', 'hosts', '~/.bashrc', '.github/workflows/ci.yml', join(cwd, '.github/x')])
+    expect(task('Write', { file_path: bad }), bad).toBeDefined();
   expect(toolDenial('Edit', { file_path: 'src/a.ts' }, cwd)).toBe('This run only reads.');
   for (const ok of ['git status', 'git diff', 'bun install --frozen-lockfile', 'bun run test', 'bun run test src/a.test.ts', 'make lint']) expect(task('Bash', { command: ok }), ok).toBeUndefined();
   for (const bad of [
