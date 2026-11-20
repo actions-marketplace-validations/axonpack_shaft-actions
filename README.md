@@ -319,7 +319,7 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
 - Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
 - When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
 
-The card's last line gives the kind of change (🏷️), the model's confidence (🎯) and the reviewed commit (🔎), linked to the commit on GitHub.
+The card's last line gives the kind of change, the model's confidence and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · 85% confidence · reviewed a1b2c3d`.
 
 ### Progress while the review runs
 

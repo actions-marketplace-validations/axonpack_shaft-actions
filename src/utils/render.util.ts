@@ -286,7 +286,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     '>',
     `> **Checks** &nbsp; ${checkChips.join(' ')}`,
     '>',
-    `> <sub>${[type && `🏷️ ${type}`, `🎯 ${review.confidence}% confidence`, `🔎 reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(' · ')}</sub>`,
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(' · ')}</sub>`,
   ].join('\n');
 }
 

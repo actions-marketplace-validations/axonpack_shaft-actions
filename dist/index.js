@@ -24183,7 +24183,7 @@ function card(review, placed, fixed, f) {
     ">",
     `> **Checks** &nbsp; ${checkChips.join(" ")}`,
     ">",
-    `> <sub>${[type && `\uD83C\uDFF7️ ${type}`, `\uD83C\uDFAF ${review.confidence}% confidence`, `\uD83D\uDD0E reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
   ].join(`
 `);
 }

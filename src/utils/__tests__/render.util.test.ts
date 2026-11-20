@@ -134,7 +134,7 @@ test('the summary format', () => {
 >
 > **Checks** &nbsp; <kbd>❌ Correctness</kbd> <kbd>✅ Breakage</kbd> <kbd>✅ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>✅ Docs</kbd> <kbd>✅ Security</kbd>
 >
-> <sub>🏷️ Bug fix · 🎯 85% confidence · 🔎 reviewed [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
+> <sub>Bug fix · 85% confidence · reviewed [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
 
 | Severity | Where | Finding | Details |
 |---|---|---|---|
