@@ -299,7 +299,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
   That setting can't add `GITHUB_TOKEN` or a name that starts with `ACTIONS_`, `INPUT_`, `ANTHROPIC_` or `CLAUDE_`.
   So the OIDC request token, the action's inputs, `GITHUB_TOKEN` and the GitHub token from the API are never there.
   The commands the model runs don't get the Claude token either.
-- The prompt has the PR's title, body, commits and diff, and only the comments of the repo's owners, members and collaborators. Comments from anyone else are left out.
+- The prompt has the PR's title, body, commits and diff, and only the comments of people inside the repo: its owners, members and collaborators, and anyone GitHub's permission check gives admin or write access, such as a teammate with access through an org team. The action asks that check once per commenter. Comments from anyone else are left out, and so are those of a commenter it couldn't check, with a warning in the job log.
 - Images are stripped from everything the model writes before it's posted, so an image URL can't carry data out.
 - The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments `axonshaft[bot]` wrote, so a copy posted by someone else is ignored.
 - Before anything is posted, the action replaces the tokens it holds with `***`. It masks every token in the job log.
@@ -363,7 +363,7 @@ The action fills the prompt's slots with the run's data and changes nothing else
 - the repo and pull request number;
 - the branches and head commit;
 - the title, author, body and commits;
-- the comments of the repo's owners, members and collaborators;
+- the comments of people inside the repo (see [What the review can do](#what-the-review-can-do));
 - the previous review's findings;
 - how many files `skip` left out;
 - the diff, with each `focus` file marked.

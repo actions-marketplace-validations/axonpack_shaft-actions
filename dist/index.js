@@ -58473,16 +58473,106 @@ ${JSON.stringify(raw, null, 2)}`);
   }
 }
 
+// src/services/route.service.ts
+var REVIEW_EVENTS = { opened: "opened", reopened: "opened", synchronize: "push", ready_for_review: "ready" };
+var REVIEW_COMMAND = "/review";
+function commandIn(text) {
+  const lines = text.replace(/```[\s\S]*?(```|$)/g, "").replace(/`[^`\n]*`/g, "").split(`
+`);
+  for (const line of lines) {
+    const m = /^\s*\/(review|fix|ask|help|axonshaft)(?![\w-])/.exec(line);
+    if (m && !line.trimStart().startsWith(">"))
+      return m[1] === "axonshaft" ? "prompt" : m[1];
+  }
+  return;
+}
+var isFork = (pr) => pr.head.repo?.full_name !== pr.base.repo.full_name;
+function route(eventName, payload) {
+  const pr = payload.pull_request;
+  const number = pr?.number ?? payload.issue?.number;
+  if (eventName === "pull_request" || eventName === "pull_request_target") {
+    const event = REVIEW_EVENTS[payload.action];
+    if (!event)
+      return { mode: "skip", reason: `${eventName} ${payload.action} is not reviewed.` };
+    if (eventName === "pull_request" && isFork(pr)) {
+      return { mode: "skip", reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, notice: true };
+    }
+    return { mode: "review", number: pr.number, event, fork: isFork(pr) };
+  }
+  const text = eventName === "issue_comment" || eventName === "pull_request_review_comment" ? payload.action === "created" && payload.comment?.body : eventName === "pull_request_review" ? payload.action === "submitted" && payload.review?.body : undefined;
+  const command = typeof text === "string" ? commandIn(text) : undefined;
+  if (typeof text !== "string" || !command)
+    return { mode: "skip", reason: `${eventName} has nothing for Axon Shaft.` };
+  if (payload.sender?.type === "Bot")
+    return { mode: "skip", reason: "Comments from bots are ignored." };
+  const actor = payload.sender.login;
+  const onPr = Boolean(pr || payload.issue?.pull_request);
+  if (command === "review" && onPr)
+    return { mode: "review", number, fork: pr ? isFork(pr) : undefined, actor };
+  if (command === "review")
+    return { mode: "skip", reason: "/review works on a pull request, not an issue.", notice: true };
+  if (command === "help")
+    return { mode: "help", number, actor };
+  if (command === "ask")
+    return { mode: "reply", number, actor };
+  return { mode: "task", number, actor };
+}
+function pullRequestOf(payload) {
+  const pr = payload.pull_request;
+  if (pr)
+    return {
+      number: pr.number,
+      title: pr.title,
+      branch: pr.head.ref,
+      author: pr.user.login,
+      base: pr.base.ref,
+      association: pr.author_association,
+      bot: pr.user.type === "Bot"
+    };
+  const issue = payload.issue;
+  if (issue?.pull_request)
+    return { number: issue.number, title: issue.title, author: issue.user.login };
+  return;
+}
+async function hasWriteAccess(octokit, owner, repo, username) {
+  const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
+  return data.permission === "admin" || data.permission === "write";
+}
+async function commentOnce(octokit, owner, repo, number, body, bot) {
+  const marker = body.slice(Math.max(0, body.lastIndexOf("<!--"))).trim();
+  const comments = await octokit.paginate(octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
+  if (comments.some((c) => c.user?.login === bot && c.body?.includes(marker)))
+    return;
+  await octokit.rest.issues.createComment({ owner, repo, issue_number: number, body });
+}
+
 // src/services/context.service.ts
-var comment = (c) => ({
+var toComment = (c, trusted) => ({
   id: c.id,
   author: c.user?.login ?? "ghost",
-  association: c.author_association ?? "NONE",
+  trusted,
   body: c.body ?? "",
   html_url: c.html_url,
   path: c.path,
   line: c.line
 });
+var INSIDE = ["OWNER", "MEMBER", "COLLABORATOR"];
+function insider(octokit, owner, repo) {
+  const asked = new Map;
+  return async (c) => {
+    if (INSIDE.includes(c.author_association))
+      return true;
+    const login = c.user?.login;
+    if (!login || c.user.type === "Bot")
+      return false;
+    if (!asked.has(login))
+      asked.set(login, hasWriteAccess(octokit, owner, repo, login).catch((e) => {
+        warning(`Couldn't check ${login}'s access to the repo, so their comments are left out of the review: ${e.message}`);
+        return false;
+      }));
+    return asked.get(login);
+  };
+}
 async function baseFile(octokit, owner, repo, ref, path) {
   try {
     const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ref, mediaType: { format: "raw" } });
@@ -58502,7 +58592,9 @@ async function collectContext(octokit, owner, repo, number, bot) {
     octokit.paginate(octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }),
     octokit.paginate(octokit.rest.pulls.listReviewComments, q)
   ]);
-  const comments = issueComments.map(comment);
+  const trusted = insider(octokit, owner, repo);
+  const comment = async (c) => toComment(c, await trusted(c));
+  const comments = await Promise.all(issueComments.map(comment));
   const summary = comments.find((c) => c.author === bot && c.body.startsWith(SUMMARY_MARKER));
   return {
     owner,
@@ -58519,7 +58611,7 @@ async function collectContext(octokit, owner, repo, number, bot) {
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),
     comments: comments.filter((c) => c !== summary),
-    reviewComments: reviewComments.map(comment),
+    reviewComments: await Promise.all(reviewComments.map(comment)),
     summary,
     guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter((g) => typeof g.text === "string" && !!g.text.trim())
   };
@@ -58588,7 +58680,6 @@ function step(name, fn) {
 // src/services/review.service.ts
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
 var MAX_DIFF = 200000;
-var TRUSTED = ["OWNER", "MEMBER", "COLLABORATOR"];
 function chosenModels(used, choice, deep) {
   const named = (want) => used.find((m) => m === want || m.includes(want));
   const fallbacks = choice.autoModel ? FALLBACK[choice.model]?.split(",") ?? [] : [];
@@ -58623,7 +58714,7 @@ ${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
   if (diff.length > MAX_DIFF)
     diff = `${diff.slice(0, MAX_DIFF)}
 (the diff is cut here; read the remaining files from the checkout)`;
-  const comments = [...ctx.comments, ...ctx.reviewComments].filter((c) => TRUSTED.includes(c.association)).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
+  const comments = [...ctx.comments, ...ctx.reviewComments].filter((c) => c.trusted).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
 `);
   const previous = prior?.findings.length ? `Findings from the review of \`${prior.sha.slice(0, 7)}\` (fingerprint, severity, place, title):
 
@@ -58821,79 +58912,6 @@ ${clean(body)}`);
       nit: placed.filter((p) => p.severity === "nit").length
     }
   };
-}
-
-// src/services/route.service.ts
-var REVIEW_EVENTS = { opened: "opened", reopened: "opened", synchronize: "push", ready_for_review: "ready" };
-var REVIEW_COMMAND = "/review";
-function commandIn(text) {
-  const lines = text.replace(/```[\s\S]*?(```|$)/g, "").replace(/`[^`\n]*`/g, "").split(`
-`);
-  for (const line of lines) {
-    const m = /^\s*\/(review|fix|ask|help|axonshaft)(?![\w-])/.exec(line);
-    if (m && !line.trimStart().startsWith(">"))
-      return m[1] === "axonshaft" ? "prompt" : m[1];
-  }
-  return;
-}
-var isFork = (pr) => pr.head.repo?.full_name !== pr.base.repo.full_name;
-function route(eventName, payload) {
-  const pr = payload.pull_request;
-  const number = pr?.number ?? payload.issue?.number;
-  if (eventName === "pull_request" || eventName === "pull_request_target") {
-    const event = REVIEW_EVENTS[payload.action];
-    if (!event)
-      return { mode: "skip", reason: `${eventName} ${payload.action} is not reviewed.` };
-    if (eventName === "pull_request" && isFork(pr)) {
-      return { mode: "skip", reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, notice: true };
-    }
-    return { mode: "review", number: pr.number, event, fork: isFork(pr) };
-  }
-  const text = eventName === "issue_comment" || eventName === "pull_request_review_comment" ? payload.action === "created" && payload.comment?.body : eventName === "pull_request_review" ? payload.action === "submitted" && payload.review?.body : undefined;
-  const command = typeof text === "string" ? commandIn(text) : undefined;
-  if (typeof text !== "string" || !command)
-    return { mode: "skip", reason: `${eventName} has nothing for Axon Shaft.` };
-  if (payload.sender?.type === "Bot")
-    return { mode: "skip", reason: "Comments from bots are ignored." };
-  const actor = payload.sender.login;
-  const onPr = Boolean(pr || payload.issue?.pull_request);
-  if (command === "review" && onPr)
-    return { mode: "review", number, fork: pr ? isFork(pr) : undefined, actor };
-  if (command === "review")
-    return { mode: "skip", reason: "/review works on a pull request, not an issue.", notice: true };
-  if (command === "help")
-    return { mode: "help", number, actor };
-  if (command === "ask")
-    return { mode: "reply", number, actor };
-  return { mode: "task", number, actor };
-}
-function pullRequestOf(payload) {
-  const pr = payload.pull_request;
-  if (pr)
-    return {
-      number: pr.number,
-      title: pr.title,
-      branch: pr.head.ref,
-      author: pr.user.login,
-      base: pr.base.ref,
-      association: pr.author_association,
-      bot: pr.user.type === "Bot"
-    };
-  const issue = payload.issue;
-  if (issue?.pull_request)
-    return { number: issue.number, title: issue.title, author: issue.user.login };
-  return;
-}
-async function hasWriteAccess(octokit, owner, repo, username) {
-  const { data } = await octokit.rest.repos.getCollaboratorPermissionLevel({ owner, repo, username });
-  return data.permission === "admin" || data.permission === "write";
-}
-async function commentOnce(octokit, owner, repo, number, body, bot) {
-  const marker = body.slice(Math.max(0, body.lastIndexOf("<!--"))).trim();
-  const comments = await octokit.paginate(octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
-  if (comments.some((c) => c.user?.login === bot && c.body?.includes(marker)))
-    return;
-  await octokit.rest.issues.createComment({ owner, repo, issue_number: number, body });
 }
 
 // src/main.ts
