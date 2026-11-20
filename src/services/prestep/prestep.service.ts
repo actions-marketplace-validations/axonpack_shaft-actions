@@ -9,12 +9,30 @@ import { osv } from './osv.service';
 import { prMeta } from './pr-meta.service';
 import { schemaPairs } from './schema-pairs.service';
 import { secrets } from './secrets.service';
+import { changeset } from './changeset.service';
+import { diffStats } from './diff-stats.service';
+import { docsTouched } from './docs-touched.service';
+import { flags } from './flags.service';
+import { logLines } from './log-lines.service';
+import { newFiles } from './new-files.service';
+import { testPairs } from './test-pairs.service';
+import { typeEscapes } from './type-escapes.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */
-export const FACTS: Record<string, Facts> = { 'deps-diff': depsDiffFacts };
+export const FACTS: Record<string, Facts> = {
+  'deps-diff': depsDiffFacts,
+  changeset,
+  'docs-touched': docsTouched,
+  'test-pairs': testPairs,
+  'new-files': newFiles,
+  'diff-stats': diffStats,
+  'log-lines': logLines,
+  flags,
+  'type-escapes': typeEscapes,
+};
 
 /**
  * The findings of each script checklist, under its key. Every checklist passed here has its script in
