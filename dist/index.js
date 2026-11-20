@@ -59536,13 +59536,54 @@ var imports = async ({ files, checkout }) => {
   return lines.some((l) => l.startsWith("- ")) ? capFacts(lines, "") : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? "" : "s"} checked).`;
 };
 
+// src/services/prestep/exports-diff.service.ts
+var STAR = /^\s*export\s+\*\s+(?:as\s+\w+\s+)?from\s+['"][^'"]+['"]/;
+var ENTRY = /^\s*"(?:version|main|module|types|typings|exports|bin)"\s*:/;
+var BUMP = /^\s*['"]?[^'":]+['"]?\s*:\s*(?:major|minor|patch)\s*$/;
+var short = (s) => {
+  const t = s.trim();
+  return t.length > 160 ? `${t.slice(0, 157)}...` : t;
+};
+function exported(lines) {
+  const out = new Map;
+  for (const [line, text] of lines)
+    for (const name of STAR.test(text) ? [short(text)] : exportNames(text))
+      if (!out.has(name))
+        out.set(name, { line, text: short(text) });
+  return out;
+}
+var exportsDiff = async ({ files }) => {
+  const lines = [];
+  for (const f of files) {
+    const added = diffLines(f.patch, true);
+    const removed = removedLines(f.patch);
+    let rows;
+    if (f.filename.endsWith("package.json")) {
+      rows = [...removed.filter((l) => ENTRY.test(l)).map((l) => `- before: ${short(l)}`), ...[...added].filter(([, l]) => ENTRY.test(l)).map(([n, l]) => `- after (line ${n}): ${short(l)}`)];
+    } else if (/(^|\/)\.changeset\/[^/]+\.md$/.test(f.filename)) {
+      rows = [...added].filter(([, l]) => BUMP.test(l)).map(([, l]) => `- bump ${short(l)}`);
+    } else {
+      const [was, now] = [exported(removed.map((l) => [undefined, l])), exported(added)];
+      rows = [
+        ...[...was].filter(([n]) => !now.has(n)).map(([n, b]) => `- removed \`${n}\`: ${b.text}`),
+        ...[...now].filter(([n]) => was.has(n) && was.get(n).text !== now.get(n).text).map(([n, a]) => `- changed \`${n}\` (line ${a.line}): ${was.get(n).text} -> ${a.text}`),
+        ...[...now].filter(([n]) => !was.has(n)).map(([n, a]) => `- added \`${n}\` (line ${a.line}): ${a.text}`)
+      ];
+    }
+    if (rows.length)
+      lines.push(`${f.filename}:`, ...rows);
+  }
+  return capFacts(lines, "The pull request changes no exported name, no package entry point or version, and no changeset bump.");
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
 var FACTS = {
   "deps-diff": depsDiffFacts,
   callers,
   unused,
-  imports
+  imports,
+  "exports-diff": exportsDiff
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
