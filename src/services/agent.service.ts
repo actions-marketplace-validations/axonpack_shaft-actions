@@ -83,6 +83,23 @@ export const SCHEMA = {
 };
 
 /**
+ * `SCHEMA` with `steps` as the step keys the reply may use, for a job with checklists. With none (a run
+ * for the merge gates alone), `step` is any string: an empty `enum` isn't a schema.
+ */
+export function reviewSchema(steps: string[]) {
+  const step = steps.length ? { enum: steps } : { type: 'string' };
+  const { findings, checked } = SCHEMA.properties;
+  return {
+    ...SCHEMA,
+    properties: {
+      ...SCHEMA.properties,
+      findings: { ...findings, items: { ...findings.items, properties: { ...findings.items.properties, step } } },
+      checked: { ...checked, items: step },
+    },
+  };
+}
+
+/**
  * The walkthrough as it may be posted, or nothing when it's malformed or over the limits: it's
  * extra, so a bad one never fails the review. A diagram that isn't a flowchart, could close its
  * code block, or has a `click` link is left out.

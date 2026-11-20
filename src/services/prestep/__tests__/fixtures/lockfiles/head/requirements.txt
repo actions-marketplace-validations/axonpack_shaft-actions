@@ -1,0 +1,4 @@
+# the web app
+requests==2.31.0
+Flask[async]==3.0.0 ; python_version >= "3.9"
+-e git+https://github.com/acme/tool.git#egg=tool

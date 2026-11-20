@@ -63,14 +63,17 @@ export type State = { sha: string; findings: StateFinding[] };
 /** A finding after our code decided where it goes. */
 export type Placed = Finding & { fp: string; inline: boolean };
 
-/** Right-side line numbers in a unified diff patch, with their text. */
-export function diffLines(patch: string | undefined): Map<number, string> {
+/** Right-side line numbers in a unified diff patch, with their text: every line, or only the added ones. */
+export function diffLines(patch: string | undefined, addedOnly = false): Map<number, string> {
   const lines = new Map<number, string>();
   let right = 0;
   for (const l of patch?.split('\n') ?? []) {
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
     if (hunk) right = Number(hunk[1]);
-    else if (l.startsWith('+') || l.startsWith(' ')) lines.set(right++, l.slice(1));
+    else if (l.startsWith('+') || l.startsWith(' ')) {
+      if (!addedOnly || l.startsWith('+')) lines.set(right, l.slice(1));
+      right++;
+    }
   }
   return lines;
 }
@@ -172,6 +175,8 @@ export type Footer = {
   skipped?: number;
   /** The catalog checks the project keeps on, from the Axon Shaft API; the others show as off. */
   checks?: string[];
+  /** The job's checklists, when the API sends them: the card shows these in place of the checks. */
+  checklists?: { key: string; name: string; skip?: string }[];
 };
 
 /** A token count, such as "950", "18k" or "1.2M". */
@@ -197,12 +202,23 @@ const chip = (text: string) => `<kbd>${text}</kbd>`;
 export type CheckState = 'failed' | 'warned' | 'passed' | 'not_checked' | 'off';
 const CHECK_MARK: Record<CheckState, string> = { failed: '❌', warned: '⚠️', passed: '✅', not_checked: '⬜', off: '➖' };
 
+export type CheckItem = { key: string; label: string; state: CheckState; reason?: string };
+const stateChip = (c: CheckItem) => chip(`${CHECK_MARK[c.state]} ${c.label}`);
+
 /**
  * Each check's result: failed (a blocking finding), warned (any other), passed (checked with none),
  * not checked, or off. `rules` shows only with a finding. A finding shows even under a check that's
- * off, so a blocking one is never hidden.
+ * off, so a blocking one is never hidden. With `checklists`, it's one per checklist in the job's
+ * order, and one that didn't run is not checked, with `reason` saying why.
  */
-export function checkStates(review: Review, placed: Placed[], checks?: string[]): { key: string; label: string; state: CheckState }[] {
+export function checkStates(review: Review, placed: Placed[], checks?: string[], checklists?: Footer['checklists']): CheckItem[] {
+  if (checklists) {
+    return checklists.map(({ key, name, skip }) => {
+      const found = placed.filter((p) => p.step === key);
+      const state: CheckState = found.some((p) => p.severity === 'blocking') ? 'failed' : found.length ? 'warned' : !skip && review.checked.includes(key) ? 'passed' : 'not_checked';
+      return { key, label: name, state, ...(skip && { reason: skip }) };
+    });
+  }
   return STEPS.flatMap((key) => {
     const found = placed.filter((p) => p.step === key);
     if (key === 'rules' && !found.length) return [];
@@ -233,7 +249,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     !placed.length && chip('✅ No findings'),
     fixed && chip(`✅ ${fixed} fixed`),
   ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks).map((c) => chip(`${CHECK_MARK[c.state]} ${c.label}`));
+  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, ' ');
   const alert = VERDICT_ALERT[review.verdict];
@@ -246,7 +262,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     '>',
     `> ${checkChips.join(' ')}`,
     '>',
-    `> <sub>${type} · ${review.confidence}% confidence · reviewed \`${f.sha.slice(0, 7)}\`</sub>`,
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed \`${f.sha.slice(0, 7)}\``].filter(Boolean).join(' · ')}</sub>`,
   ].join('\n');
 }
 
@@ -291,6 +307,20 @@ export function startSummary(sha: string, prior?: State): string {
   return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
+/** The summary when none of the job's checklists ran: one chip each, and no model was asked. */
+export function idleSummary(states: CheckItem[], prior: State | undefined, f: Pick<Footer, 'sha' | 'runUrl' | 'dashboardRunUrl'>): string {
+  const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
+  return [
+    SUMMARY_MARKER,
+    `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
+    '',
+    states.map(stateChip).join(' '),
+    '',
+    `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · no model call</sub>`,
+    ...(prior ? [stateLine(prior)] : []),
+  ].join('\n');
+}
+
 /** The summary when the review failed: the failure's card, message and link, as the job summary has them. */
 export function failedSummary(failure: ShaftFailure, prior?: State): string {
   return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
@@ -319,15 +349,17 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
-  out.push(
-    '',
-    details(
-      'What this PR does',
-      [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join('\n'),
-    ),
-    '',
-    footer(f),
-  );
+  // A run with no model call has no claim to show.
+  if (review.claim) {
+    out.push(
+      '',
+      details(
+        'What this PR does',
+        [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join('\n'),
+      ),
+    );
+  }
+  out.push('', footer(f));
   const state: State = {
     sha: f.sha,
     findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),

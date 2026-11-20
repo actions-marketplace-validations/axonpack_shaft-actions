@@ -73,7 +73,7 @@ function insider(octokit: Octokit, owner: string, repo: string): (c: any) => Pro
  * checkout's copy: on `pull_request` the checkout is the merge commit, so a PR could edit the
  * repo's guides to change its own review.
  */
-async function baseFile(octokit: Octokit, owner: string, repo: string, ref: string, path: string): Promise<string | undefined> {
+export async function baseFile(octokit: Octokit, owner: string, repo: string, ref: string, path: string): Promise<string | undefined> {
   try {
     const { data } = await octokit.rest.repos.getContent({ owner, repo, path, ref, mediaType: { format: 'raw' } });
     return data as unknown as string;

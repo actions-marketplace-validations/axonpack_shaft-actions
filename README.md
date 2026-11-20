@@ -256,6 +256,7 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
   | ➖ | Turned off on the dashboard. |
 
 - Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
+- When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
 
 The card's last line gives the kind of change, the model's confidence and the reviewed commit.
 
@@ -295,6 +296,8 @@ The action also posts one check run per review check on the reviewed commit, nam
 - Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
 - The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run once its matching update ships. Until then it asks only when the project has merge gates, so on a project without gates the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.
+
+When the job has [checklists](#checklists), each checklist gets its own check run instead, named after its key in the job's order, such as `Axon Shaft / access-control`, or `Axon Shaft / own-1` for the project's own checklists. A checklist that didn't run is `skipped`, and its title says why: "No matching files changed", or, for a script checklist, that this version of the action doesn't have its script yet.
 
 ### Inline comments
 
@@ -407,6 +410,31 @@ It also fills in the repo's guides as the base branch has them, whichever exist:
 `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CONVENTIONS.md`, `.github/pull_request_template.md` and the root `README.md`. Each is cut at 8,000 characters, and all of them together at 30,000.
 
 The guides set the standards the review checks against, such as needing a test or a README line for each change. Since they come from the base branch, a PR can't change the copies its own review reads.
+
+### Checklists
+
+An Axon Shaft API that sends the job's checklists also sends the prompt with its steps left open. The action then decides which checklists run on this pull request:
+
+- A checklist runs when a changed file, after `skip`, matches one of its `paths`. `**` matches any change, including files under folders such as `.github/`.
+- A script checklist runs a script built into the action in place of the model. The script reads the diff, the pull request's description, the guides and files in the checkout. It never runs the repo's code, and only `osv` calls the network. Its findings are posted like the model's, inline and in the summary, and set its check run. A blocking or should-fix finding from a script raises the review's verdict. When only script checklists run, no model is called. The action has these scripts so far:
+  - `secrets` (Secrets): keys and tokens in a known format on added lines, such as AWS, GitHub, Anthropic, OpenAI, Stripe, Slack, Google and npm keys, and private keys. A finding names the kind of key and the line, never the value. Blocking.
+  - `pr-meta` (Pull request basics): each section of `.github/pull_request_template.md` that the description leaves out or leaves empty, no linked issue when the template asks for one, and a title that isn't a Conventional Commit when a guide asks for them. Nits.
+  - `env-vars` (Config and env vars): an env var read in an added line that no `.env.*` example file or Markdown doc in the repo names. Names the platform sets, such as `NODE_ENV`, `CI` and `GITHUB_*`, are left out. Should fix.
+  - `schema-pairs` (Schema and migration in step): a database schema file changed with no migration in the pull request, or a migration with no schema change in a repo that has a schema file. Blocking.
+  - `osv` (Known vulnerabilities): each package version a lockfile adds or changes (from `deps-diff` below) is checked against the advisories on osv.dev. A finding names the advisory (its `GHSA-` ID when it has one), the package, its version, the versions that fix it and the line in the lockfile. Blocking for an advisory rated high or critical, or a known malicious package; should fix for anything lower or unrated.
+    - Sent to osv.dev, in one `POST /v1/querybatch` (one per 1,000 versions): the ecosystem, name and version of each public package the pull request adds or changes. Then one `GET /v1/vulns/<id>` for each advisory found, to get its rating and fixed versions.
+    - Never sent: scoped packages (`@scope/name`), packages from a private registry, git or a URL, any npm package when the repo's `.npmrc`, `.yarnrc`, `.yarnrc.yml` or `bunfig.toml` sets a default registry other than npm's, any `requirements*.txt` package when the file names an index other than PyPI, Go modules under the repo's own owner in `go.mod`, versions the pull request removes or leaves as they were, and anything about the repo or who runs it. The `User-Agent` names only the action.
+    - When osv.dev fails or takes longer than 10 seconds, the action asks GitHub's advisory database instead (`GET /advisories?affects=<name>@<version>`), with the run's GitHub token, one call per version, for at most 50 versions. When both fail, the checklist is skipped with the reason, and never passes. Every call times out after 10 seconds, and the whole check after 60.
+    - To stop sending anything, turn off Known vulnerabilities in the job on the dashboard. There's no separate setting yet.
+- A script checklist whose script the action doesn't have yet is skipped. So is one whose script can't do its check, with the reason on its check run.
+- A `script+model` checklist runs in the model like any other checklist, and its pre-step adds facts for the model after the steps, under "Facts from the pre-steps". Each pre-step runs once, however many checklists use it, and its facts are cut at about 4,000 tokens. When a pre-step fails, its facts say why and the checklist still runs. The action has this pre-step so far:
+  - `deps-diff` (Dependencies, Supply chain): each package a lockfile adds, removes or changes, with its versions before and after and its line in the lockfile. It compares the base branch's copy, read through the GitHub API, with the checkout's, and never runs a package manager. It reads `package-lock.json` and `npm-shrinkwrap.json` (npm 7 and later), `bun.lock`, `yarn.lock` (Yarn 1 and 2+), `pnpm-lock.yaml` (pnpm 8 and later), the pinned `==` lines of `requirements*.txt`, `poetry.lock`, `uv.lock`, `Cargo.lock` and `go.sum`. A version that doesn't come from the public registry is marked as such.
+- The run's data comes first in the prompt and the steps come last, numbered from 1: the steps that always run first, the step of each checklist that runs, then the job's own instructions and the steps that always run last. Everything before the steps is the same whichever checklists run.
+- A finding's `step` can only name a checklist that runs.
+- When no checklist runs, no model is called. The summary comment says so, with a chip for each checklist, and each check run is skipped. A project with merge gates still gets a review, because only the model can judge the gates.
+- The run's page on the dashboard gets the model session's model, tokens and the checklists it ran.
+
+With an API that doesn't send checklists, the action runs the prompt it gets, as 1.5 did.
 
 ## Development
 

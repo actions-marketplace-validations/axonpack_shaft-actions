@@ -1,0 +1,14 @@
+[[package]]
+name = "requests"
+version = "2.25.0"
+description = "Python HTTP for Humans."
+optional = false
+
+[[package]]
+name = "six"
+version = "1.15.0"
+description = "Python 2 and 3 compatibility utilities"
+optional = false
+
+[metadata]
+lock-version = "2.0"

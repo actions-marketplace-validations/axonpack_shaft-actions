@@ -1,5 +1,5 @@
 import * as cp from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, expect, test, vi } from 'vitest';
@@ -14,7 +14,7 @@ vi.doMock('node:child_process', () => ({
   },
 }));
 vi.doMock('@actions/core', () => ({ setSecret: (s: string) => masked.push(s) }));
-const { checkoutHead } = await import('../checkout.service');
+const { checkoutFiles, checkoutHead } = await import('../checkout.service');
 
 const git = (cwd: string, ...args: string[]) =>
   cp.execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, encoding: 'utf8' }).trim();
@@ -57,4 +57,22 @@ test("the PR's head commit is checked out detached, as deep as the checkout, wit
     expect(leaks(config) || config.includes('extraheader')).toBe(false);
   }
   expect(masked).toEqual([basic, basic]);
+});
+
+test("the scripts' checkout finds files outside node_modules and reads only regular files inside it", () => {
+  const repo = join(dir, 'files');
+  mkdirSync(join(repo, 'docs'), { recursive: true });
+  mkdirSync(join(repo, 'node_modules/x'), { recursive: true });
+  writeFileSync(join(repo, 'docs/a.md'), 'A');
+  writeFileSync(join(repo, 'node_modules/x/b.md'), 'B');
+  writeFileSync(join(dir, 'outside.md'), 'secret');
+  symlinkSync(join(dir, 'outside.md'), join(repo, 'docs/link.md'));
+  symlinkSync(dir, join(repo, 'up'));
+  const files = checkoutFiles(repo);
+  expect(files.find(['**/*.md']).sort()).toEqual(['docs/a.md', 'docs/link.md']);
+  expect(files.read('docs/a.md')).toBe('A');
+  expect(files.read('docs/link.md')).toBeUndefined();
+  expect(files.read('up/outside.md')).toBeUndefined();
+  expect(files.read('../outside.md')).toBeUndefined();
+  expect(files.read('docs/none.md')).toBeUndefined();
 });

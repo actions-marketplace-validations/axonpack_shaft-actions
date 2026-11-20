@@ -49,7 +49,7 @@ function isSensitive(f: ChangedFile): boolean {
   return SENSITIVE.test(f.filename);
 }
 
-function onlyComments(patch: string | undefined): boolean {
+export function onlyComments(patch: string | undefined): boolean {
   if (!patch) return false;
   return patch
     .split('\n')

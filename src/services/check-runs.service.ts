@@ -98,23 +98,25 @@ const CATEGORY_TITLE: Record<CheckState, string> = {
 };
 
 /**
- * Posts one check run per review check that's on, with that check's findings as its summary. After
- * the first refusal the rest are skipped: the same token would refuse them too.
+ * Posts one check run per review check that's on, with that check's findings as its summary, or the
+ * `reason` a checklist didn't run. After the first refusal the rest are skipped: the same token would
+ * refuse them too.
  */
 export async function postCategoryChecks(
   octokit: Octokit,
   owner: string,
   repo: string,
   sha: string,
-  states: { key: string; state: CheckState }[],
+  states: { key: string; state: CheckState; reason?: string }[],
   placed: Placed[],
   clean: (s: string) => string,
 ): Promise<void> {
-  for (const { key, state } of states) {
+  for (const { key, state, reason } of states) {
     const conclusion = CATEGORY_CONCLUSION[state];
     if (!conclusion) continue;
     const found = placed.filter((p) => p.step === key);
-    const summary = found.length ? findingsTable(found, { repo: `${owner}/${repo}`, sha }) : CATEGORY_TITLE[state];
-    if (!(await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title: CATEGORY_TITLE[state], summary }, clean))) return;
+    const title = reason ?? CATEGORY_TITLE[state];
+    const summary = found.length ? findingsTable(found, { repo: `${owner}/${repo}`, sha }) : title;
+    if (!(await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title, summary }, clean))) return;
   }
 }
