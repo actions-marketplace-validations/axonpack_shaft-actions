@@ -22,6 +22,8 @@ export type Finding = {
   title: string;
   body: string;
   suggestion?: string;
+  /** The page on GitHub or osv.dev with the details, set only by a script (an advisory's). */
+  url?: string;
 };
 
 /** The most a walkthrough may hold; a bigger one is dropped, and the review posts without it. */
@@ -275,7 +277,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
   ].join('\n');
 }
 
-/** A table of findings, each location linked to its lines at the reviewed commit. */
+/** A table of findings, each location linked to its lines at the reviewed commit, and each finding to its page when it has one. */
 function table(rows: Placed[], f: Pick<Footer, 'repo' | 'sha'>): string {
   const link = (p: Placed) => {
     const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : '';
@@ -284,7 +286,7 @@ function table(rows: Placed[], f: Pick<Footer, 'repo' | 'sha'>): string {
   return [
     '| Severity | Where | Finding | Details |',
     '|---|---|---|---|',
-    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.title)} | ${p.inline ? 'inline' : cell(p.body)} |`),
+    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.url ? `[${p.title}](${p.url})` : p.title)} | ${p.inline ? 'inline' : cell(p.body)} |`),
   ].join('\n');
 }
 

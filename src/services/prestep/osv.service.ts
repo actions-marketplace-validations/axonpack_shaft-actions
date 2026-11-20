@@ -17,7 +17,8 @@ const GITHUB_ECOSYSTEM: Record<Ecosystem, string> = { npm: 'npm', PyPI: 'pip', G
 const RANK: Record<string, number> = { critical: 4, high: 3, moderate: 2, medium: 2, low: 1 };
 
 type Checked = Pin & { file: string; ecosystem: Ecosystem };
-type Advisory = { id: string; severity: string; summary: string; fixed: string[] };
+/** `url` is the advisory's page: GitHub's for a GHSA ID, else osv.dev's. */
+type Advisory = { id: string; url: string; severity: string; summary: string; fixed: string[] };
 type Signal = () => AbortSignal;
 
 async function getJson(url: string, signal: AbortSignal, body?: unknown): Promise<any> {
@@ -31,12 +32,14 @@ async function getJson(url: string, signal: AbortSignal, body?: unknown): Promis
   return res.json();
 }
 
-/** One advisory from an osv.dev record: its GHSA ID when it has one, its rating, and the versions that fix `name`. */
+/** One advisory from an osv.dev record: its GHSA ID when it has one, its page, its rating, and the versions that fix `name`. */
 function fromOsvRecord(v: any, name: string): Advisory {
   const ids: string[] = [v.id, ...(v.aliases ?? [])];
   const affected = (v.affected ?? []).filter((a: any) => String(a.package?.name).toLowerCase() === name.toLowerCase());
+  const id = ids.find((i) => i.startsWith('GHSA-')) ?? v.id;
   return {
-    id: ids.find((id) => id.startsWith('GHSA-')) ?? v.id,
+    id,
+    url: id.startsWith('GHSA-') ? `https://github.com/advisories/${encodeURIComponent(id)}` : `https://osv.dev/vulnerability/${encodeURIComponent(id)}`,
     // A MAL- record is a malicious package, which osv.dev doesn't rate.
     severity: v.id.startsWith('MAL-') ? 'critical' : String(v.database_specific?.severity ?? 'unrated').toLowerCase(),
     summary: v.summary ?? '',
@@ -69,6 +72,7 @@ function fromGitHub(octokit: Octokit, pins: Checked[], signal: Signal): Promise<
       });
       return data.map((a) => ({
         id: a.ghsa_id,
+        url: a.html_url,
         severity: a.severity,
         summary: a.summary,
         fixed: (a.vulnerabilities ?? [])
@@ -83,7 +87,10 @@ function fromGitHub(octokit: Octokit, pins: Checked[], signal: Signal): Promise<
   );
 }
 
-/** A package version's advisories as one finding: blocking when any is high or critical. Records that alias each other are merged. */
+/**
+ * A package version's advisories as one finding: blocking when any is high or critical, and linked to
+ * the most severe one's page. Records that alias each other are merged.
+ */
 function finding(p: Checked, found: Advisory[]) {
   const byId = new Map<string, Advisory>();
   for (const a of found) {
@@ -96,10 +103,11 @@ function finding(p: Checked, found: Advisory[]) {
     severity: all.some((a) => (RANK[a.severity] ?? 0) >= RANK.high!) ? ('blocking' as const) : ('should-fix' as const),
     file: p.file,
     line: p.line,
+    url: all[0]!.url,
     title: `${p.name} ${p.version} has a known vulnerability (${all[0]!.id}${all.length > 1 ? ` and ${all.length - 1} more` : ''})`,
     body: [
       `\`${p.name}\` ${p.version} has ${all.length === 1 ? 'a published advisory' : `${all.length} published advisories`}:`,
-      ...all.map((a) => `- ${a.id} (${a.severity})${a.summary ? `: ${a.summary}` : ''}. ${a.fixed.length ? `Fixed in ${[...new Set(a.fixed)].join(', ')}.` : 'No fixed version yet.'}`),
+      ...all.map((a) => `- [${a.id}](${a.url}) (${a.severity})${a.summary ? `: ${a.summary}` : ''}. ${a.fixed.length ? `Fixed in ${[...new Set(a.fixed)].join(', ')}.` : 'No fixed version yet.'}`),
       fixed.length ? `Upgrade to a fixed version, or say in the pull request why this one is safe here.` : `No version fixes it yet, so say in the pull request why it's safe here or pick another package.`,
     ].join('\n'),
   };

@@ -24190,7 +24190,7 @@ function table(rows, f) {
   return [
     "| Severity | Where | Finding | Details |",
     "|---|---|---|---|",
-    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.title)} | ${p.inline ? "inline" : cell(p.body)} |`)
+    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.url ? `[${p.title}](${p.url})` : p.title)} | ${p.inline ? "inline" : cell(p.body)} |`)
   ].join(`
 `);
 }
@@ -58596,6 +58596,7 @@ function parseReview(x) {
     ...rest,
     ...walkthrough && { walkthrough },
     ...gates && { gates },
+    findings: r.findings.map(({ url: _, ...f }) => f),
     resolved: Array.isArray(r.resolved) ? r.resolved : [],
     checked: Array.isArray(r.checked) ? r.checked.filter((c) => typeof c === "string") : [],
     not_checked: r.not_checked ?? ""
@@ -59157,8 +59158,10 @@ async function getJson(url, signal, body) {
 function fromOsvRecord(v, name) {
   const ids = [v.id, ...v.aliases ?? []];
   const affected = (v.affected ?? []).filter((a) => String(a.package?.name).toLowerCase() === name.toLowerCase());
+  const id = ids.find((i) => i.startsWith("GHSA-")) ?? v.id;
   return {
-    id: ids.find((id) => id.startsWith("GHSA-")) ?? v.id,
+    id,
+    url: id.startsWith("GHSA-") ? `https://github.com/advisories/${encodeURIComponent(id)}` : `https://osv.dev/vulnerability/${encodeURIComponent(id)}`,
     severity: v.id.startsWith("MAL-") ? "critical" : String(v.database_specific?.severity ?? "unrated").toLowerCase(),
     summary: v.summary ?? "",
     fixed: affected.flatMap((a) => (a.ranges ?? []).filter((r) => r.type !== "GIT").flatMap((r) => r.events ?? [])).flatMap((e) => e.fixed ? [e.fixed] : [])
@@ -59186,6 +59189,7 @@ function fromGitHub(octokit, pins, signal) {
     });
     return data.map((a) => ({
       id: a.ghsa_id,
+      url: a.html_url,
       severity: a.severity,
       summary: a.summary,
       fixed: (a.vulnerabilities ?? []).filter((v) => v.package?.name === p.name).flatMap((v) => {
@@ -59208,10 +59212,11 @@ function finding(p, found) {
     severity: all.some((a) => (RANK[a.severity] ?? 0) >= RANK.high) ? "blocking" : "should-fix",
     file: p.file,
     line: p.line,
+    url: all[0].url,
     title: `${p.name} ${p.version} has a known vulnerability (${all[0].id}${all.length > 1 ? ` and ${all.length - 1} more` : ""})`,
     body: [
       `\`${p.name}\` ${p.version} has ${all.length === 1 ? "a published advisory" : `${all.length} published advisories`}:`,
-      ...all.map((a) => `- ${a.id} (${a.severity})${a.summary ? `: ${a.summary}` : ""}. ${a.fixed.length ? `Fixed in ${[...new Set(a.fixed)].join(", ")}.` : "No fixed version yet."}`),
+      ...all.map((a) => `- [${a.id}](${a.url}) (${a.severity})${a.summary ? `: ${a.summary}` : ""}. ${a.fixed.length ? `Fixed in ${[...new Set(a.fixed)].join(", ")}.` : "No fixed version yet."}`),
       fixed.length ? `Upgrade to a fixed version, or say in the pull request why this one is safe here.` : `No version fixes it yet, so say in the pull request why it's safe here or pick another package.`
     ].join(`
 `)
@@ -60144,7 +60149,8 @@ async function postCategoryChecks(octokit, owner, repo, sha, states, placed, cle
     const found = placed.filter((p) => p.step === key);
     const title = reason ?? CATEGORY_TITLE[state];
     const summary = found.length ? findingsTable(found, { repo: `${owner}/${repo}`, sha }) : title;
-    if (!await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title, summary }, clean))
+    const detailsUrl = SEVERITIES.flatMap((s) => found.filter((p) => p.severity === s && p.url))[0]?.url;
+    if (!await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title, summary, detailsUrl }, clean))
       return;
   }
 }
@@ -60470,6 +60476,7 @@ ${clean(body)}`);
       title: cut(clean(p.title), 300),
       body: cut(clean(p.body), 5000),
       ...p.suggestion ? { suggestion: cut(clean(p.suggestion), 5000) } : {},
+      ...p.url && p.url.length <= 500 ? { url: p.url } : {},
       inline: p.inline
     })),
     fixed: fixed.length

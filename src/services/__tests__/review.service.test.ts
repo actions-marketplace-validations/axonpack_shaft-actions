@@ -429,6 +429,14 @@ test('the outcome has the card for the dashboard, and each step is a group in th
   expect(logs.filter((l) => l.startsWith('::group::'))).toEqual(['::group::Review', '::group::Post the review']);
 });
 
+test("the card carries each finding's page; one too long for the API is left out", async () => {
+  const url = 'https://github.com/advisories/GHSA-35jh-r3h4-6jhm';
+  const f = { severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' };
+  found = [{ ...f, url }, { ...f, line: 2, url: `https://osv.dev/vulnerability/${'x'.repeat(500)}` }];
+  const { outcome } = await review([file('src/a.ts')]);
+  expect(outcome.output.findings.map((p) => p.url)).toEqual([url, undefined]);
+});
+
 test('a dry run logs the check run each review check would get', async () => {
   found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' }];
   await review([file('src/a.ts')]);

@@ -58,8 +58,9 @@ test('one batch query for the public versions added or changed: a vulnerable one
   const found = await osv(lockInput('package-lock.json'));
   expect(show(found)).toEqual(['blocking package-lock.json:23 lodash 4.17.21 has a known vulnerability (GHSA-35jh-r3h4-6jhm)']);
   expect(found[0]!.body).toBe(
-    '`lodash` 4.17.21 has a published advisory:\n- GHSA-35jh-r3h4-6jhm (high): A flaw in lodash. Fixed in 4.17.22.\nUpgrade to a fixed version, or say in the pull request why this one is safe here.',
+    '`lodash` 4.17.21 has a published advisory:\n- [GHSA-35jh-r3h4-6jhm](https://github.com/advisories/GHSA-35jh-r3h4-6jhm) (high): A flaw in lodash. Fixed in 4.17.22.\nUpgrade to a fixed version, or say in the pull request why this one is safe here.',
   );
+  expect(found[0]!.url).toBe('https://github.com/advisories/GHSA-35jh-r3h4-6jhm');
   expect(sent).toEqual([
     'POST https://api.osv.dev/v1/querybatch {"queries":[{"package":{"name":"lodash","ecosystem":"npm"},"version":"4.17.21"},{"package":{"name":"express","ecosystem":"npm"},"version":"4.18.2"}]}',
     'GET https://api.osv.dev/v1/vulns/GHSA-35jh-r3h4-6jhm',
@@ -102,18 +103,37 @@ test('high, critical and malicious packages are blocking; moderate, low and unra
     'blocking requirements.txt:6 f 1.0.0 has a known vulnerability (GHSA-ffff)',
   ]);
   expect(found[1]!.body).toContain('No fixed version yet.');
-  expect(found[5]!.body).toContain('- GHSA-ffff (high): A flaw in f. Fixed in 1.2.0.');
+  expect(found[5]!.body).toContain('- [GHSA-ffff](https://github.com/advisories/GHSA-ffff) (high): A flaw in f. Fixed in 1.2.0.');
+  // An ID with no GHSA alias links to its record on osv.dev.
+  expect(found.map((f) => f.url)).toEqual([
+    'https://github.com/advisories/GHSA-aaaa',
+    'https://osv.dev/vulnerability/MAL-2026-1',
+    'https://github.com/advisories/GHSA-cccc',
+    'https://github.com/advisories/GHSA-dddd',
+    'https://osv.dev/vulnerability/PYSEC-2026-5',
+    'https://github.com/advisories/GHSA-ffff',
+  ]);
+  expect(found[4]!.body).toContain('- [PYSEC-2026-5](https://osv.dev/vulnerability/PYSEC-2026-5) (unrated)');
 });
 
-test("when osv.dev fails, GitHub's advisory database is asked, one call per version", async () => {
+test("a package with several advisories links to the most severe one's page", async () => {
+  records = { 'GHSA-low1': record('GHSA-low1', 'lodash', 'LOW'), 'RUSTSEC-2026-1': record('RUSTSEC-2026-1', 'lodash', 'CRITICAL') };
+  matches = { 'lodash@4.17.21': ['GHSA-low1', 'RUSTSEC-2026-1'] };
+  const [found] = await osv(lockInput('package-lock.json'));
+  expect(found!.url).toBe('https://osv.dev/vulnerability/RUSTSEC-2026-1');
+  expect(found!.body).toContain('- [GHSA-low1](https://github.com/advisories/GHSA-low1) (low)');
+});
+
+test("when osv.dev fails, GitHub's advisory database is asked, one call per version, and each advisory links to its html_url", async () => {
   osvDown = true;
   const { asked, extra } = github({
-    'lodash@4.17.21': [{ ghsa_id: 'GHSA-35jh-r3h4-6jhm', severity: 'medium', summary: 'Prototype pollution', vulnerabilities: [{ package: { ecosystem: 'npm', name: 'lodash' }, first_patched_version: '4.17.22' }] }],
+    'lodash@4.17.21': [{ ghsa_id: 'GHSA-35jh-r3h4-6jhm', html_url: 'https://github.com/advisories/GHSA-35jh-r3h4-6jhm', severity: 'medium', summary: 'Prototype pollution', vulnerabilities: [{ package: { ecosystem: 'npm', name: 'lodash' }, first_patched_version: '4.17.22' }] }],
   });
   const found = await osv(lockInput('package-lock.json', {}, extra));
   expect(asked).toEqual(['GET /advisories npm lodash@4.17.21', 'GET /advisories npm express@4.18.2']);
   expect(show(found)).toEqual(['should-fix package-lock.json:23 lodash 4.17.21 has a known vulnerability (GHSA-35jh-r3h4-6jhm)']);
-  expect(found[0]!.body).toContain('- GHSA-35jh-r3h4-6jhm (medium): Prototype pollution. Fixed in 4.17.22.');
+  expect(found[0]!.body).toContain('- [GHSA-35jh-r3h4-6jhm](https://github.com/advisories/GHSA-35jh-r3h4-6jhm) (medium): Prototype pollution. Fixed in 4.17.22.');
+  expect(found[0]!.url).toBe('https://github.com/advisories/GHSA-35jh-r3h4-6jhm');
 });
 
 test('when both fail, or the fallback checks only some versions and finds nothing, it throws, so the checklist is skipped and never passes', async () => {
