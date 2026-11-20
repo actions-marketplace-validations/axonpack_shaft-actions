@@ -40,10 +40,21 @@ export const TASK_FORMAT: ReplyFormat<TaskReply> = {
 export type TaskOptions = ReplyOptions & { bare: boolean; pushMode: string; repoUrl: string };
 /**
  * A finished task, or one that stopped before its session: `push_failed` when nothing could be
- * pushed, `nothing_to_fix` for a bare `/fix` with no open findings, `sandbox_unavailable` when the
- * runner can't start the sandbox the commands run in.
+ * pushed, `nothing_to_fix` for a bare `/fix` with no open findings, `self_hosted_unsupported` on a
+ * runner GitHub doesn't host, `sandbox_unavailable` when the runner can't start the sandbox the
+ * commands run in.
  */
-export type TaskOutcome = ReplyOutcome | { refused: string; code: 'push_failed' | 'nothing_to_fix' | 'sandbox_unavailable' };
+export type TaskOutcome = ReplyOutcome | { refused: string; code: 'push_failed' | 'nothing_to_fix' | 'self_hosted_unsupported' | 'sandbox_unavailable' };
+
+/**
+ * Why a task can't run on this runner, or undefined when it can: only on a GitHub-hosted one, a
+ * fresh VM per job. On a self-hosted runner a sandbox can't be trusted to be the only thing of the
+ * runner's user (`endSandboxes`), and the machine outlives the job.
+ */
+export function selfHosted(): string | undefined {
+  if (process.env.RUNNER_ENVIRONMENT === 'github-hosted') return;
+  return 'Axon Shaft makes changes only on GitHub-hosted runners, and this job runs on a self-hosted one, so nothing was changed. Run the Axon Shaft job on `runs-on: ubuntu-latest`.';
+}
 
 /** The request: the comment, or for a bare `/fix` the open findings the last review's summary keeps. */
 export function taskRequest(ask: Ask, findings: StateFinding[]): string {
@@ -71,8 +82,8 @@ const checksTable = (checks: CheckResult[]) =>
  * commands and the checks run in the sandbox, and nothing there holds a GitHub token: only once our
  * own run of the checks passes does our code ask the API for the push token, and push through
  * GitHub's API. A push the mode refuses (a fork's PR, the default branch, push mode Disabled) is
- * caught before the session, which then doesn't run, and so is a bare `/fix` with no open findings
- * and a runner that can't start the sandbox.
+ * caught before the session, which then doesn't run, and so is a bare `/fix` with no open findings,
+ * a self-hosted runner and a runner that can't start the sandbox.
  */
 export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   const ctx = await step('Read the pull request', () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
@@ -88,6 +99,11 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     const why = ctx.summary ? 'The last review has no open findings to fix.' : "There's nothing to fix yet: comment `/review` first.";
     await post(`${why}\n\n${TASK_MARKER}`);
     return { refused: why, code: 'nothing_to_fix' };
+  }
+  const hosted = selfHosted();
+  if (hosted) {
+    await post(`${failureMarkdown(new ShaftFailure('self_hosted_unsupported', hosted))}\n\n${TASK_MARKER}`);
+    return { refused: hosted, code: 'self_hosted_unsupported' };
   }
   const unsandboxed = await step('Start the sandbox', async () => prepareSandbox(o.cwd));
   if (unsandboxed) {

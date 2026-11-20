@@ -75,6 +75,7 @@ beforeEach(() => {
   git(work, 'checkout', '-q', '--detach');
   process.env.RUNNER_TEMP = mkdtempSync(join(dir, 'temp-'));
   process.env.GITHUB_TOKEN = 'ghs_workflow';
+  process.env.RUNNER_ENVIRONMENT = 'github-hosted';
   sessions.length = 0;
   asked.length = 0;
   pushes.length = 0;
@@ -220,6 +221,18 @@ test("a runner that can't start the sandbox runs no session, and the reply says 
   unsandboxed = 'A change needs a Linux runner, for its sandbox. This one runs darwin.';
   expect(await runTask(options())).toEqual({ refused: unsandboxed, code: 'sandbox_unavailable' });
   expect(fake.posted[0]).toMatch(/errors\/sandbox_unavailable\.svg/);
+  expect(sessions).toEqual([]);
+});
+
+test('a self-hosted runner runs no session, and the reply says why', async () => {
+  fake = octokit();
+  for (const where of ['self-hosted', undefined]) {
+    if (where) process.env.RUNNER_ENVIRONMENT = where;
+    else delete process.env.RUNNER_ENVIRONMENT;
+    const out = await runTask(options());
+    expect(out).toEqual({ refused: expect.stringContaining('only on GitHub-hosted runners'), code: 'self_hosted_unsupported' });
+    expect(fake.posted.at(-1)).toMatch(/errors\/self_hosted_unsupported\.svg/);
+  }
   expect(sessions).toEqual([]);
 });
 
