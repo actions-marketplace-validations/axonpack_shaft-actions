@@ -37,10 +37,14 @@ const SLOTS = ['repo', 'number', 'head', 'base', 'sha', 'skipped', 'guides', 'pr
 const TEMPLATE = `# Review\n\n${SLOTS.map((s) => `## ${s}\n{{${s}}}`).join('\n\n')}`;
 const file = (filename: string, patch = '@@ -1 +1 @@\n-a\n+b') => ({ filename, status: 'modified', additions: 1, deletions: 1, patch });
 
-/** A fake Octokit for one PR from `feature` into `main`. It records the base-branch files read and the summary comments written. */
-function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guides: Record<string, string> = {}) {
+/**
+ * A fake Octokit for one PR from `feature` into `main`. It records the base-branch files read, the
+ * summary comments written, and every call that posts something, in order.
+ */
+function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guides: Record<string, string> = {}, refuseChecks = false) {
   const refs: string[] = [];
   const written: string[] = [];
+  const posted: string[] = [];
   const [listFiles, listCommits, listComments, listReviewComments] = [0, 1, 2, 3].map(() => async () => ({}));
   const lists = new Map<unknown, unknown[]>([
     [listFiles, files],
@@ -48,13 +52,20 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
     [listComments, comments],
     [listReviewComments, []],
   ]);
-  const comment = async ({ body }: { body: string }) => {
+  const comment = (kind: string) => async ({ body }: { body: string }) => {
     written.push(body);
+    posted.push(`${kind}: ${body.split('\n')[1]}`);
     return { data: { id: 1, html_url: 'https://github.com/o/r/pull/7#issuecomment-1' } };
+  };
+  const check = (kind: string) => async (c: { name: string; status: string; conclusion?: string; details_url?: string; output: { title: string } }) => {
+    if (refuseChecks) throw new Error('Resource not accessible by integration');
+    posted.push(`check ${kind}: ${c.name} ${c.conclusion ?? c.status} "${c.output.title}" ${c.details_url ?? ''}`.trim());
+    return { data: { id: 5 } };
   };
   return {
     refs,
     written,
+    posted,
     paginate: async (fn: unknown) => lists.get(fn),
     rest: {
       pulls: {
@@ -63,7 +74,8 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
         listCommits,
         listReviewComments,
       },
-      issues: { listComments, createComment: comment, updateComment: comment },
+      issues: { listComments, createComment: comment('create'), updateComment: comment('update') },
+      checks: { create: check('create'), update: check('update') },
       repos: {
         getContent: async ({ ref, path }: { ref: string; path: string }) => {
           refs.push(`${ref}:${path}`);
@@ -89,9 +101,10 @@ async function review(
     guides?: Record<string, string>;
     dryRun?: boolean;
     gates?: string[];
+    refuseChecks?: boolean;
   } = {},
 ) {
-  fake = octokit(files, extra.comments, extra.guides);
+  fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
   const ctx = await collectContext(fake as any, 'o', 'r', 7, 'axonshaft[bot]');
   const outcome = await reviewContext(ctx, {
     octokit: fake as any,
@@ -196,11 +209,10 @@ test("a deep review runs the dashboard's passes as its subagents", async () => {
   expect(run.passes).toEqual(passes);
 });
 
-test('a failed review puts its card, message and the run link in the PR summary comment, by its marker', async () => {
+test('a failed review creates the summary with its card, message and the run link, and fails the review check', async () => {
   agentError = new ShaftFailure('review_invalid_reply', "The model's reply didn't match the review format twice.");
   await expect(review([file('src/a.ts')], { dryRun: false })).rejects.toBe(agentError);
   expect(fake.written).toEqual([
-    '<!-- shaft:summary -->\n![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)\nReviewing `abc1234`…',
     [
       '<!-- shaft:summary -->',
       "![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",
@@ -210,13 +222,52 @@ test('a failed review puts its card, message and the run link in the PR summary 
       '<https://github.com/o/r/actions/runs/9>',
     ].join('\n'),
   ]);
+  expect(progress()).toEqual([
+    STARTED,
+    "create: ![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",
+    'check update: Axon Shaft / review failure "The review failed" https://github.com/o/r/actions/runs/9',
+  ]);
+});
+
+/** What the run posted, leaving out the category check runs. */
+const progress = () => fake.posted.filter((p) => !/Axon Shaft \/ (?!review)/.test(p));
+const SUMMARY_URL = 'https://github.com/o/r/pull/7#issuecomment-1';
+const STARTED = 'check create: Axon Shaft / review in_progress "Reviewing abc1234" https://github.com/o/r/actions/runs/9';
+
+test("a first review creates no comment until the result, and the review check shows it's running", async () => {
+  await review([file('src/a.ts')], { dryRun: false });
+  expect(progress()).toEqual([STARTED, expect.stringMatching(/^create: > \[!TIP\]/), `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`]);
+});
+
+test('a later review edits its summary to Reviewing at the start, which emails no one', async () => {
+  const summary = { id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body: '<!-- shaft:summary -->\nold' };
+  await review([file('src/a.ts')], { dryRun: false, comments: [summary] });
+  expect(progress()).toEqual([
+    STARTED,
+    'update: ![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)',
+    expect.stringMatching(/^update: > \[!TIP\]/),
+    `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`,
+  ]);
+});
+
+test('a dry run posts nothing and logs the review check', async () => {
+  await review([file('src/a.ts')]);
+  expect(fake.posted).toEqual([]);
+  expect(logs).toContain('Would start the Axon Shaft / review check');
+});
+
+test('a token without Checks write warns once, and the review still posts', async () => {
+  await review([file('src/a.ts')], { dryRun: false, refuseChecks: true });
+  expect(fake.posted).toEqual([expect.stringMatching(/^create: /)]);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toContain("Couldn't post the Axon Shaft / review check");
 });
 
 test('a timed-out review keeps its dashboard link in the PR', async () => {
   agentError = new ShaftFailure('review_timed_out', 'The review ran past its 15-minute time limit.', 'https://shaft.axonpack.dev');
   await expect(review([file('src/a.ts')], { dryRun: false })).rejects.toBe(agentError);
-  expect(fake.written[1]).toContain('errors/review_timed_out.svg');
-  expect(fake.written[1]).toMatch(/\n<https:\/\/shaft\.axonpack\.dev>$/);
+  expect(fake.written[0]).toContain('errors/review_timed_out.svg');
+  expect(fake.written[0]).toMatch(/\n<https:\/\/shaft\.axonpack\.dev>$/);
 });
 
 test("only the repo's owners, members and collaborators have their comments in the prompt", async () => {

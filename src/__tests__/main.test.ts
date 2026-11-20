@@ -6,6 +6,9 @@ import opened from '../services/__tests__/fixtures/pull_request.opened.json';
 const inputs: string[] = [];
 const failed: string[] = [];
 const notices: string[] = [];
+const infos: string[] = [];
+const warnings: string[] = [];
+let dryRun = false;
 let jobSummary = '';
 let finished = false;
 vi.doMock('@actions/core', () => ({
@@ -15,14 +18,14 @@ vi.doMock('@actions/core', () => ({
   },
   getBooleanInput: (name: string) => {
     inputs.push(name);
-    return false;
+    return dryRun;
   },
   setFailed: (m: string) => failed.push(m),
   setSecret: () => {},
   getIDToken: async () => 'oidc',
-  info: () => {},
+  info: (m: string) => infos.push(m),
   notice: (m: string) => notices.push(m),
-  warning: () => {},
+  warning: (m: string) => warnings.push(m),
   setOutput: () => {},
   group: (_name: string, fn: () => Promise<unknown>) => fn(),
   summary: {
@@ -38,6 +41,15 @@ const context = { eventName: 'pull_request', payload: opened as unknown, repo: {
 let existing: { user: { login: string }; body: string }[] = [];
 const posted: unknown[] = [];
 let permission = 'write';
+/** The reactions on the comment that started the run, in order; GitHub refuses them when `refuseReactions` is set. */
+const reactions: string[] = [];
+let refuseReactions = false;
+const react = async ({ comment_id, content }: { comment_id: number; content: string }) => {
+  if (refuseReactions) throw new Error('Resource not accessible by integration');
+  reactions.push(`${content} on ${comment_id}`);
+  return { data: { id: 77 } };
+};
+const unreact = async ({ comment_id, reaction_id }: { comment_id: number; reaction_id: number }) => reactions.push(`removed ${reaction_id} from ${comment_id}`);
 vi.doMock('@actions/github', () => ({
   context,
   getOctokit: () => ({
@@ -45,6 +57,7 @@ vi.doMock('@actions/github', () => ({
     rest: {
       issues: { listComments: {}, createComment: async (p: unknown) => posted.push(p) },
       repos: { getCollaboratorPermissionLevel: async () => ({ data: { permission } }) },
+      reactions: { createForIssueComment: react, deleteForIssueComment: unreact },
     },
   }),
 }));
@@ -105,6 +118,11 @@ beforeEach(() => {
   asked = undefined;
   reported = undefined;
   notices.length = 0;
+  infos.length = 0;
+  warnings.length = 0;
+  dryRun = false;
+  reactions.length = 0;
+  refuseReactions = false;
   inputs.length = 0;
   failed.length = 0;
   jobSummary = '';
@@ -171,6 +189,7 @@ test("pull_request sends the event, fork: false and the pull request, and review
     pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat', base: 'main', association: 'MEMBER', bot: false },
   });
   expect(checkedOut).toEqual([]);
+  expect(reactions).toEqual([]);
 });
 
 test("pull_request_target is a review too: a fork's PR sends fork: true, and its head commit is checked out with the granted token", async () => {
@@ -255,6 +274,77 @@ test("/review by someone without write access starts nothing, and the notice say
   expect(notices).toEqual(['maintainer has no write access, so no review was started. Only people with write access can start one with /review.']);
   expect(checkedOut).toEqual([]);
   expect(reviewed).toBeUndefined();
+  expect(reactions).toEqual([]);
+});
+
+const SWAPPED = ['eyes on 501', 'removed 77 from 501'];
+
+test('a /review comment gets 👀 at the start, swapped for 🚀 once the review is posted', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = asks;
+  api(Response.json(grant));
+  await main();
+  await vi.waitFor(() => expect(reactions).toEqual([...SWAPPED, 'rocket on 501']));
+});
+
+test('a failed review swaps the 👀 for 😕', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = asks;
+  api(Response.json(grant));
+  reviewError = () => new Error('Not Found');
+  await main();
+  await vi.waitFor(() => expect(reactions).toEqual([...SWAPPED, 'confused on 501']));
+});
+
+test('/ask gets 👀, then 😕, since Reply is not built yet', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = { ...comment, comment: { ...comment.comment, body: '/ask why?' } };
+  api(Response.json(grant));
+  await main();
+  expect(notices).toEqual(['Reply mode is not built yet.']);
+  await vi.waitFor(() => expect(reactions).toEqual([...SWAPPED, 'confused on 501']));
+});
+
+test("/help gets 👀 with the API's token, then 🚀 once the list is posted", async () => {
+  context.eventName = 'issue_comment';
+  context.payload = { ...comment, comment: { ...comment.comment, body: '/help' } };
+  const help = { run: false, reason: 'Posted the list of commands.', comment: 'The commands.\n\n<!-- shaft:help -->', github_token: 'ghs_help' };
+  api(Response.json(help));
+  await main();
+  expect(posted).toEqual([{ owner: 'acme', repo: 'widgets', issue_number: 12, body: help.comment }]);
+  await vi.waitFor(() => expect(reactions).toEqual([...SWAPPED, 'rocket on 501']));
+});
+
+test('a comment that gets a token but nothing to post adds no reaction', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = asks;
+  api(Response.json({ run: false, reason: 'Nothing to do.', github_token: 'ghs_none' }));
+  await main();
+  expect(posted).toEqual([]);
+  expect(notices).toEqual(['Nothing to do.']);
+  expect(reactions).toEqual([]);
+});
+
+test('a dry run logs both reactions and posts neither', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = asks;
+  dryRun = true;
+  api(Response.json(grant));
+  await main();
+  await vi.waitFor(() => expect(infos).toContain('Would swap 👀 for 🚀 on the comment that started the run'));
+  expect(infos).toContain('Would react 👀 to the comment that started the run');
+  expect(reactions).toEqual([]);
+});
+
+test('a refused 👀 only warns: the review still runs, with no reaction at the end', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = asks;
+  refuseReactions = true;
+  api(Response.json(grant));
+  await main();
+  expect(failed).toEqual([]);
+  expect(reviewed).toMatchObject({ number: 12 });
+  expect(warnings).toEqual(["Couldn't add 👀 on the comment that started the run: Resource not accessible by integration"]);
 });
 
 test("an API error fails the step with the API's message, and the job summary shows its card, message and link", async () => {

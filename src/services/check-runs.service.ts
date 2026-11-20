@@ -23,29 +23,39 @@ export const gatesConclusion = (gates: Gate[]) => (gates.some((g) => g.status ==
 
 type Conclusion = 'success' | 'failure' | 'neutral' | 'skipped';
 
+/** The check run that shows a review in progress, then its result. */
+export const REVIEW_CHECK = 'Axon Shaft / review';
+
 /**
- * Posts one completed check run on the reviewed commit; false when GitHub refused it. A token without
- * Checks write (the app's installation hasn't approved it yet) only warns: the review is already posted.
+ * Posts a check run on the reviewed commit: in progress without a conclusion, completed with one,
+ * and an update of run `id` when given. Returns the run's id, or undefined when GitHub refused it.
+ * A token without Checks write (the app's installation hasn't approved it yet) only warns: the review is already posted.
  */
-async function postCheck(
+export async function postCheck(
   octokit: Octokit,
   owner: string,
   repo: string,
   sha: string,
-  c: { name: string; conclusion: Conclusion; title: string; summary: string },
+  c: { name: string; conclusion?: Conclusion; title: string; summary: string; detailsUrl?: string; id?: number },
   clean: (s: string) => string,
-): Promise<boolean> {
-  return octokit.rest.checks
-    .create({ owner, repo, name: c.name, head_sha: sha, status: 'completed', conclusion: c.conclusion, output: { title: c.title, summary: clean(c.summary) } })
-    .then(
-      () => true,
-      (e: Error) => {
-        core.warning(
-          `Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`,
-        );
-        return false;
-      },
-    );
+): Promise<number | undefined> {
+  const run = {
+    owner,
+    repo,
+    name: c.name,
+    ...(c.conclusion ? { status: 'completed' as const, conclusion: c.conclusion } : { status: 'in_progress' as const }),
+    ...(c.detailsUrl ? { details_url: c.detailsUrl } : {}),
+    output: { title: c.title, summary: clean(c.summary) },
+  };
+  return (c.id ? octokit.rest.checks.update({ ...run, check_run_id: c.id }) : octokit.rest.checks.create({ ...run, head_sha: sha })).then(
+    ({ data }) => data.id,
+    (e: Error) => {
+      core.warning(
+        `Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`,
+      );
+      return undefined;
+    },
+  );
 }
 
 /** Posts the gates check on the reviewed commit. */
