@@ -295,23 +295,24 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
 
 #### The card
 
-The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. On a later push, the comment switches to `reviewing.svg` while the review runs. GitHub sends no email when a comment is edited. Under it are the headline and these chips:
+The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. On a later push, the comment switches to `reviewing.svg` while the review runs. GitHub sends no email when a comment is edited. Under it are:
 
-- The number of blocking, should-fix and nit findings, and how many earlier findings this push fixed.
-- One chip per check:
+- The headline.
+- Chips with the number of blocking, should-fix and nit findings, and how many earlier findings this push fixed. A review with no findings says "No findings." instead.
+- A table with one row per check and its result:
 
-  | Chip | Meaning |
+  | Result | Meaning |
   |---|---|
   | ✅ | Checked, nothing found. |
-  | ⚠️ | Only should-fix or nit findings. |
-  | ❌ | A blocking finding. |
-  | ⬜ | Not checked: the model says it didn't do that check, and "What this PR does" names it. |
-  | ➖ | Turned off on the dashboard. |
+  | ⚠️ 2 should fix | Only should-fix or nit findings, counted by severity. |
+  | ❌ 1 blocking, 1 nit | At least one blocking finding. |
+  | ⬜ Not checked | The model says it didn't do that check, and "What this PR does" names it. |
 
-- Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
-- When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
+- A check turned off on the dashboard has no row, unless it found something.
+- Checks the repo added on the dashboard share one row, "Your checks", shown only when they found something.
+- When the job has [checklists](#checklists), there's one row per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜ with the reason, such as "Skipped: no matching files changed".
 
-The card's last line gives the kind of change, the model's confidence and the reviewed commit.
+The card's last line gives the kind of change, the model's confidence and a link to the reviewed commit.
 
 ### Progress while the review runs
 
@@ -337,15 +338,15 @@ When the project has merge gates, the action also posts a check run named `Axon 
 
 The action also posts one check run per review check on the reviewed commit, named after the check's key: `Axon Shaft / correctness`, `Axon Shaft / breakage`, `Axon Shaft / standards`, `Axon Shaft / tests`, `Axon Shaft / docs`, `Axon Shaft / security`, and `Axon Shaft / rules` for the checks the repo added. Each one's summary is a table of that check's findings.
 
-| Card chip | Conclusion |
+| Card result | Conclusion |
 |---|---|
 | ❌ A blocking finding | `failure` |
 | ⚠️ Only should-fix or nit findings | `neutral` |
 | ✅ Checked, nothing found | `success` |
 | ⬜ Not checked | `skipped` |
-| ➖ Turned off on the dashboard | no check run |
+| No row: turned off on the dashboard | no check run |
 
-- `Axon Shaft / rules` is posted only when the repo's own checks found something, as the card's chip is.
+- `Axon Shaft / rules` is posted only when the repo's own checks found something, as the card's row is.
 - Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
 - The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run once its matching update ships. Until then it asks only when the project has merge gates, so on a project without gates the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.
@@ -493,7 +494,7 @@ An Axon Shaft API that sends the job's checklists also sends the prompt with its
   - `deps-diff` (Dependencies, Supply chain): each package a lockfile adds, removes or changes, with its versions before and after and its line in the lockfile. It compares the base branch's copy, read through the GitHub API, with the checkout's, and never runs a package manager. It reads `package-lock.json` and `npm-shrinkwrap.json` (npm 7 and later), `bun.lock`, `yarn.lock` (Yarn 1 and 2+), `pnpm-lock.yaml` (pnpm 8 and later), the pinned `==` lines of `requirements*.txt`, `poetry.lock`, `uv.lock`, `Cargo.lock` and `go.sum`. A version that doesn't come from the public registry is marked as such.
 - The run's data comes first in the prompt and the steps come last, numbered from 1: the steps that always run first, the step of each checklist that runs, then the job's own instructions and the steps that always run last. Everything before the steps is the same whichever checklists run.
 - A finding's `step` can only name a checklist that runs.
-- When no checklist runs, no model is called. The summary comment says so, with a chip for each checklist, and each check run is skipped. A project with merge gates still gets a review, because only the model can judge the gates.
+- When no checklist runs, no model is called. The summary comment says so, with a row for each checklist and why it didn't run, and each check run is skipped. A project with merge gates still gets a review, because only the model can judge the gates.
 - The run's page on the dashboard gets the model session's model, tokens and the checklists it ran.
 
 With an API that doesn't send checklists, the action runs the prompt it gets, as 1.5 did.

@@ -24137,7 +24137,16 @@ function footer(f) {
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
 var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
-var stateChip = (c) => chip(`${CHECK_MARK[c.state]} ${c.label}`);
+var tally = (found) => SEVERITIES.map((s) => [s, found.filter((p) => p.severity === s).length]).filter(([, k]) => k).map(([s, k]) => [s, s === "nit" ? plural(k, "nit") : `${k} ${SEVERITY_LABEL[s].toLowerCase()}`]);
+function checksTable(states, placed) {
+  const rows = states.filter((c) => c.state !== "off").map((c) => {
+    const skip = c.reason?.replace(/^[A-Z](?=[a-z])/, (l) => l.toLowerCase());
+    const found = tally(placed.filter((p) => p.step === c.key)).map(([, t]) => t);
+    const text = c.state === "not_checked" ? skip ? `Skipped: ${skip}` : "Not checked" : found.join(", ");
+    return `| ${cell(c.label)} | ${cell(`${CHECK_MARK[c.state]} ${text}`.trim())} |`;
+  });
+  return rows.length ? ["| Checklist | Result |", "|---|---|", ...rows] : [];
+}
 function checkStates(review, placed, checks, checklists) {
   if (checklists) {
     return checklists.map(({ key, name, skip }) => {
@@ -24155,28 +24164,25 @@ function checkStates(review, placed, checks, checklists) {
   });
 }
 function card(review, placed, fixed, f) {
-  const n = (s) => placed.filter((p) => p.severity === s).length;
-  const countChips = [
-    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
-    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
-    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
-    !placed.length && chip("✅ No findings"),
+  const counts = [
+    !placed.length && "No findings.",
+    ...tally(placed).map(([s, t]) => chip(`${SEVERITY_DOT[s]} ${t}`)),
     fixed && chip(`✅ ${fixed} fixed`)
   ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
+  const rows = checksTable(checkStates(review, placed, f.checks, f.checklists), placed);
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
   const alert = VERDICT_ALERT[review.verdict];
+  const commit = `commit [${f.sha.slice(0, 7)}](https://github.com/${f.repo}/commit/${f.sha})`;
   return [
     `> [!${alert}]`,
     `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
     ...headline.map((l) => `> ${l}`),
     ">",
-    `> ${countChips.join(" ")}`,
+    `> ${counts.join(" ")}`,
     ">",
-    `> ${checkChips.join(" ")}`,
-    ">",
-    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed \`${f.sha.slice(0, 7)}\``].filter(Boolean).join(" · ")}</sub>`
+    ...rows.length ? [...rows.map((l) => `> ${l}`), ">"] : [],
+    `> <sub>${[type, `${review.confidence}% confidence`, commit].filter(Boolean).join(" · ")}</sub>`
   ].join(`
 `);
 }
@@ -24220,7 +24226,7 @@ function idleSummary(states, prior, f) {
     SUMMARY_MARKER,
     `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
     "",
-    states.map(stateChip).join(" "),
+    ...checksTable(states, []),
     "",
     `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · no model call</sub>`,
     ...prior ? [stateLine(prior)] : []
@@ -60061,7 +60067,7 @@ function checkList(listed, commands, cwd) {
   const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith("git ") && !toolDenial("Bash", { command: c }, cwd, commands));
   return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
 }
-var checksTable = (checks) => checks.length ? ["| Check | Result |", "| --- | --- |", ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? "Passed" : "Failed"} |`)].join(`
+var checksTable2 = (checks) => checks.length ? ["| Check | Result |", "| --- | --- |", ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? "Passed" : "Failed"} |`)].join(`
 `) : "No checks were run.";
 async function runTask(o) {
   const ctx = await step("Read the pull request", () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
@@ -60152,7 +60158,7 @@ ${TASK_MARKER}`);
         const sha = await step("Push the commit", () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
-      lines.push(checksTable(checks));
+      lines.push(checksTable2(checks));
       for (const c of failed)
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>
 

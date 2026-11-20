@@ -493,7 +493,7 @@ test('with checklists, only those whose paths match run: their steps after the d
     { key: 'own-1', label: 'The own-1 list', state: 'not_checked' },
   ]);
   expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'] }]);
-  expect(summary).toContain('<kbd>❌ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
+  expect(summary).toContain('> | The correctness list | ❌ 1 blocking |\n> | The migrations list | ⬜ Skipped: no matching files changed |\n');
 });
 
 test('skip applies before the paths, so a skipped file fires no checklist', async () => {
@@ -512,7 +512,7 @@ test('when no checklist matches, no model runs: a short summary and a skipped ch
   expect(runs).toHaveLength(0);
   expect(fake.written).toHaveLength(1);
   expect(fake.written[0]).toContain('No checklist ran on `abc1234`, so no model was called.');
-  expect(fake.written[0]).toContain('<kbd>⬜ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
+  expect(fake.written[0]).toContain('| The correctness list | ⬜ Skipped: no matching files changed |\n| The migrations list | ⬜ Skipped: no matching files changed |\n');
   expect(outcome).toMatchObject({ verdict: 'looks-good', findings: 0, model: 'none', tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } });
   expect(outcome.output.checks.map((c) => c.state)).toEqual(['not_checked', 'not_checked']);
   expect(progress()).toEqual([STARTED, expect.stringMatching(/^create: No checklist ran/), `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`]);

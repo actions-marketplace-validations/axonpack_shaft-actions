@@ -131,9 +131,16 @@ test('the summary format', () => {
 >
 > <kbd>🔴 1 blocking</kbd> <kbd>🟡 2 should fix</kbd> <kbd>⚪ 2 nits</kbd> <kbd>✅ 1 fixed</kbd>
 >
-> <kbd>❌ Correctness</kbd> <kbd>✅ Breakage</kbd> <kbd>✅ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>✅ Docs</kbd> <kbd>✅ Security</kbd>
+> | Checklist | Result |
+> |---|---|
+> | Correctness | ❌ 1 blocking, 1 should fix, 2 nits |
+> | Breakage | ✅ |
+> | Standards | ✅ |
+> | Tests | ⚠️ 1 should fix |
+> | Docs | ✅ |
+> | Security | ✅ |
 >
-> <sub>Bug fix · 85% confidence · reviewed \`a1b2c3d\`</sub>
+> <sub>Bug fix · 85% confidence · commit [a1b2c3d](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
 
 | Severity | Where | Finding | Details |
 |---|---|---|---|
@@ -173,10 +180,11 @@ test('the summary format', () => {
 
 const info = { sha: 'abc1234', repo: 'acme/widgets', models: 'claude-haiku-4', effort: 'low', reason: '3 lines' };
 
-test('a looks-good review with no findings: a TIP card with one chip, and no table', () => {
+test('a looks-good review with no findings: a TIP card that says so, every check ✅, and no findings table', () => {
   const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info);
   expect(body).toContain('> [!TIP]\n> ![Looks good](https://shaft.axonpack.dev/status/looks-good.svg)\n');
-  expect(body).toContain('\n> <kbd>✅ No findings</kbd>\n');
+  expect(body).toContain('\n> No findings.\n>\n> | Checklist | Result |\n> |---|---|\n> | Correctness | ✅ |\n');
+  expect(body).toContain('\n> | Security | ✅ |\n>\n> <sub>Bug fix · 85% confidence · commit [abc1234](https://github.com/acme/widgets/commit/abc1234)</sub>\n');
   expect(body).not.toContain('| Severity |');
   expect(body).not.toContain('fixed</kbd>');
 });
@@ -191,19 +199,19 @@ test('a run on an older v1 release gets one line under the card with the newest 
   expect(renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info)).not.toContain(' is out (this run used');
 });
 
-test('blocking is a CAUTION card; a check the project turned off shows ➖', () => {
+test('blocking is a CAUTION card; a check the project turned off gets no row', () => {
   const placed = place([finding({ severity: 'blocking', step: 'security' })], files, 'summary');
   const body = renderSummary({ ...review, verdict: 'blocking' }, placed, undefined, { ...info, checks: ['correctness', 'tests'] });
   expect(body).toContain('> [!CAUTION]\n> ![Blocking](https://shaft.axonpack.dev/status/blocking.svg)\n');
   expect(body).toContain('> <kbd>🔴 1 blocking</kbd>\n');
-  expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>➖ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>✅ Tests</kbd> <kbd>➖ Docs</kbd> <kbd>❌ Security</kbd>\n');
+  expect(body).toContain('> |---|---|\n> | Correctness | ✅ |\n> | Tests | ✅ |\n> | Security | ❌ 1 blocking |\n>\n');
 });
 
-test("the repo's own checks get a chip only when they found something", () => {
-  const chip = (findings: Finding[]) => renderSummary(review, place(findings, files, 'summary'), undefined, info).match(/<kbd>\S+ 📌 Your checks<\/kbd>/)?.[0];
-  expect(chip([finding({ step: 'rules' })])).toBe('<kbd>⚠️ 📌 Your checks</kbd>');
-  expect(chip([finding({ step: 'rules', severity: 'blocking' })])).toBe('<kbd>❌ 📌 Your checks</kbd>');
-  expect(chip([finding({})])).toBeUndefined();
+test("the repo's own checks get a row only when they found something", () => {
+  const row = (findings: Finding[]) => renderSummary(review, place(findings, files, 'summary'), undefined, info).match(/\| 📌 Your checks \|.*/)?.[0];
+  expect(row([finding({ step: 'rules' })])).toBe('| 📌 Your checks | ⚠️ 1 should fix |');
+  expect(row([finding({ step: 'rules', severity: 'blocking' })])).toBe('| 📌 Your checks | ❌ 1 blocking |');
+  expect(row([finding({})])).toBeUndefined();
 });
 
 test("the headline can't close the alert or add HTML", () => {
@@ -268,7 +276,7 @@ test('parseReview accepts the schema and rejects a bad reply', () => {
 test('a check the model left out of checked shows ⬜, not ✅', () => {
   const placed = place([finding({ step: 'tests' })], files, 'summary');
   const body = renderSummary({ ...review, checked: ['correctness', 'tests'] }, placed, undefined, { ...info, checks: ['correctness', 'breakage', 'tests', 'docs', 'security'] });
-  expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>⬜ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>⬜ Docs</kbd> <kbd>⬜ Security</kbd>');
+  expect(body).toContain('> | Correctness | ✅ |\n> | Breakage | ⬜ Not checked |\n> | Tests | ⚠️ 1 should fix |\n> | Docs | ⬜ Not checked |\n> | Security | ⬜ Not checked |\n');
 });
 
 test("with checklists, each one gets a state in the job's order under its own name, and one that didn't run says why", () => {
@@ -286,11 +294,11 @@ test("with checklists, each one gets a state in the job's order under its own na
     { key: 'correctness', label: 'Correctness', state: 'not_checked' },
   ]);
   expect(renderSummary(review, placed, undefined, { ...info, checklists })).toContain(
-    '<kbd>✅ Security</kbd> <kbd>⚠️ Our API rules</kbd> <kbd>⬜ Database migrations</kbd> <kbd>✅ Correctness</kbd>',
+    '> | Security | ✅ |\n> | Our API rules | ⚠️ 1 should fix |\n> | Database migrations | ⬜ Skipped: no matching files changed |\n> | Correctness | ✅ |\n',
   );
 });
 
-test('when no checklist ran, the summary says no model ran, with a chip each, and keeps the previous state', () => {
+test('when no checklist ran, the summary says no model ran, with a row each, and keeps the previous state', () => {
   const prior = { sha: 'fed9876', findings: [] };
   const states = [{ key: 'migrations', label: 'Database migrations', state: 'not_checked' as const, reason: 'No matching files changed' }];
   expect(idleSummary(states, prior, { sha: 'abc1234def', runUrl: 'https://github.com/o/r/actions/runs/1' })).toBe(
@@ -298,7 +306,9 @@ test('when no checklist ran, the summary says no model ran, with a chip each, an
       '<!-- shaft:summary -->',
       "No checklist ran on `abc1234`, so no model was called. Each checklist's check run says why.",
       '',
-      '<kbd>⬜ Database migrations</kbd>',
+      '| Checklist | Result |',
+      '|---|---|',
+      '| Database migrations | ⬜ Skipped: no matching files changed |',
       '',
       '<sub>[Axon Shaft](https://shaft.axonpack.dev) · [run](https://github.com/o/r/actions/runs/1) · no model call</sub>',
       stateLine(prior),
