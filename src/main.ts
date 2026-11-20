@@ -4,6 +4,7 @@ import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
 import type { Tokens } from './services/agent.service';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
+import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
@@ -27,6 +28,9 @@ const globs = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => t
 
 /** Set once the API has opened the run's row: a failure after that is reported to it, so the dashboard shows it. */
 let reportFailure: ((e: unknown) => Promise<void>) | undefined;
+/** The 👀 on the comment that started the run, swapped at the end for 🚀 when `done` is set, or 😕. */
+let reaction: Reaction | undefined;
+let done = false;
 
 async function run(): Promise<void> {
   const started = Date.now();
@@ -42,9 +46,14 @@ async function run(): Promise<void> {
   );
   if (!grant.run) {
     // The API's comment to post once: how to start a fork's review, or the list of commands for /help.
-    if (typeof grant.comment === 'string' && typeof grant.github_token === 'string') {
-      if (dryRun) core.info(`--- comment\n${grant.comment}`);
-      else await commentOnce(getOctokit(grant.github_token), owner, repo, r.number, grant.comment, APP_BOT);
+    if (typeof grant.github_token === 'string') {
+      const gh = getOctokit(grant.github_token);
+      if (typeof grant.comment === 'string') {
+        reaction = await reactStart(gh, context, dryRun);
+        if (dryRun) core.info(`--- comment\n${grant.comment}`);
+        else await commentOnce(gh, owner, repo, r.number, grant.comment, APP_BOT);
+        done = true;
+      }
     }
     return core.notice(grant.reason);
   }
@@ -52,6 +61,7 @@ async function run(): Promise<void> {
 
   if (r.mode !== 'review' && r.mode !== 'reply') {
     if (!(await hasWriteAccess(octokit, owner, repo, r.actor))) return core.notice(`${r.actor} has no write access, so nothing was started.`);
+    reaction = await reactStart(octokit, context, dryRun);
     return core.notice('Task mode is not built yet.');
   }
   if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
@@ -61,6 +71,7 @@ async function run(): Promise<void> {
         : "the question wasn't answered. Only people with write access can ask with /ask";
     return core.notice(`${r.actor} has no write access, so ${what}.`);
   }
+  reaction = await reactStart(octokit, context, dryRun);
   const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64')];
   reportFailure = (e) =>
     reportRun({
@@ -102,6 +113,7 @@ async function run(): Promise<void> {
 
   if (r.mode === 'reply') {
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });
+    done = true;
     return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
   }
   const out = await reviewPullRequest({
@@ -115,6 +127,7 @@ async function run(): Promise<void> {
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
+  done = true;
   await reportRun({ verdict: out.verdict, model: out.model, effort: out.effort, findings: out.bySeverity, ...usage(out), output: out.output });
 }
 
@@ -129,4 +142,6 @@ async function fail(e: unknown): Promise<void> {
     .catch((w: Error) => core.warning(`Couldn't write the job summary: ${w.message}`));
 }
 
-run().catch(fail);
+run()
+  .catch(fail)
+  .finally(() => reaction && reactEnd(reaction, done));
