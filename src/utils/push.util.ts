@@ -27,16 +27,30 @@ export function pushDenial(mode: string, t: PushTarget): string | undefined {
 /** A file a change adds, edits or deletes: its git mode and bytes, neither when it's deleted. */
 export type Change = { path: string; mode?: '100644' | '100755' | '120000'; content?: Buffer };
 
+/** The most one commit may hold: files, and bytes in one file and in all of them. */
+export const COMMIT_MAX = { files: 200, fileBytes: 1024 * 1024, totalBytes: 10 * 1024 * 1024 };
+
+const mb = (bytes: number) => `${bytes / 1024 / 1024} MB`;
+
 /**
- * Why a commit of `paths` may not be pushed, or undefined when it may: a path that leaves the
- * checkout or goes into `.git/`, or anything under `.github/`, whose workflows run with the repo's
- * secrets.
+ * Why a commit of `changes` may not be pushed, or undefined when it may: a path that leaves the
+ * checkout or goes into `.git/`, or `.github/` or anything under it, whose workflows run with the
+ * repo's secrets, in any case (a case-insensitive file system makes `.GitHub/` the same folder); or
+ * more than `COMMIT_MAX`. A change without `content` counts no bytes, so the paths can be checked
+ * before any file is read.
  */
-export function commitDenial(paths: string[]): string | undefined {
-  const bad = paths.find((p) => p.startsWith('/') || p.split('/').some((s) => s === '..' || s === '.git'));
+export function commitDenial(changes: Pick<Change, 'path' | 'content'>[]): string | undefined {
+  const paths = changes.map((c) => c.path);
+  const bad = paths.find((p) => p.startsWith('/') || p.split('/').some((s) => s === '..' || s.toLowerCase() === '.git'));
   if (bad) return `The change names ${bad}, outside the files a commit can hold, so nothing was pushed.`;
-  const github = paths.filter((p) => p.startsWith('.github/'));
+  const github = paths.filter((p) => /^\.github(\/|$)/i.test(p));
   if (github.length) return `The change touches ${github.join(', ')}, and Axon Shaft never commits anything under .github/, so nothing was pushed.`;
+  if (changes.length > COMMIT_MAX.files)
+    return `The change has ${changes.length} files, more than the ${COMMIT_MAX.files} one commit from Axon Shaft may hold, so nothing was pushed.`;
+  const big = changes.find((c) => (c.content?.length ?? 0) > COMMIT_MAX.fileBytes);
+  if (big) return `${big.path} is over ${mb(COMMIT_MAX.fileBytes)}, the most one file in a commit may be, so nothing was pushed.`;
+  const total = changes.reduce((n, c) => n + (c.content?.length ?? 0), 0);
+  if (total > COMMIT_MAX.totalBytes) return `The change adds up to over ${mb(COMMIT_MAX.totalBytes)}, the most one commit may hold, so nothing was pushed.`;
 }
 
 /** Files that decide what runs in CI and on install: package scripts, Makefiles and lock files. */

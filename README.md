@@ -194,8 +194,9 @@ What counts as a command:
 - Nothing is ever pushed to the default branch, in any mode, and never with `--force`.
 - When the push can't happen, because Push mode is Disabled, the pull request comes from a fork or its branch is the default branch, the session doesn't run. The reply and a notice say why, and the run ends with `push_failed` on the dashboard.
 - The commit holds the files the session changed, read before the checks run, with each file's executable bit, links kept as links (never followed), and deleted files removed. These can't be committed, and the whole change is refused with `push_failed` when it has one:
-  - anything under `.github/`, since workflows run with the repo's secrets;
-  - a path outside the checkout or under `.git/`;
+  - `.github` or anything under it, in any case (`.GitHub/` too), since workflows run with the repo's secrets;
+  - a path outside the checkout, or `.git` or anything under it, in any case;
+  - more than 200 files, a file over 1 MB, or more than 10 MB in all;
   - something that isn't a file or a link, such as a submodule.
 - A change to a `package.json`, a Makefile or a lock file is committed, and the reply lists those files under "Read before merging", because they decide what runs on install and in CI.
 - Before pushing, the action runs the checks again itself, with the same environment: the commands the model listed, or the install, `test` and `lint` when it listed none. When one fails, nothing is pushed, and the reply names it and shows the end of its output. Neither the session nor the checks may move HEAD off the pull request's head commit.

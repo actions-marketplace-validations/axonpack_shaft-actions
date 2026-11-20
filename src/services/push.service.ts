@@ -16,8 +16,8 @@ const git = (cwd: string, args: string[]) =>
  * What the session changed in the checkout, read before the checks run so that what they write
  * isn't pushed. A file's mode comes from the file itself (executable or not), a link is kept as a
  * link and never followed, and a deleted file has no mode. Nothing in the sandbox runs by now
- * (`endSandboxes`). HEAD must still be `base`, the commit the action checked out, and the paths
- * must pass `commitDenial`.
+ * (`endSandboxes`). HEAD must still be `base`, the commit the action checked out, and the change
+ * must pass `commitDenial`: its paths before any file is read, then its size.
  */
 export function readChanges(cwd: string, base: string): Change[] {
   assertHead(cwd, base);
@@ -25,9 +25,9 @@ export function readChanges(cwd: string, base: string): Change[] {
     .split('\0')
     .filter(Boolean)
     .map((l) => l.slice(3));
-  const why = commitDenial(paths) ?? paths.map((p) => (insideCheckout(dirname(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`)).find(Boolean);
+  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => (insideCheckout(dirname(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`)).find(Boolean);
   if (why) throw new ShaftFailure('push_failed', why);
-  return paths.map((path) => {
+  const changes = paths.map((path): Change => {
     const file = join(cwd, path);
     let fd;
     try {
@@ -48,6 +48,9 @@ export function readChanges(cwd: string, base: string): Change[] {
       closeSync(fd);
     }
   });
+  const big = commitDenial(changes);
+  if (big) throw new ShaftFailure('push_failed', big);
+  return changes;
 }
 
 /** The checkout's HEAD commit. */
