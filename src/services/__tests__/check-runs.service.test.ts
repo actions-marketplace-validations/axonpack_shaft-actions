@@ -6,7 +6,7 @@ beforeEach(() => {
   warnings.length = 0;
 });
 vi.doMock('@actions/core', () => ({ warning: (s: string) => warnings.push(s) }));
-const { gateResults, gatesConclusion, postCategoryChecks, postGatesCheck } = await import('../check-runs.service');
+const { gateResults, gatesConclusion, postCategoryChecks, postCheck, postGatesCheck, progressSummary } = await import('../check-runs.service');
 
 const met: Gate = { gate: 'A migration has a rollback', status: 'met', reason: 'It has one.' };
 const notMet: Gate = { gate: 'Docs are updated', status: 'not_met', reason: 'They are not.' };
@@ -28,7 +28,7 @@ test('the check fails when a gate is not met; a gate that does not apply passes'
 });
 
 test('the check is posted on the head commit with the gates in its summary, and a refused token only warns', async () => {
-  const create = vi.fn(async (_: object) => ({}));
+  const create = vi.fn(async (_: object) => ({ data: { id: 1 } }));
   const octokit = { rest: { checks: { create } } } as any;
   await postGatesCheck(octokit, 'o', 'r', 'abc1234', [met, notMet], (s) => s.replace('rollback', '***'));
   expect(create).toHaveBeenCalledWith({
@@ -56,7 +56,7 @@ test('the check is posted on the head commit with the gates in its summary, and 
 const finding: Placed = { severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 3, title: 'Wrong sum', body: 'It adds twice.', fp: 'abc123', inline: false };
 
 test('each review check that is on gets its own run, its conclusion from its state, its findings in the summary', async () => {
-  const create = vi.fn(async (_: object) => ({}));
+  const create = vi.fn(async (_: object) => ({ data: { id: 1 } }));
   const octokit = { rest: { checks: { create } } } as any;
   const states = [
     { key: 'correctness', state: 'failed' as const },
@@ -101,4 +101,32 @@ test('a token without Checks write warns once and the remaining category runs ar
   expect(warnings).toEqual([
     "Couldn't post the Axon Shaft / correctness check: Resource not accessible by integration. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.",
   ]);
+});
+
+test('a check run starts in progress, then the update by its id completes it; a refused start returns no id', async () => {
+  const create = vi.fn(async (_: object) => ({ data: { id: 42 } }));
+  const update = vi.fn(async (_: object) => ({ data: { id: 42 } }));
+  const octokit = { rest: { checks: { create, update } } } as any;
+  const id = await postCheck(octokit, 'o', 'r', 'abc1234', { name: 'Axon Shaft / review', title: 'Reviewing abc1234', summary: 'Running.' }, (s) => s);
+  expect(id).toBe(42);
+  expect(create).toHaveBeenCalledWith({ owner: 'o', repo: 'r', name: 'Axon Shaft / review', head_sha: 'abc1234', status: 'in_progress', output: { title: 'Reviewing abc1234', summary: 'Running.' } });
+  await postCheck(octokit, 'o', 'r', 'abc1234', { name: 'Axon Shaft / review', id, conclusion: 'success', title: 'Reviewed', summary: 's', detailsUrl: 'https://x' }, (s) => s);
+  expect(update).toHaveBeenCalledWith({
+    owner: 'o',
+    repo: 'r',
+    name: 'Axon Shaft / review',
+    check_run_id: 42,
+    status: 'completed',
+    conclusion: 'success',
+    details_url: 'https://x',
+    output: { title: 'Reviewed', summary: 's' },
+  });
+
+  create.mockRejectedValueOnce(new Error('Resource not accessible by integration'));
+  expect(await postCheck(octokit, 'o', 'r', 'abc1234', { name: 'Axon Shaft / review', title: 't', summary: 's' }, (s) => s)).toBeUndefined();
+  expect(warnings).toHaveLength(1);
+});
+
+test('the progress summary marks the steps done and the current one, with when it started', () => {
+  expect(progressSummary('Review', 65_400)).toBe('- ✓ Read the pull request\n- ▶ **Review**\n- Post the review\n\nThis step started 1m 05s into the review.');
 });

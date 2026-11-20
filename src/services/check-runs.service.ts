@@ -23,29 +23,51 @@ export const gatesConclusion = (gates: Gate[]) => (gates.some((g) => g.status ==
 
 type Conclusion = 'success' | 'failure' | 'neutral' | 'skipped';
 
+/** The check run that shows a review in progress, then its result. */
+export const REVIEW_CHECK = 'Axon Shaft / review';
+
+/** The review's steps in the order they run, named as in the job log. */
+export const REVIEW_STEPS = ['Read the pull request', 'Review', 'Post the review'] as const;
+export type ReviewStep = (typeof REVIEW_STEPS)[number];
+
+/** The review check's summary while it runs: ✓ on the steps done, the current one in bold, and when it started. */
+export function progressSummary(current: ReviewStep, ms: number): string {
+  const at = REVIEW_STEPS.indexOf(current);
+  const s = Math.round(ms / 1000);
+  const steps = REVIEW_STEPS.map((name, i) => (i < at ? `- ✓ ${name}` : i === at ? `- ▶ **${name}**` : `- ${name}`));
+  return `${steps.join('\n')}\n\nThis step started ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s into the review.`;
+}
+
 /**
- * Posts one completed check run on the reviewed commit; false when GitHub refused it. A token without
- * Checks write (the app's installation hasn't approved it yet) only warns: the review is already posted.
+ * Posts a check run on the reviewed commit: in progress without a conclusion, completed with one,
+ * and an update of run `id` when given. Returns the run's id, or undefined when GitHub refused it.
+ * A token without Checks write (the app's installation hasn't approved it yet) only warns: the review is already posted.
  */
-async function postCheck(
+export async function postCheck(
   octokit: Octokit,
   owner: string,
   repo: string,
   sha: string,
-  c: { name: string; conclusion: Conclusion; title: string; summary: string },
+  c: { name: string; conclusion?: Conclusion; title: string; summary: string; detailsUrl?: string; id?: number },
   clean: (s: string) => string,
-): Promise<boolean> {
-  return octokit.rest.checks
-    .create({ owner, repo, name: c.name, head_sha: sha, status: 'completed', conclusion: c.conclusion, output: { title: c.title, summary: clean(c.summary) } })
-    .then(
-      () => true,
-      (e: Error) => {
-        core.warning(
-          `Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`,
-        );
-        return false;
-      },
-    );
+): Promise<number | undefined> {
+  const run = {
+    owner,
+    repo,
+    name: c.name,
+    ...(c.conclusion ? { status: 'completed' as const, conclusion: c.conclusion } : { status: 'in_progress' as const }),
+    ...(c.detailsUrl ? { details_url: c.detailsUrl } : {}),
+    output: { title: c.title, summary: clean(c.summary) },
+  };
+  return (c.id ? octokit.rest.checks.update({ ...run, check_run_id: c.id }) : octokit.rest.checks.create({ ...run, head_sha: sha })).then(
+    ({ data }) => data.id,
+    (e: Error) => {
+      core.warning(
+        `Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`,
+      );
+      return undefined;
+    },
+  );
 }
 
 /** Posts the gates check on the reviewed commit. */

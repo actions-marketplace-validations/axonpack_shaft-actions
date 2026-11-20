@@ -1,12 +1,24 @@
 import * as core from '@actions/core';
 import { type Choice, matches, pick } from '../utils/auto-pick.util';
-import { ShaftFailure } from '../utils/failure.util';
+import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
 import { runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
-import { CATEGORY_CONCLUSION, categoryCheck, gateResults, GATES_CHECK, gatesConclusion, postCategoryChecks, postGatesCheck } from './check-runs.service';
+import {
+  CATEGORY_CONCLUSION,
+  categoryCheck,
+  gateResults,
+  GATES_CHECK,
+  gatesConclusion,
+  postCategoryChecks,
+  postCheck,
+  postGatesCheck,
+  progressSummary,
+  REVIEW_CHECK,
+  type ReviewStep,
+} from './check-runs.service';
 import { step } from './step.service';
 import {
   checkStates,
@@ -175,8 +187,51 @@ export async function reviewPullRequest(o: ReviewOptions & { owner: string; repo
   return reviewContext(await step('Read the pull request', () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot)), o);
 }
 
-/** Review a collected PR and post the result (or print it, on a dry run). */
+/**
+ * Review a collected PR and post the result (or print it, on a dry run). Progress shows only in ways
+ * that email no one: the `Axon Shaft / review` check run, in progress until the result, with its
+ * title and summary updated once at the start of each step.
+ */
 export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<ReviewOutcome> {
+  const { octokit } = o;
+  const { owner, repo } = ctx;
+  const sha = ctx.pr.headSha;
+  const clean = (text: string) => redact(text, o.secrets);
+  let check: number | undefined;
+  if (o.dryRun) core.info(`Would start the ${REVIEW_CHECK} check`);
+  else {
+    const started = { name: REVIEW_CHECK, title: `Reviewing ${sha.slice(0, 7)}`, summary: 'The review is running.', detailsUrl: o.runUrl };
+    check = await postCheck(octokit, owner, repo, sha, started, clean);
+  }
+  const startedAt = Date.now();
+  let live = true;
+  // One update per step, never on a timer. After a refused update (which postCheck warns about) the rest are skipped.
+  const progress = async (now: ReviewStep, title: string) => {
+    if (o.dryRun) return core.info(`Would update the ${REVIEW_CHECK} check: ${title}`);
+    if (!check || !live) return;
+    live = (await postCheck(octokit, owner, repo, sha, { name: REVIEW_CHECK, id: check, title, summary: progressSummary(now, Date.now() - startedAt) }, clean)) !== undefined;
+  };
+  const finish = async (c: { conclusion: 'success' | 'failure'; title: string; summary: string; detailsUrl?: string }) => {
+    if (check) await postCheck(octokit, owner, repo, sha, { name: REVIEW_CHECK, id: check, ...c }, clean);
+  };
+  try {
+    // A token that refused the review check would refuse the others too, so they're skipped and the log warns once.
+    const out = await postReview(ctx, o, o.dryRun || check !== undefined, progress);
+    await finish({ conclusion: 'success', title: `Reviewed ${sha.slice(0, 7)}`, summary: `${out.output.headline}\n\n[The summary comment](${out.summaryUrl})`, detailsUrl: out.summaryUrl });
+    return out;
+  } catch (e) {
+    const failure = e instanceof ShaftFailure ? e : new ShaftFailure('review_failed', e instanceof Error ? e.message : String(e), o.runUrl);
+    await finish({ conclusion: 'failure', title: 'The review failed', summary: failureMarkdown(failure), detailsUrl: failure.url ?? o.runUrl });
+    throw e;
+  }
+}
+
+async function postReview(
+  ctx: Context,
+  o: ReviewOptions,
+  canCheck: boolean,
+  progress: (now: ReviewStep, title: string) => Promise<void>,
+): Promise<ReviewOutcome> {
   const { octokit } = o;
   const sha = ctx.pr.headSha;
   const clean = (text: string) => redact(text, o.secrets);
@@ -197,7 +252,11 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     summary = { id: data.id, html_url: data.html_url };
   };
 
-  await writeSummary(startSummary(sha, prior));
+  // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
+  if (summary) await writeSummary(startSummary(sha, prior));
+  // An alias reads as a name (`sonnet` as Sonnet); a full model ID stays as written.
+  const model = /^[a-z]+$/.test(choice.model) ? choice.model[0]!.toUpperCase() + choice.model.slice(1) : choice.model;
+  await progress('Review', `Reviewing with ${model}, effort ${choice.effort}`);
   let result;
   try {
     result = await step('Review', () =>
@@ -226,6 +285,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   const gates = o.gates?.length ? gateResults(o.gates, result.review.gates) : undefined;
   const review = { ...result.review, gates };
   core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
+  await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 
   const placed = place(review.findings, files, o.nits);
@@ -281,12 +341,12 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   else await writeSummary(body);
 
   if (gates && o.dryRun) core.info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
-  else if (gates) await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
+  else if (gates && canCheck) await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
 
   const states = checkStates(review, placed, o.checks);
   if (o.dryRun) {
     for (const c of states) if (CATEGORY_CONCLUSION[c.state]) core.info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
-  } else await postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean);
+  } else if (canCheck) await postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean);
 
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun) core.info(`Would resolve the threads of ${fixed.join(', ')}`);

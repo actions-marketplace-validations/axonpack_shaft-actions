@@ -23842,6 +23842,43 @@ function checkoutHead(cwd, number, token) {
   git("checkout", "--quiet", "--detach", "FETCH_HEAD");
 }
 
+// src/services/reaction.service.ts
+function triggerComment(eventName, payload) {
+  const id = payload.comment?.id;
+  if (typeof id !== "number" || eventName !== "issue_comment" && eventName !== "pull_request_review_comment")
+    return;
+  return { id, review: eventName === "pull_request_review_comment" };
+}
+var warn = (what) => (e) => {
+  warning(`Couldn't ${what} on the comment that started the run: ${e.message}`);
+  return;
+};
+async function add(r, content) {
+  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, content };
+  const { data } = await (r.comment.review ? r.octokit.rest.reactions.createForPullRequestReviewComment(req) : r.octokit.rest.reactions.createForIssueComment(req));
+  return data.id;
+}
+async function reactStart(octokit, event, dryRun) {
+  const comment = triggerComment(event.eventName, event.payload);
+  if (!comment)
+    return;
+  const r = { octokit, owner: event.repo.owner, repo: event.repo.repo, comment, dryRun };
+  if (dryRun) {
+    info("Would react \uD83D\uDC40 to the comment that started the run");
+    return r;
+  }
+  const id = await add(r, "eyes").catch(warn("add \uD83D\uDC40"));
+  return id === undefined ? undefined : { ...r, id };
+}
+async function reactEnd(r, done) {
+  const [content, emoji] = done ? ["rocket", "\uD83D\uDE80"] : ["confused", "\uD83D\uDE15"];
+  if (r.dryRun)
+    return info(`Would swap \uD83D\uDC40 for ${emoji} on the comment that started the run`);
+  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, reaction_id: r.id };
+  await (r.comment.review ? r.octokit.rest.reactions.deleteForPullRequestComment(req) : r.octokit.rest.reactions.deleteForIssueComment(req)).catch(warn("remove \uD83D\uDC40"));
+  await add(r, content).catch(warn(`add ${emoji}`));
+}
+
 // src/utils/auto-pick.util.ts
 import { matchesGlob } from "node:path";
 var DEFAULT_MAX_TURNS = 30;
@@ -58627,10 +58664,29 @@ function gateResults(gates, reported = []) {
   });
 }
 var gatesConclusion = (gates) => gates.some((g) => g.status === "not_met") ? "failure" : "success";
+var REVIEW_CHECK = "Axon Shaft / review";
+var REVIEW_STEPS = ["Read the pull request", "Review", "Post the review"];
+function progressSummary(current, ms) {
+  const at = REVIEW_STEPS.indexOf(current);
+  const s = Math.round(ms / 1000);
+  const steps = REVIEW_STEPS.map((name, i) => i < at ? `- ✓ ${name}` : i === at ? `- ▶ **${name}**` : `- ${name}`);
+  return `${steps.join(`
+`)}
+
+This step started ${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s into the review.`;
+}
 async function postCheck(octokit, owner, repo, sha, c, clean) {
-  return octokit.rest.checks.create({ owner, repo, name: c.name, head_sha: sha, status: "completed", conclusion: c.conclusion, output: { title: c.title, summary: clean(c.summary) } }).then(() => true, (e) => {
+  const run = {
+    owner,
+    repo,
+    name: c.name,
+    ...c.conclusion ? { status: "completed", conclusion: c.conclusion } : { status: "in_progress" },
+    ...c.detailsUrl ? { details_url: c.detailsUrl } : {},
+    output: { title: c.title, summary: clean(c.summary) }
+  };
+  return (c.id ? octokit.rest.checks.update({ ...run, check_run_id: c.id }) : octokit.rest.checks.create({ ...run, head_sha: sha })).then(({ data }) => data.id, (e) => {
     warning(`Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`);
-    return false;
+    return;
   });
 }
 async function postGatesCheck(octokit, owner, repo, sha, gates, clean) {
@@ -58760,6 +58816,43 @@ async function reviewPullRequest(o) {
 }
 async function reviewContext(ctx, o) {
   const { octokit } = o;
+  const { owner, repo } = ctx;
+  const sha = ctx.pr.headSha;
+  const clean = (text) => redact(text, o.secrets);
+  let check;
+  if (o.dryRun)
+    info(`Would start the ${REVIEW_CHECK} check`);
+  else {
+    const started = { name: REVIEW_CHECK, title: `Reviewing ${sha.slice(0, 7)}`, summary: "The review is running.", detailsUrl: o.runUrl };
+    check = await postCheck(octokit, owner, repo, sha, started, clean);
+  }
+  const startedAt = Date.now();
+  let live = true;
+  const progress = async (now, title) => {
+    if (o.dryRun)
+      return info(`Would update the ${REVIEW_CHECK} check: ${title}`);
+    if (!check || !live)
+      return;
+    live = await postCheck(octokit, owner, repo, sha, { name: REVIEW_CHECK, id: check, title, summary: progressSummary(now, Date.now() - startedAt) }, clean) !== undefined;
+  };
+  const finish = async (c) => {
+    if (check)
+      await postCheck(octokit, owner, repo, sha, { name: REVIEW_CHECK, id: check, ...c }, clean);
+  };
+  try {
+    const out = await postReview(ctx, o, o.dryRun || check !== undefined, progress);
+    await finish({ conclusion: "success", title: `Reviewed ${sha.slice(0, 7)}`, summary: `${out.output.headline}
+
+[The summary comment](${out.summaryUrl})`, detailsUrl: out.summaryUrl });
+    return out;
+  } catch (e) {
+    const failure = e instanceof ShaftFailure ? e : new ShaftFailure("review_failed", e instanceof Error ? e.message : String(e), o.runUrl);
+    await finish({ conclusion: "failure", title: "The review failed", summary: failureMarkdown(failure), detailsUrl: failure.url ?? o.runUrl });
+    throw e;
+  }
+}
+async function postReview(ctx, o, canCheck, progress) {
+  const { octokit } = o;
   const sha = ctx.pr.headSha;
   const clean = (text) => redact(text, o.secrets);
   const prior = parseState(ctx.summary?.body);
@@ -58776,7 +58869,10 @@ async function reviewContext(ctx, o) {
     const { data } = summary ? await octokit.rest.issues.updateComment({ ...req, comment_id: summary.id }) : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
   };
-  await writeSummary(startSummary(sha, prior));
+  if (summary)
+    await writeSummary(startSummary(sha, prior));
+  const model = /^[a-z]+$/.test(choice.model) ? choice.model[0].toUpperCase() + choice.model.slice(1) : choice.model;
+  await progress("Review", `Reviewing with ${model}, effort ${choice.effort}`);
   let result;
   try {
     result = await step("Review", () => runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
@@ -58801,6 +58897,7 @@ async function reviewContext(ctx, o) {
   const gates = o.gates?.length ? gateResults(o.gates, result.review.gates) : undefined;
   const review = { ...result.review, gates };
   info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
+  await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
@@ -58856,14 +58953,14 @@ ${clean(body)}`);
     await writeSummary(body);
   if (gates && o.dryRun)
     info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
-  else if (gates)
+  else if (gates && canCheck)
     await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
   const states = checkStates(review, placed, o.checks);
   if (o.dryRun) {
     for (const c of states)
       if (CATEGORY_CONCLUSION[c.state])
         info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
-  } else
+  } else if (canCheck)
     await postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean);
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun)
@@ -58928,6 +59025,8 @@ function positive(name, value) {
 }
 var globs = (v) => Array.isArray(v) ? v.filter((g) => typeof g === "string") : [];
 var reportFailure;
+var reaction;
+var done = false;
 async function run() {
   const started = Date.now();
   const r = route(context2.eventName, context2.payload);
@@ -58939,12 +59038,17 @@ async function run() {
   const pull_request = pullRequestOf(context2.payload);
   const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork, pull_request } : { job: r.mode, pull_request }));
   if (!grant.run) {
-    if (typeof grant.comment === "string" && typeof grant.github_token === "string") {
-      if (dryRun)
-        info(`--- comment
+    if (typeof grant.github_token === "string") {
+      const gh = getOctokit(grant.github_token);
+      if (typeof grant.comment === "string") {
+        reaction = await reactStart(gh, context2, dryRun);
+        if (dryRun)
+          info(`--- comment
 ${grant.comment}`);
-      else
-        await commentOnce(getOctokit(grant.github_token), owner, repo, r.number, grant.comment, APP_BOT);
+        else
+          await commentOnce(gh, owner, repo, r.number, grant.comment, APP_BOT);
+        done = true;
+      }
     }
     return notice(grant.reason);
   }
@@ -58952,11 +59056,13 @@ ${grant.comment}`);
   if (r.mode !== "review") {
     if (!await hasWriteAccess(octokit, owner, repo, r.actor))
       return notice(`${r.actor} has no write access, so nothing was started.`);
+    reaction = await reactStart(octokit, context2, dryRun);
     return notice(`${r.mode === "reply" ? "Reply" : "Task"} mode is not built yet.`);
   }
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
     return notice(`${r.actor} has no write access, so no review was started. Only people with write access can start one with ${REVIEW_COMMAND}.`);
   }
+  reaction = await reactStart(octokit, context2, dryRun);
   const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString("base64")];
   reportFailure = (e) => reportRun({
     error: { code: e instanceof ShaftFailure ? e.code : "review_failed", message: redact(e instanceof Error ? e.message : String(e), secrets) },
@@ -58993,6 +59099,7 @@ ${grant.comment}`);
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);
   setOutput("summary_url", out.summaryUrl);
+  done = true;
   await reportRun({
     verdict: out.verdict,
     model: out.model,
@@ -59011,4 +59118,4 @@ async function fail(e) {
     return;
   await summary.addRaw(failureMarkdown(e)).write().catch((w) => warning(`Couldn't write the job summary: ${w.message}`));
 }
-run().catch(fail);
+run().catch(fail).finally(() => reaction && reactEnd(reaction, done));
