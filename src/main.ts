@@ -9,6 +9,7 @@ import { replyToComment } from './services/reply.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
+import { runTask } from './services/task.service';
 import { failureMarkdown, ShaftFailure } from './utils/failure.util';
 import { redact } from './utils/render.util';
 
@@ -59,20 +60,20 @@ async function run(): Promise<void> {
   }
   const octokit = getOctokit(grant.github_token);
 
-  if (r.mode !== 'review' && r.mode !== 'reply') {
-    if (!(await hasWriteAccess(octokit, owner, repo, r.actor))) return core.notice(`${r.actor} has no write access, so nothing was started.`);
-    reaction = await reactStart(octokit, context, dryRun);
-    return core.notice('Task mode is not built yet.');
-  }
+  if (r.mode === 'help') return core.notice('The Axon Shaft API sent a run for /help, which runs nothing.');
   if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
     const what =
       r.mode === 'review'
         ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}`
-        : "the question wasn't answered. Only people with write access can ask with /ask";
+        : r.mode === 'reply'
+          ? "the question wasn't answered. Only people with write access can ask with /ask"
+          : 'nothing was changed. Only people with write access can start a change with /fix or /axonshaft';
     return core.notice(`${r.actor} has no write access, so ${what}.`);
   }
   reaction = await reactStart(octokit, context, dryRun);
-  const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64')];
+  const secrets = [grant.claude_token.value, grant.github_token, grant.push_token]
+    .filter((t): t is string => !!t)
+    .flatMap((t) => (t === grant.claude_token.value ? [t] : [t, Buffer.from(`x-access-token:${t}`).toString('base64')]));
   reportFailure = (e) =>
     reportRun({
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
@@ -82,7 +83,7 @@ async function run(): Promise<void> {
   if (context.eventName !== 'pull_request') await step('Check out the pull request', async () => checkoutHead(cwd, r.number, grant.github_token));
 
   const { settings, job } = grant;
-  // What a review and a reply both run with.
+  // What a review, a reply and a task all run with.
   const common = {
     octokit,
     owner,
@@ -111,6 +112,24 @@ async function run(): Promise<void> {
     ...(grant.claude_token.kind === 'api_key' ? { cost_usd: o.costUsd } : {}),
   });
 
+  if (r.mode === 'task') {
+    const out = await runTask({
+      ...common,
+      ask: r.ask,
+      asker: r.actor,
+      bare: r.bare,
+      template: job.prompt.template,
+      pushMode: String(settings.pushMode),
+      pushToken: grant.push_token,
+      repoUrl: `${context.serverUrl}/${owner}/${repo}`,
+    });
+    if (!('refused' in out)) {
+      done = true;
+      return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
+    }
+    core.notice(out.refused);
+    return reportRun({ error: { code: 'push_failed', message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
+  }
   if (r.mode === 'reply') {
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });
     done = true;

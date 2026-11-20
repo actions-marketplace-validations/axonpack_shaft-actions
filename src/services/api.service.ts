@@ -60,6 +60,8 @@ export type Grant =
   | {
       run: true;
       github_token: string;
+      /** A task's, when the project lets it push: Contents write only, for `pushBranch` after the session. */
+      push_token?: string;
       claude_token: ClaudeToken;
       /**
        * The dashboard's settings for this repo, already merged with the account's and the defaults.
@@ -90,9 +92,9 @@ export type RunOutput = {
   fixed: number;
 };
 
-/** What `POST /v1/runs` takes: a finished review or reply, or a run that failed after it opened. */
+/** What `POST /v1/runs` takes: a finished review, reply or task, or a run that failed after it opened. */
 export type RunSummary = RunDone | ReplyDone | { error: { code: string; message: string }; duration_ms: number };
-/** A finished reply: no verdict or findings, and its answer as `output`. */
+/** A finished reply or task: no verdict or findings, and what it posted as `output`. */
 type ReplyDone = Pick<RunDone, 'model' | 'effort' | 'duration_ms' | 'tokens' | 'cost_usd'> & { output: { answer: string; comment_url: string } };
 type RunDone = {
   verdict: string;

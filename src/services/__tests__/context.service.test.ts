@@ -21,7 +21,7 @@ function octokit(issueComments: object[], reviewComments: object[], permissions:
     paginate: async (fn: unknown) => lists.get(fn),
     rest: {
       pulls: {
-        get: async () => ({ data: { title: 't', body: '', user: { login: 'author' }, head: { sha: 'abc', ref: 'feature' }, base: { ref: 'main' } } }),
+        get: async () => ({ data: { title: 't', body: '', user: { login: 'author' }, head: { sha: 'abc', ref: 'feature', repo: { full_name: 'o/r' } }, base: { ref: 'main', repo: { full_name: 'o/r', default_branch: 'main' } } } }),
         listFiles,
         listCommits,
         listReviewComments,

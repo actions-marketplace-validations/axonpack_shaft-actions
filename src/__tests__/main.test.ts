@@ -85,6 +85,16 @@ vi.doMock('../services/reply.service', () => ({
   },
 }));
 
+let tasked: Record<string, unknown> | undefined;
+/** What the mocked task returns: a finished one, or one refused before its session. */
+let taskOut: Record<string, unknown> = { model: 'claude-opus-5-5', effort: 'high', tokens: {}, costUsd: 0.5, output: { answer: 'Fixed it.', comment_url: '' } };
+vi.doMock('../services/task.service', () => ({
+  runTask: async (o: Record<string, unknown>) => {
+    tasked = o;
+    return taskOut;
+  },
+}));
+
 const tokens = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
 const output = { headline: 'h', claim: 'c', impact: 'i', scope: 's', not_checked: 'n', type: 'feature', confidence: 90, comment_url: '', checks: [], findings: [], fixed: 0 };
 const outcome = { verdict: 'looks-good', findings: 0, summaryUrl: '', model: 'sonnet', effort: 'medium', bySeverity: { blocking: 0, should_fix: 0, nit: 0 }, tokens, costUsd: 0.42, output };
@@ -142,6 +152,8 @@ beforeEach(() => {
   reviewed = undefined;
   replied = undefined;
   replyError = undefined;
+  tasked = undefined;
+  taskOut = { model: 'claude-opus-5-5', effort: 'high', tokens, costUsd: 0.5, output: { answer: 'Fixed it.', comment_url: '' } };
   reviewError = undefined;
   process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
 });
@@ -412,6 +424,51 @@ test('a failed /ask swaps the 👀 for 😕', async () => {
   api(Response.json(replyGrant));
   await main();
   await vi.waitFor(() => expect(reactions).toEqual([...SWAPPED, 'confused on 501']));
+});
+
+const taskGrant = { ...grant, push_token: 'ghs_push', settings: { ...grant.settings, pushMode: 'restricted' }, job: { type: 'task', version: 1, options: {}, checks: [], prompt: { template: '# Task {{request}}', passes: [] } } };
+
+test('/fix asks for a task grant and runs it with the push token, which the reports never show, and reports its reply', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = comment;
+  api(Response.json(taskGrant));
+  await main();
+  expect(failed).toEqual([]);
+  expect(asked).toEqual({ job: 'task', pull_request: { number: 12, title: 'Retry failed uploads', author: 'octocat' } });
+  expect(checkedOut).toEqual([[process.env.GITHUB_WORKSPACE ?? process.cwd(), 12, 'ghs_shaft']]);
+  expect(tasked).toMatchObject({
+    ask: { id: 501, text: '/fix the failing test please' },
+    asker: 'maintainer',
+    bare: false,
+    template: '# Task {{request}}',
+    pushMode: 'restricted',
+    pushToken: 'ghs_push',
+    repoUrl: 'https://github.com/acme/widgets',
+    env: ['NODE_OPTIONS'],
+  });
+  expect(tasked!.secrets).toEqual(expect.arrayContaining(['ghs_push', Buffer.from('x-access-token:ghs_push').toString('base64')]));
+  expect(reported).toEqual({ model: 'claude-opus-5-5', effort: 'high', duration_ms: expect.any(Number), tokens, output: { answer: 'Fixed it.', comment_url: '' } });
+});
+
+test('a task that refuses to push ends with a notice and reports push_failed with the reason', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = comment;
+  taskOut = { refused: 'Pushing is turned off for this project.' };
+  api(Response.json(taskGrant));
+  await main();
+  expect(failed).toEqual([]);
+  expect(notices).toEqual(['Pushing is turned off for this project.']);
+  expect(reported).toEqual({ error: { code: 'push_failed', message: 'Pushing is turned off for this project.' }, duration_ms: expect.any(Number) });
+});
+
+test('/fix from someone without write access starts nothing, and the notice says who can', async () => {
+  context.eventName = 'issue_comment';
+  context.payload = comment;
+  permission = 'read';
+  api(Response.json(taskGrant));
+  await main();
+  expect(notices).toEqual(['maintainer has no write access, so nothing was changed. Only people with write access can start a change with /fix or /axonshaft.']);
+  expect(tasked).toBeUndefined();
 });
 
 test("an API error fails the step with the API's message, and the job summary shows its card, message and link", async () => {

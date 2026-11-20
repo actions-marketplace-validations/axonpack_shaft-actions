@@ -77,7 +77,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
     paginate: async (fn: unknown) => lists.get(fn),
     rest: {
       pulls: {
-        get: async () => ({ data: { title: 't', body: '', user: { login: 'author' }, head: { sha: 'abc1234def', ref: 'feature' }, base: { ref: 'main' } } }),
+        get: async () => ({ data: { title: 't', body: '', user: { login: 'author' }, head: { sha: 'abc1234def', ref: 'feature', repo: { full_name: 'acme/widgets' } }, base: { ref: 'main', repo: { full_name: 'acme/widgets', default_branch: 'main' } } } }),
         listFiles,
         listCommits,
         listReviewComments,
@@ -153,7 +153,7 @@ test('buildPrompt fills every slot with the run\'s data and changes nothing else
   const ctx = {
     owner: 'acme',
     repo: 'widgets',
-    pr: { number: 7, title: 'Fix {{diff}} in prices', body: '', author: 'ana', headSha: 'abc1234def', base: 'main', head: 'fix' },
+    pr: { number: 7, title: 'Fix {{diff}} in prices', body: '', author: 'ana', headSha: 'abc1234def', base: 'main', head: 'fix', fork: false, defaultBranch: 'main' },
     commits: ['Fix prices'],
     files: [{ ...file('src/price.ts', '@@ -1 +1 @@\n-const p = 1;\n+const p = `$&$1$$`;'), status: 'modified' }],
     comments: [],
@@ -185,7 +185,7 @@ test('buildPrompt fills every slot with the run\'s data and changes nothing else
 });
 
 test('buildPrompt fills empty data as None. and leaves a slot it doesn\'t know as written', () => {
-  const ctx = { owner: 'o', repo: 'r', pr: { number: 1, title: 't', body: '  \n', author: 'a', headSha: 's', base: 'b', head: 'h' }, commits: [], files: [], comments: [], reviewComments: [], guides: [] };
+  const ctx = { owner: 'o', repo: 'r', pr: { number: 1, title: 't', body: '  \n', author: 'a', headSha: 's', base: 'b', head: 'h', fork: false, defaultBranch: 'b' }, commits: [], files: [], comments: [], reviewComments: [], guides: [] };
   expect(buildPrompt(ctx, undefined, { template: '{{guides}}|{{previous}}|{{body}}|{{diff}}|{{constructor}}|{{later}}', focus: [], skipped: 0 })).toBe(
     'None.|None.|None.|None.|{{constructor}}|{{later}}',
   );

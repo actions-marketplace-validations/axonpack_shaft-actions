@@ -92,6 +92,23 @@ test("a pass with checklists limits the reply's step to their keys; without, it'
   expect(SCHEMA.properties.findings.items.properties.step.enum).toContain('rules');
 });
 
+test("a task's session may edit and run the repo's commands, each call through the guard; a review's may not edit", async () => {
+  process.env.GITHUB_TOKEN = 'ghs_env';
+  reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'looks-good', headline: 'h', findings: [] }, modelUsage: {}, total_cost_usd: 0 }];
+  await runAgent('prompt', { ...options, cwd: process.cwd(), commands: ['bun run test'] }, REVIEW_FORMAT);
+  await runAgent('prompt', options, REVIEW_FORMAT);
+  const [task, review] = asked.map((a) => a.options as unknown as { tools: string[]; allowedTools: string[]; env: object; hooks: { PreToolUse: { hooks: ((i: object) => Promise<any>)[] }[] } });
+  expect(task!.tools).toEqual(['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'Write']);
+  expect(review!.tools).not.toContain('Edit');
+  expect(JSON.stringify(task!.env)).not.toMatch(/ghs_/);
+  const hook = task!.hooks.PreToolUse[0]!.hooks[0]!;
+  const decide = async (tool_name: string, tool_input: object) => (await hook({ tool_name, tool_input }))?.hookSpecificOutput?.permissionDecision ?? 'allow';
+  expect(await decide('Bash', { command: 'bun run test src/a.test.ts' })).toBe('allow');
+  expect(await decide('Edit', { file_path: 'src/a.ts' })).toBe('allow');
+  for (const command of ['git push origin HEAD', 'gh pr view', 'git commit -m x', 'npm install left-pad', 'bun run deploy']) expect(await decide('Bash', { command }), command).toBe('deny');
+  expect(await decide('Write', { file_path: '.git/hooks/pre-push' })).toBe('deny');
+});
+
 test('a run past the time limit is review_timed_out, linking the dashboard', async () => {
   reply = 'hang';
   expect(await failure(runAgent('prompt', { ...options, timeoutMinutes: 0.0005 }, REVIEW_FORMAT))).toEqual({

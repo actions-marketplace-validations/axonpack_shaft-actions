@@ -19,7 +19,8 @@ export type Comment = {
 export type Context = {
   owner: string;
   repo: string;
-  pr: { number: number; title: string; body: string; author: string; headSha: string; base: string; head: string };
+  /** `fork`: the head branch lives in another repo, or one that was deleted. `defaultBranch` is the base repo's. */
+  pr: { number: number; title: string; body: string; author: string; headSha: string; base: string; head: string; fork: boolean; defaultBranch: string };
   commits: string[];
   files: (ChangedFile & { status: string })[];
   /** Issue comments, without our own summary. */
@@ -115,6 +116,8 @@ export async function collectContext(
       headSha: pr.head.sha,
       base: pr.base.ref,
       head: pr.head.ref,
+      fork: pr.head.repo?.full_name !== pr.base.repo.full_name,
+      defaultBranch: pr.base.repo.default_branch,
     },
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),

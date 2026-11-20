@@ -29,28 +29,50 @@ export function insideCheckout(path: string, cwd: string): boolean {
 /** git options that read files outside the repo or write a file. */
 const GIT_DENIED = /^--(no-in|ou|ext)/;
 
+/** An install takes no more words: a package name after it would fetch anything from the network. */
+const INSTALL = / (ci|install)\b/;
+
 /**
- * Why the review agent may not make this tool call, or undefined when it may. The agent reads the
- * checkout and nothing else: never the runner's environment (`/proc/self/environ` holds the Claude
- * token), home, temp or tool folders. Bash runs only plain `git diff`, `git log` and `git show`.
+ * Whether `command` is one of the repo's `commands` (`repoCommands`), or one with more words after
+ * it, such as a test file. An install must match exactly.
  */
-export function toolDenial(tool: string, input: Record<string, unknown>, cwd: string): string | undefined {
+export const isRepoCommand = (command: string, commands: string[]): boolean =>
+  commands.some((c) => command === c || (!INSTALL.test(c) && command.startsWith(`${c} `)));
+
+/**
+ * Why the agent may not make this tool call, or undefined when it may. The agent reads the checkout
+ * and nothing else: never the runner's environment (`/proc/self/environ` holds the Claude token),
+ * home, temp or tool folders. Bash runs only plain `git diff`, `git log` and `git show`.
+ *
+ * A task passes the repo's `commands`: it may also edit files in the checkout (never under `.git/`),
+ * and run `git status` and those commands, with the same checks on their words. Nothing else runs:
+ * no `git commit` or `git push`, no `gh`, and no install beyond the repo's own.
+ */
+export function toolDenial(tool: string, input: Record<string, unknown>, cwd: string, commands?: string[]): string | undefined {
   const outside = (p: unknown) => typeof p === 'string' && !insideCheckout(p, cwd);
   if (tool === 'Read' && (typeof input.file_path !== 'string' || outside(input.file_path))) return 'Only files in the checkout can be read.';
   if ((tool === 'Grep' || tool === 'Glob') && outside(input.path)) return 'Only the checkout can be searched.';
   if (tool === 'Glob' && typeof input.pattern === 'string' && (isAbsolute(input.pattern) || input.pattern.includes('..') || input.pattern.startsWith('~'))) {
     return 'Glob patterns stay inside the checkout.';
   }
+  if (tool === 'Edit' || tool === 'Write') {
+    if (!commands) return 'This run only reads.';
+    if (typeof input.file_path !== 'string' || outside(input.file_path)) return 'Only files in the checkout can be edited.';
+    if (insideCheckout(resolve(cwd, input.file_path), resolve(cwd, '.git'))) return 'Nothing under .git/ can be edited.';
+    return;
+  }
   if (tool !== 'Bash') return;
-  const command = typeof input.command === 'string' ? input.command : '';
-  if (/[;&|<>`$(){}\\\n]/.test(command)) return 'Only plain git diff, git log and git show commands run.';
+  const allowed = commands ? 'git diff, git log, git show, git status and the repo\'s own commands' : 'git diff, git log and git show';
+  const command = typeof input.command === 'string' ? input.command.trim() : '';
+  if (/[;&|<>`$(){}\\\n]/.test(command)) return `Only plain ${allowed} run.`;
   // ponytail: a whitespace split; the metacharacter check above already refuses anything that needs real shell parsing
-  const args = command.trim().split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ''));
-  if (args[0] !== 'git' || !['diff', 'log', 'show'].includes(args[1])) return 'Only git diff, git log and git show run.';
-  for (const arg of args.slice(2)) {
-    if (GIT_DENIED.test(arg)) return `git ${arg.split('=')[0]} isn't allowed.`;
+  const args = command.split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ''));
+  const git = args[0] === 'git' && ['diff', 'log', 'show', ...(commands ? ['status'] : [])].includes(args[1]);
+  if (!git && !(commands && isRepoCommand(command, commands))) return `Only ${allowed} run.`;
+  for (const arg of args.slice(git ? 2 : 1)) {
+    if (git && GIT_DENIED.test(arg)) return `git ${arg.split('=')[0]} isn't allowed.`;
     const value = arg.startsWith('-') && arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : arg;
     // A path outside the working tree makes git diff compare files outside the repo, as --no-index does.
-    if (/^[/~]|\.\./.test(value) && outside(value)) return 'git may only name paths in the checkout.';
+    if (/^[/~]|\.\./.test(value) && outside(value)) return 'Commands may only name paths in the checkout.';
   }
 }

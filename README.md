@@ -2,9 +2,7 @@
 
 A GitHub Action that reviews pull requests with Claude, using the Claude Agent SDK on your own GitHub runners.
 The model reads the code and returns its findings as JSON. The action posts one summary comment, which it edits on every push, and one review with inline comments.
-
-> [!NOTE]
-> Task (`/fix` and `/axonshaft <prompt>` in a comment) isn't built yet.
+In a comment, `/ask` answers a question about the code and `/fix` makes a change and pushes it to the pull request.
 
 ## Quick start
 
@@ -120,9 +118,9 @@ A comment starts Axon Shaft with a command at the start of a line. It works in t
 | Command | What it does |
 |---|---|
 | `/review` | Reviews the pull request's latest commit now. Works on any pull request, from a fork or not, whatever the "When it runs" and "Pull requests from forks" settings say. On an issue it ends with a notice. |
-| `/fix` | Fixes what the last review found, or what follows the command. Not built yet: the run ends with a notice. |
+| `/fix` | Fixes the open findings of the last review, or what you write after the command, and pushes one commit to the pull request's branch. Works on a pull request; on an issue it ends with a notice. See [Making a change](#making-a-change). |
 | `/ask <question>` | Answers a question about the code where it was asked, citing `file:line`, and never changes anything. Works on a pull request; on an issue it ends with a notice. See [Answering a question](#answering-a-question). |
-| `/axonshaft <prompt>` | A direct prompt: Axon Shaft answers or makes the change. Not built yet: the run ends with a notice. |
+| `/axonshaft <prompt>` | A direct prompt, run like `/fix <prompt>`: Axon Shaft answers, or makes the change and pushes it. |
 | `/help` | `axonshaft[bot]` posts the list of commands on the pull request or issue, once. |
 
 Who can run a command:
@@ -156,6 +154,38 @@ What counts as a command:
 - With the model and effort on `auto`, it runs on `sonnet` at `medium` effort. With no turn limit set, the limit is 30.
 - The dashboard gets the run with the model, the tokens and the answer. A reply has no verdict.
 - When the model's session fails, the failure's card is posted where the question was asked, and the step fails.
+
+## Making a change
+
+`/fix` and `/axonshaft <prompt>` run the project's Task job from the dashboard, with its prompt.
+
+- The request is the comment. A bare `/fix` asks for the open findings of the last review, from its summary comment.
+- The model works on the pull request's head commit. It makes the smallest change that does what was asked and runs the repo's tests and lint.
+- After the session, the action commits the change as `axonshaft[bot]`, with one plain line saying what changed, and pushes it to the pull request's branch.
+- The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed or Failed.
+- A request that only asks a question gets an answer, and nothing is committed.
+- With the model and effort on `auto`, it runs on `opus` at `high` effort. The session gets at most 40 minutes, whatever the time limit says, because the push token lasts an hour.
+- The dashboard gets the run with the model, the tokens and the reply.
+
+### What a change is allowed to do
+
+- The model never gets a GitHub token. Its environment is the review's: the Claude token, the runner variables and the project's own Environment variables.
+- It can read, edit and create files inside the checkout, but nothing under `.git/`.
+- Its commands are `git diff`, `git log`, `git show`, `git status` and the repo's own commands, read from the checkout before the session:
+  - the install for the lock file, such as `bun install --frozen-lockfile` or `npm ci`, exactly as written;
+  - the `package.json` scripts and `make` targets named `test`, `lint`, `check`, `typecheck`, `types`, `tsc`, `build`, `format` or `fmt`, or starting with one of those and `:`, `-`, `_` or `.`, run through the package manager, with more words allowed after them;
+  - `cargo test`, `check`, `clippy`, `fmt` and `build` when there's a `Cargo.toml`, and `go test`, `vet` and `build` when there's a `go.mod`.
+- Anything else is refused: `git commit`, `git push`, `gh`, installing a package by name, and shell operators.
+- The project's Push mode decides where the commit may go, and the action checks it before the session starts:
+  - Disabled: nothing is pushed.
+  - Restricted (the default): only the pull request's own branch, and never a fork's.
+  - Enabled: any branch, but the run still pushes only to the pull request's branch.
+- Nothing is ever pushed to the default branch, in any mode, and never with `--force`.
+- When the push can't happen, because Push mode is Disabled, the pull request comes from a fork or its branch is the default branch, the session doesn't run. The reply and a notice say why, and the run ends with `push_failed` on the dashboard.
+- Before pushing, the action runs the checks again itself, with the same environment: the commands the model listed, or the install, `test` and `lint` when it listed none. When one fails, nothing is pushed, and the reply names it and shows the end of its output.
+- The push token is a second token from the API with Contents write and nothing else. It's minted only for a task, only when Push mode isn't Disabled, and the action uses it only after the session has ended.
+- The push runs from a new repo the action makes, with only the commit copied in, so the checkout's git config and hooks never run next to the token. The commit runs with the checkout's hooks off, and neither it nor the checks get a token in their environment.
+- When the push fails, for example because someone pushed to the branch during the run, the failure card goes in the reply and the step fails with `push_failed`.
 
 ## Inputs
 
@@ -374,9 +404,10 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 |---|---|
 | `missing_id_token` | The workflow has no `permissions: id-token: write`, so the action can't sign in to the API. |
 | `api_unreachable` | The action couldn't reach the API, or the API took over 30 seconds to answer. |
-| `review_timed_out` | The review or reply ran past the time limit set on the dashboard. The link opens the dashboard. |
-| `review_invalid_reply` | The model's reply didn't match the review or reply format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
-| `review_failed` | The review or reply stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
+| `review_timed_out` | The review, reply or task ran past the time limit set on the dashboard. The link opens the dashboard. |
+| `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
+| `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
+| `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session, or GitHub refused the push. |
 
 ### Runs that end with a notice
 
@@ -385,8 +416,9 @@ These end with a notice, and the step passes:
 - a fork's pull request on `pull_request`;
 - a job that's off for the event;
 - a fork's pull request the dashboard holds back;
-- a `/review` or `/ask` from someone without write access;
-- a `/ask` on an issue;
+- a `/review`, `/ask`, `/fix` or `/axonshaft` from someone without write access;
+- a `/ask`, `/fix` or `/axonshaft` on an issue;
+- a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
 - a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap.
 
 Any other error, such as GitHub's API failing, fails the step with that error's message.

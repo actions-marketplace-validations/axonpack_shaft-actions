@@ -40,7 +40,7 @@ function octokit() {
     paginate: async (fn: unknown) => lists.get(fn),
     rest: {
       pulls: {
-        get: async () => ({ data: { title: 'Retry uploads', body: 'Retries failed uploads.', user: { login: 'octocat' }, head: { sha: 'abc1234def', ref: 'feature' }, base: { ref: 'main' } } }),
+        get: async () => ({ data: { title: 'Retry uploads', body: 'Retries failed uploads.', user: { login: 'octocat' }, head: { sha: 'abc1234def', ref: 'feature', repo: { full_name: 'acme/widgets' } }, base: { ref: 'main', repo: { full_name: 'acme/widgets', default_branch: 'main' } } } }),
         listFiles,
         listCommits,
         listReviewComments,

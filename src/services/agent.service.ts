@@ -152,6 +152,7 @@ export function parseReview(x: unknown): Review | undefined {
 }
 
 const READ_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+const EDIT_TOOLS = [...READ_TOOLS, 'Edit', 'Write'];
 const ALLOWED = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)'];
 /** The CLI's own deny rules, on top of the hook below. `//` makes a rule path absolute. */
 const DENIED = ['Read(//proc/**)', 'Read(//sys/**)'];
@@ -161,10 +162,10 @@ const DENIED = ['Read(//proc/**)', 'Read(//sys/**)'];
  * where `canUseTool` doesn't, since that is only asked about calls no rule allows.
  */
 const guard =
-  (cwd: string): HookCallback =>
+  (cwd: string, commands?: string[]): HookCallback =>
   async (input) => {
     const { tool_name, tool_input } = input as PreToolUseHookInput;
-    const why = toolDenial(tool_name, (tool_input ?? {}) as Record<string, unknown>, cwd);
+    const why = toolDenial(tool_name, (tool_input ?? {}) as Record<string, unknown>, cwd, commands);
     return why ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } } : {};
   };
 const SDK_VERSION = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
@@ -222,6 +223,11 @@ export type AgentOptions = {
   cwd: string;
   /** The project's own variables to pass through, by name. */
   env?: string[];
+  /**
+   * A task's: the repo's own commands (`repoCommands`). The session may then edit files in the
+   * checkout and run these, each call still checked by the guard. No token is added for them.
+   */
+  commands?: string[];
 };
 
 /** What a run used, summed over its models, as `POST /v1/runs` takes it. */
@@ -253,6 +259,7 @@ export function toolTarget(input: Record<string, unknown>): string {
 
 async function once(prompt: string, o: AgentOptions, schema: Record<string, unknown>, controller: AbortController): Promise<SDKResultMessage | undefined> {
   const deep = !!o.subagentModel && !!o.passes?.length;
+  const edit = !!o.commands;
   let result: SDKResultMessage | undefined;
   // A deep pass's own tool calls name the pass, by the call that started it.
   const passes = new Map<string, string>();
@@ -264,10 +271,11 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       effort: o.effort as EffortLevel,
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
-      tools: deep ? [...READ_TOOLS, 'Agent'] : READ_TOOLS,
-      allowedTools: deep ? [...ALLOWED, 'Agent'] : ALLOWED,
+      tools: deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS,
+      // A task's Bash runs the repo's commands, which no allow rule can list ahead: the guard decides each call.
+      allowedTools: deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS : ALLOWED,
       disallowedTools: DENIED,
-      hooks: { PreToolUse: [{ hooks: [guard(o.cwd)] }] },
+      hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
       // No project or user settings: a PR could otherwise add hooks or MCP servers that run its code.
       settingSources: [],
@@ -293,7 +301,7 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
 }
 
 /**
- * Run the session with read-only tools, for a reply in `format`: the review's, or a job's own. A
+ * Run the session with read-only tools (a task's also edit and run the repo's commands), for a reply in `format`: the review's, or a job's own. A
  * reply that doesn't match the schema is retried once, then the run fails. Every failure comes out
  * as a `ShaftFailure` with a `review_*` code, whatever the job.
  */
