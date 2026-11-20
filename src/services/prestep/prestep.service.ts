@@ -16,6 +16,7 @@ import { exportsDiff } from './exports-diff.service';
 import { routes } from './routes.service';
 import { localeKeys } from './locale-keys.service';
 import { rawValues } from './raw-values.service';
+import { nativeChanges } from './native-changes.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv };
@@ -30,6 +31,7 @@ export const FACTS: Record<string, Facts> = {
   routes,
   'locale-keys': localeKeys,
   'raw-values': rawValues,
+  'native-changes': nativeChanges,
 };
 
 /**
