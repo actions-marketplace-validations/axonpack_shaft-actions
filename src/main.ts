@@ -123,6 +123,7 @@ async function run(): Promise<void> {
     gates: globs(settings.gates),
     prompt: job.prompt,
     checks: job.checks,
+    checklists: job.checklists,
   });
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);

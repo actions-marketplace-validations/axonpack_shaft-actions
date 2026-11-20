@@ -1,10 +1,11 @@
 import * as core from '@actions/core';
 import { type Choice, matches, pick } from '../utils/auto-pick.util';
+import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
-import { REVIEW_FORMAT, runAgent, type Tokens } from './agent.service';
+import { REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import {
   CATEGORY_CONCLUSION,
@@ -21,11 +22,14 @@ import {
 } from './check-runs.service';
 import { step } from './step.service';
 import {
+  type CheckItem,
   checkStates,
   failedSummary,
+  idleSummary,
   inlineBody,
   parseState,
   place,
+  type Placed,
   redact,
   renderSummary,
   type State,
@@ -56,6 +60,8 @@ export type ReviewOptions = {
   prompt: GrantJob['prompt'];
   /** The catalog checks the project keeps on; the others show as turned off on the card. */
   checks: string[];
+  /** The job's checklists, from an API that sends them with `prompt.open`; without, the review runs `prompt.template` as 1.5 did. */
+  checklists?: GrantJob['checklists'];
   dryRun: boolean;
   runUrl?: string;
   /** The run's page on the dashboard, when the API sends it. */
@@ -220,6 +226,9 @@ async function postReview(
   const prior = parseState(ctx.summary?.body);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
+  // Only the checklists whose paths match a changed file run; the others get a skipped check run.
+  const planned = Array.isArray(o.checklists) && typeof o.prompt.open === 'string' ? planChecklists(o.checklists, files) : undefined;
+  const fired = planned?.filter((c) => !c.skip);
   const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
@@ -233,6 +242,49 @@ async function postReview(
       : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
   };
+  const postChecks = async (states: CheckItem[], placed: Placed[]) => {
+    if (!o.dryRun) return canCheck ? postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean) : undefined;
+    for (const c of states) if (CATEGORY_CONCLUSION[c.state]) core.info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
+  };
+
+  // No checklist runs: no model call, unless merge gates need judging, since a gate is never passed by omission.
+  if (planned && !fired!.length && !o.gates?.length) {
+    const states = planned.map((c): CheckItem => ({ key: c.key, label: c.name, state: 'not_checked', reason: c.skip }));
+    const body = idleSummary(states, prior, { sha, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
+    if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
+    else await writeSummary(body);
+    await postChecks(states, []);
+    const none = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+    const url = o.dryRun ? '' : (summary?.html_url ?? '');
+    return {
+      verdict: 'looks-good',
+      findings: 0,
+      summaryUrl: url,
+      model: 'none',
+      effort: 'none',
+      tokens: none,
+      costUsd: 0,
+      bySeverity: { blocking: 0, should_fix: 0, nit: 0 },
+      output: {
+        headline: 'No checklist ran, so no model was called.',
+        claim: '',
+        impact: '',
+        scope: '',
+        not_checked: "Every checklist. Each one's check run says why.",
+        type: '',
+        confidence: 0,
+        comment_url: url,
+        checks: states.slice(0, 40),
+        passes: [],
+        findings: [],
+        fixed: 0,
+      },
+    };
+  }
+
+  // With checklists the run's data comes first and the steps last, so the part before them reads the same whatever runs.
+  const pack = buildPrompt({ ...ctx, files }, prior, { template: fired ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+  const prompt = fired ? `${pack}\n${stepsBlock(o.prompt.before ?? [], fired, o.prompt.after ?? [])}` : pack;
 
   // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
   if (summary) await writeSummary(startSummary(sha, prior));
@@ -242,7 +294,7 @@ async function postReview(
   let result;
   try {
     result = await step('Review', () =>
-      runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
+      runAgent(prompt, {
       claude: o.claude,
       model: choice.model,
       effort: choice.effort,
@@ -253,7 +305,7 @@ async function postReview(
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env,
-    }, REVIEW_FORMAT),
+    }, fired ? { ...REVIEW_FORMAT, schema: reviewSchema(fired.map((c) => c.key)) } : REVIEW_FORMAT),
     );
   } catch (e) {
     // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
@@ -306,6 +358,7 @@ async function postReview(
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
+    checklists: planned,
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
     models:
@@ -325,10 +378,8 @@ async function postReview(
   if (gates && o.dryRun) core.info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
   else if (gates && canCheck) await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
 
-  const states = checkStates(review, placed, o.checks);
-  if (o.dryRun) {
-    for (const c of states) if (CATEGORY_CONCLUSION[c.state]) core.info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
-  } else if (canCheck) await postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean);
+  const states = checkStates(review, placed, o.checks, planned);
+  await postChecks(states, placed);
 
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun) core.info(`Would resolve the threads of ${fixed.join(', ')}`);
@@ -350,7 +401,8 @@ async function postReview(
     type: cut(review.type, 40),
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
-    checks: states,
+    checks: states.slice(0, 40),
+    ...(fired && { passes: [{ name: 'main', model: models.main, tokens: result.tokens, checklists: fired.slice(0, 40).map((c) => c.key) }] }),
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,

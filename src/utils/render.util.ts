@@ -172,6 +172,8 @@ export type Footer = {
   skipped?: number;
   /** The catalog checks the project keeps on, from the Axon Shaft API; the others show as off. */
   checks?: string[];
+  /** The job's checklists, when the API sends them: the card shows these in place of the checks. */
+  checklists?: { key: string; name: string; skip?: string }[];
 };
 
 /** A token count, such as "950", "18k" or "1.2M". */
@@ -197,12 +199,23 @@ const chip = (text: string) => `<kbd>${text}</kbd>`;
 export type CheckState = 'failed' | 'warned' | 'passed' | 'not_checked' | 'off';
 const CHECK_MARK: Record<CheckState, string> = { failed: '❌', warned: '⚠️', passed: '✅', not_checked: '⬜', off: '➖' };
 
+export type CheckItem = { key: string; label: string; state: CheckState; reason?: string };
+const stateChip = (c: CheckItem) => chip(`${CHECK_MARK[c.state]} ${c.label}`);
+
 /**
  * Each check's result: failed (a blocking finding), warned (any other), passed (checked with none),
  * not checked, or off. `rules` shows only with a finding. A finding shows even under a check that's
- * off, so a blocking one is never hidden.
+ * off, so a blocking one is never hidden. With `checklists`, it's one per checklist in the job's
+ * order, and one that didn't run is not checked, with `reason` saying why.
  */
-export function checkStates(review: Review, placed: Placed[], checks?: string[]): { key: string; label: string; state: CheckState }[] {
+export function checkStates(review: Review, placed: Placed[], checks?: string[], checklists?: Footer['checklists']): CheckItem[] {
+  if (checklists) {
+    return checklists.map(({ key, name, skip }) => {
+      const found = placed.filter((p) => p.step === key);
+      const state: CheckState = found.some((p) => p.severity === 'blocking') ? 'failed' : found.length ? 'warned' : !skip && review.checked.includes(key) ? 'passed' : 'not_checked';
+      return { key, label: name, state, ...(skip && { reason: skip }) };
+    });
+  }
   return STEPS.flatMap((key) => {
     const found = placed.filter((p) => p.step === key);
     if (key === 'rules' && !found.length) return [];
@@ -233,7 +246,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
     !placed.length && chip('✅ No findings'),
     fixed && chip(`✅ ${fixed} fixed`),
   ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks).map((c) => chip(`${CHECK_MARK[c.state]} ${c.label}`));
+  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, ' ');
   const alert = VERDICT_ALERT[review.verdict];
@@ -289,6 +302,20 @@ function walkthrough(w: Walkthrough): string {
 
 export function startSummary(sha: string, prior?: State): string {
   return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
+}
+
+/** The summary when none of the job's checklists ran: one chip each, and no model was asked. */
+export function idleSummary(states: CheckItem[], prior: State | undefined, f: Pick<Footer, 'sha' | 'runUrl' | 'dashboardRunUrl'>): string {
+  const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
+  return [
+    SUMMARY_MARKER,
+    `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
+    '',
+    states.map(stateChip).join(' '),
+    '',
+    `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · no model call</sub>`,
+    ...(prior ? [stateLine(prior)] : []),
+  ].join('\n');
 }
 
 /** The summary when the review failed: the failure's card, message and link, as the job summary has them. */

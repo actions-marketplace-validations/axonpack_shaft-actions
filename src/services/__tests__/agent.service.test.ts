@@ -4,7 +4,7 @@ const infos: string[] = [];
 vi.doMock('@actions/core', () => ({ info: (s: string) => infos.push(s), warning: () => {} }));
 /** What the mocked Agent SDK does on each `query`: yield these messages, throw, or wait for the abort. */
 let reply: 'hang' | Error | object[] = [];
-const asked: { options: { agents?: unknown; abortController: AbortController } }[] = [];
+const asked: { options: { agents?: unknown; abortController: AbortController; outputFormat: { schema: any } } }[] = [];
 vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
   async *query(args: (typeof asked)[number]) {
     asked.push(args);
@@ -15,7 +15,7 @@ vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
   },
 }));
 const { ENV_ALLOW } = await import('../../consts/env.const');
-const { cliEnv, deepAgents, REVIEW_FORMAT, runAgent, sumTokens, toolTarget } = await import('../agent.service');
+const { cliEnv, deepAgents, REVIEW_FORMAT, reviewSchema, runAgent, SCHEMA, sumTokens, toolTarget } = await import('../agent.service');
 
 beforeEach(() => {
   reply = [];
@@ -78,6 +78,18 @@ test('a deep run gives the SDK the passes as agents; a standard one gives none',
   await runAgent('prompt', options, REVIEW_FORMAT);
   expect(Object.keys(asked[0].options.agents as object)).toEqual(['breakage']);
   expect(asked[1].options.agents).toBeUndefined();
+});
+
+test("a pass with checklists limits the reply's step to their keys; without, it's 1.5's fixed steps", async () => {
+  reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'looks-good', headline: 'h', findings: [] }, modelUsage: {}, total_cost_usd: 0 }];
+  await runAgent('prompt', options, { ...REVIEW_FORMAT, schema: reviewSchema(['correctness', 'own-1']) });
+  await runAgent('prompt', options, { ...REVIEW_FORMAT, schema: reviewSchema([]) });
+  await runAgent('prompt', options, REVIEW_FORMAT);
+  const steps = asked.map(({ options: { outputFormat: { schema } } }) => [schema.properties.findings.items.properties.step, schema.properties.checked.items]);
+  expect(steps[0]).toEqual([{ enum: ['correctness', 'own-1'] }, { enum: ['correctness', 'own-1'] }]);
+  expect(steps[1]).toEqual([{ type: 'string' }, { type: 'string' }]);
+  expect(asked[2]!.options.outputFormat.schema).toBe(SCHEMA);
+  expect(SCHEMA.properties.findings.items.properties.step.enum).toContain('rules');
 });
 
 test('a run past the time limit is review_timed_out, linking the dashboard', async () => {

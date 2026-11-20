@@ -14,16 +14,34 @@ export type GrantRequest = { job: 'review' | 'task' | 'reply' | 'help'; event?: 
 export type Pass = { name: string; description: string; prompt: string };
 
 /**
+ * One checklist the job keeps on, in the job's order, then the project's own (`own-<n>`): it runs when
+ * a changed file matches its `paths`, and `prompt` is its step.
+ */
+export type Checklist = {
+  key: string;
+  name: string;
+  mode: 'script' | 'script+model' | 'model';
+  model: 'main' | 'light';
+  paths: string[];
+  prestep: string | null;
+  prompt: string;
+};
+
+/**
  * The project's job: `options` filled in with the catalog's defaults, `checks` the keys of the
  * catalog checks it keeps on, and `prompt` the job's whole prompt (a review's or a reply's), whose
- * `{{slots}}` the action fills with the run's data, plus the deep review's `passes`.
+ * `{{slots}}` the action fills with the run's data, plus the deep review's `passes`. An API that
+ * sends `checklists` also sends the review prompt with `{{steps}}` left `open`, and the steps that
+ * always run `before` and `after` the checklists; an older one sends none of them, and the action
+ * runs `template` as 1.5 did.
  */
 export type GrantJob = {
   type: string;
   version: number;
   options: Record<string, unknown>;
   checks: string[];
-  prompt: { template: string; passes: Pass[] };
+  prompt: { template: string; passes: Pass[]; open?: string; before?: string[]; after?: string[] };
+  checklists?: Checklist[] | null;
 };
 
 /** The project's Claude token, from the dashboard. */
@@ -61,6 +79,8 @@ export type RunOutput = {
   confidence: number;
   comment_url: string;
   checks: { key: string; label: string; state: string }[];
+  /** Each model session the run made, with the checklists it ran. Only when the job has checklists. */
+  passes?: { name: string; model: string; tokens: { input: number; output: number; cache_read: number; cache_write: number }; checklists: string[] }[];
   findings: { severity: string; check: string; file: string; line: number; end_line?: number; title: string; body: string; suggestion?: string; inline: boolean }[];
   fixed: number;
 };

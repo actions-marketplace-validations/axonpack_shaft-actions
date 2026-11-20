@@ -256,6 +256,7 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
   | ➖ | Turned off on the dashboard. |
 
 - Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
+- When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
 
 The card's last line gives the kind of change, the model's confidence and the reviewed commit.
 
@@ -295,6 +296,8 @@ The action also posts one check run per review check on the reviewed commit, nam
 - Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
 - The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run once its matching update ships. Until then it asks only when the project has merge gates, so on a project without gates the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.
+
+When the job has [checklists](#checklists), each checklist gets its own check run instead, named after its key in the job's order, such as `Axon Shaft / access-control`, or `Axon Shaft / own-1` for the project's own checklists. A checklist that didn't run is `skipped`, and its title says why: "No matching files changed", or, for a script checklist, that this version of the action doesn't run scripts yet.
 
 ### Inline comments
 
@@ -407,6 +410,19 @@ It also fills in the repo's guides as the base branch has them, whichever exist:
 `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CONVENTIONS.md`, `.github/pull_request_template.md` and the root `README.md`. Each is cut at 8,000 characters, and all of them together at 30,000.
 
 The guides set the standards the review checks against, such as needing a test or a README line for each change. Since they come from the base branch, a PR can't change the copies its own review reads.
+
+### Checklists
+
+An Axon Shaft API that sends the job's checklists also sends the prompt with its steps left open. The action then decides which checklists run on this pull request:
+
+- A checklist runs when a changed file, after `skip`, matches one of its `paths`. `**` matches any change, including files under folders such as `.github/`.
+- Script checklists don't run yet. Their check runs are skipped.
+- The run's data comes first in the prompt and the steps come last, numbered from 1: the steps that always run first, the step of each checklist that runs, then the job's own instructions and the steps that always run last. Everything before the steps is the same whichever checklists run.
+- A finding's `step` can only name a checklist that runs.
+- When no checklist runs, no model is called. The summary comment says so, with a chip for each checklist, and each check run is skipped. A project with merge gates still gets a review, because only the model can judge the gates.
+- The run's page on the dashboard gets the model session's model, tokens and the checklists it ran.
+
+With an API that doesn't send checklists, the action runs the prompt it gets, as 1.5 did.
 
 ## Development
 

@@ -24067,7 +24067,15 @@ function footer(f) {
 }
 var chip = (text) => `<kbd>${text}</kbd>`;
 var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
-function checkStates(review, placed, checks) {
+var stateChip = (c) => chip(`${CHECK_MARK[c.state]} ${c.label}`);
+function checkStates(review, placed, checks, checklists) {
+  if (checklists) {
+    return checklists.map(({ key, name, skip }) => {
+      const found = placed.filter((p) => p.step === key);
+      const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : !skip && review.checked.includes(key) ? "passed" : "not_checked";
+      return { key, label: name, state, ...skip && { reason: skip } };
+    });
+  }
   return STEPS.flatMap((key) => {
     const found = placed.filter((p) => p.step === key);
     if (key === "rules" && !found.length)
@@ -24085,7 +24093,7 @@ function card(review, placed, fixed, f) {
     !placed.length && chip("✅ No findings"),
     fixed && chip(`✅ ${fixed} fixed`)
   ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks).map((c) => chip(`${CHECK_MARK[c.state]} ${c.label}`));
+  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
   const alert = VERDICT_ALERT[review.verdict];
@@ -24134,6 +24142,19 @@ function walkthrough(w) {
 }
 function startSummary(sha, prior) {
   return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
+`);
+}
+function idleSummary(states, prior, f) {
+  const run = f.runUrl ? ` · [run](${f.runUrl})` : "";
+  return [
+    SUMMARY_MARKER,
+    `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
+    "",
+    states.map(stateChip).join(" "),
+    "",
+    `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · no model call</sub>`,
+    ...prior ? [stateLine(prior)] : []
+  ].join(`
 `);
 }
 function failedSummary(failure, prior) {
@@ -58376,6 +58397,18 @@ var SCHEMA = {
     }
   }
 };
+function reviewSchema(steps) {
+  const step = steps.length ? { enum: steps } : { type: "string" };
+  const { findings, checked } = SCHEMA.properties;
+  return {
+    ...SCHEMA,
+    properties: {
+      ...SCHEMA.properties,
+      findings: { ...findings, items: { ...findings.items, properties: { ...findings.items.properties, step } } },
+      checked: { ...checked, items: step }
+    }
+  };
+}
 function parseWalkthrough(x) {
   const w = x;
   const str = (s) => typeof s === "string";
@@ -58681,6 +58714,19 @@ async function collectContext(octokit, owner, repo, number, bot) {
   };
 }
 
+// src/utils/checklist-plan.util.ts
+var NO_MATCH = "No matching files changed";
+var NOT_YET = "Script checklists don't run in this version of the action yet";
+var undot = (s) => s.replace(/(^|\/)\./g, "$1");
+var touches = (file, paths) => matches(file, paths) || matches(undot(file), paths.map(undot));
+var planChecklists = (checklists, files) => checklists.map((c) => !files.some((f) => touches(f.filename, c.paths)) ? { ...c, skip: NO_MATCH } : c.mode === "script" ? { ...c, skip: NOT_YET } : c);
+var STEPS_AT_END = 'They are at the end of this prompt, under "The steps for this run".';
+var stepsBlock = (before, run, after) => `## The steps for this run
+
+${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${s}`).join(`
+`)}
+`;
+
 // src/services/check-runs.service.ts
 var GATES_CHECK = "Axon Shaft / gates";
 var norm = (s) => s.trim().toLowerCase();
@@ -58737,13 +58783,14 @@ var CATEGORY_TITLE = {
   off: ""
 };
 async function postCategoryChecks(octokit, owner, repo, sha, states, placed, clean) {
-  for (const { key, state } of states) {
+  for (const { key, state, reason } of states) {
     const conclusion = CATEGORY_CONCLUSION[state];
     if (!conclusion)
       continue;
     const found = placed.filter((p) => p.step === key);
-    const summary = found.length ? findingsTable(found, { repo: `${owner}/${repo}`, sha }) : CATEGORY_TITLE[state];
-    if (!await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title: CATEGORY_TITLE[state], summary }, clean))
+    const title = reason ?? CATEGORY_TITLE[state];
+    const summary = found.length ? findingsTable(found, { repo: `${owner}/${repo}`, sha }) : title;
+    if (!await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title, summary }, clean))
       return;
   }
 }
@@ -58870,6 +58917,8 @@ async function postReview(ctx, o, canCheck, progress) {
   const prior = parseState(ctx.summary?.body);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
+  const planned = Array.isArray(o.checklists) && typeof o.prompt.open === "string" ? planChecklists(o.checklists, files) : undefined;
+  const fired = planned?.filter((c) => !c.skip);
   const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
@@ -58881,13 +58930,59 @@ async function postReview(ctx, o, canCheck, progress) {
     const { data } = summary ? await octokit.rest.issues.updateComment({ ...req, comment_id: summary.id }) : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
   };
+  const postChecks = async (states, placed) => {
+    if (!o.dryRun)
+      return canCheck ? postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean) : undefined;
+    for (const c of states)
+      if (CATEGORY_CONCLUSION[c.state])
+        info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
+  };
+  if (planned && !fired.length && !o.gates?.length) {
+    const states = planned.map((c) => ({ key: c.key, label: c.name, state: "not_checked", reason: c.skip }));
+    const body = idleSummary(states, prior, { sha, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
+    if (o.dryRun)
+      info(`--- summary comment
+${clean(body)}`);
+    else
+      await writeSummary(body);
+    await postChecks(states, []);
+    const none = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
+    const url = o.dryRun ? "" : summary?.html_url ?? "";
+    return {
+      verdict: "looks-good",
+      findings: 0,
+      summaryUrl: url,
+      model: "none",
+      effort: "none",
+      tokens: none,
+      costUsd: 0,
+      bySeverity: { blocking: 0, should_fix: 0, nit: 0 },
+      output: {
+        headline: "No checklist ran, so no model was called.",
+        claim: "",
+        impact: "",
+        scope: "",
+        not_checked: "Every checklist. Each one's check run says why.",
+        type: "",
+        confidence: 0,
+        comment_url: url,
+        checks: states.slice(0, 40),
+        passes: [],
+        findings: [],
+        fixed: 0
+      }
+    };
+  }
+  const pack = buildPrompt({ ...ctx, files }, prior, { template: fired ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+  const prompt = fired ? `${pack}
+${stepsBlock(o.prompt.before ?? [], fired, o.prompt.after ?? [])}` : pack;
   if (summary)
     await writeSummary(startSummary(sha, prior));
   const model = /^[a-z]+$/.test(choice.model) ? choice.model[0].toUpperCase() + choice.model.slice(1) : choice.model;
   await progress("Review", `Reviewing with ${model}, effort ${choice.effort}`);
   let result;
   try {
-    result = await step("Review", () => runAgent(buildPrompt({ ...ctx, files }, prior, { template: o.prompt.template, focus: o.focus, skipped }), {
+    result = await step("Review", () => runAgent(prompt, {
       claude: o.claude,
       model: choice.model,
       effort: choice.effort,
@@ -58898,7 +58993,7 @@ async function postReview(ctx, o, canCheck, progress) {
       timeoutMinutes: o.timeoutMinutes,
       cwd: o.cwd,
       env: o.env
-    }, REVIEW_FORMAT));
+    }, fired ? { ...REVIEW_FORMAT, schema: reviewSchema(fired.map((c) => c.key)) } : REVIEW_FORMAT));
   } catch (e) {
     if (e instanceof ShaftFailure) {
       e.url ??= o.runUrl;
@@ -58949,6 +59044,7 @@ ${c.body}`);
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
     checks: o.checks,
+    checklists: planned,
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
     models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
@@ -58967,13 +59063,8 @@ ${clean(body)}`);
     info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
   else if (gates && canCheck)
     await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
-  const states = checkStates(review, placed, o.checks);
-  if (o.dryRun) {
-    for (const c of states)
-      if (CATEGORY_CONCLUSION[c.state])
-        info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
-  } else if (canCheck)
-    await postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean);
+  const states = checkStates(review, placed, o.checks, planned);
+  await postChecks(states, placed);
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun)
     info(`Would resolve the threads of ${fixed.join(", ")}`);
@@ -58992,7 +59083,8 @@ ${clean(body)}`);
     type: cut(review.type, 40),
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? "" : summary?.html_url ?? "",
-    checks: states,
+    checks: states.slice(0, 40),
+    ...fired && { passes: [{ name: "main", model: models.main, tokens: result.tokens, checklists: fired.slice(0, 40).map((c) => c.key) }] },
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,
@@ -59210,7 +59302,8 @@ ${grant.comment}`);
     nits: oneOf("nits", ["summary", "inline", "off"], job.options.nits),
     gates: globs(settings.gates),
     prompt: job.prompt,
-    checks: job.checks
+    checks: job.checks,
+    checklists: job.checklists
   });
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);

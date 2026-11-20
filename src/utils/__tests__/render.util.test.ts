@@ -1,11 +1,13 @@
 import { expect, test } from 'vitest';
 import { parseReview } from '../../services/agent.service';
 import {
+  checkStates,
   diffLines,
   type Finding,
   type Footer,
   fingerprint,
   formatTokens,
+  idleSummary,
   inlineBody,
   parseState,
   place,
@@ -254,6 +256,41 @@ test('a check the model left out of checked shows ⬜, not ✅', () => {
   const placed = place([finding({ step: 'tests' })], files, 'summary');
   const body = renderSummary({ ...review, checked: ['correctness', 'tests'] }, placed, undefined, { ...info, checks: ['correctness', 'breakage', 'tests', 'docs', 'security'] });
   expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>⬜ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>⬜ Docs</kbd> <kbd>⬜ Security</kbd>');
+});
+
+test("with checklists, each one gets a state in the job's order under its own name, and one that didn't run says why", () => {
+  const placed = place([finding({ step: 'own-1' })], files, 'summary');
+  const checklists = [
+    { key: 'security', name: 'Security' },
+    { key: 'own-1', name: 'Our API rules' },
+    { key: 'migrations', name: 'Database migrations', skip: 'No matching files changed' },
+    { key: 'correctness', name: 'Correctness' },
+  ];
+  expect(checkStates({ ...review, checked: ['security', 'migrations'] }, placed, ['correctness'], checklists)).toEqual([
+    { key: 'security', label: 'Security', state: 'passed' },
+    { key: 'own-1', label: 'Our API rules', state: 'warned' },
+    { key: 'migrations', label: 'Database migrations', state: 'not_checked', reason: 'No matching files changed' },
+    { key: 'correctness', label: 'Correctness', state: 'not_checked' },
+  ]);
+  expect(renderSummary(review, placed, undefined, { ...info, checklists })).toContain(
+    '<kbd>✅ Security</kbd> <kbd>⚠️ Our API rules</kbd> <kbd>⬜ Database migrations</kbd> <kbd>✅ Correctness</kbd>',
+  );
+});
+
+test('when no checklist ran, the summary says no model ran, with a chip each, and keeps the previous state', () => {
+  const prior = { sha: 'fed9876', findings: [] };
+  const states = [{ key: 'migrations', label: 'Database migrations', state: 'not_checked' as const, reason: 'No matching files changed' }];
+  expect(idleSummary(states, prior, { sha: 'abc1234def', runUrl: 'https://github.com/o/r/actions/runs/1' })).toBe(
+    [
+      '<!-- shaft:summary -->',
+      "No checklist ran on `abc1234`, so no model was called. Each checklist's check run says why.",
+      '',
+      '<kbd>⬜ Database migrations</kbd>',
+      '',
+      '<sub>[Axon Shaft](https://shaft.axonpack.dev) · [run](https://github.com/o/r/actions/runs/1) · no model call</sub>',
+      stateLine(prior),
+    ].join('\n'),
+  );
 });
 
 test('the footer shows the cost and total when known, else the cache-weighted count', () => {

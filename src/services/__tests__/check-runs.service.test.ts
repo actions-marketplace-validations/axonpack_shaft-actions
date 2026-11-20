@@ -88,6 +88,16 @@ test('each review check that is on gets its own run, its conclusion from its sta
   expect(create.mock.calls[2]![0]).toMatchObject({ output: { title: 'Checked, nothing found', summary: 'Checked, nothing found' } });
 });
 
+test("a checklist that didn't run is skipped with its reason as the title and summary", async () => {
+  const create = vi.fn(async (_: object) => ({ data: { id: 1 } }));
+  await postCategoryChecks({ rest: { checks: { create } } } as any, 'o', 'r', 'abc1234', [{ key: 'migrations', state: 'not_checked', reason: 'No matching files changed' }], [], (s) => s);
+  expect(create.mock.calls[0]![0]).toMatchObject({
+    name: 'Axon Shaft / migrations',
+    conclusion: 'skipped',
+    output: { title: 'No matching files changed', summary: 'No matching files changed' },
+  });
+});
+
 test('a token without Checks write warns once and the remaining category runs are skipped', async () => {
   const create = vi.fn(async (_: object) => {
     throw new Error('Resource not accessible by integration');

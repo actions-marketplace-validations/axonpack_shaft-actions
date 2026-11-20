@@ -1,5 +1,6 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 import { ShaftFailure } from '../../utils/failure.util';
+import type { Checklist } from '../api.service';
 
 const logs: string[] = [];
 const warnings: string[] = [];
@@ -15,15 +16,18 @@ vi.doMock('@actions/core', () => ({
 }));
 /** The findings the mocked review returns. */
 let found: object[] = [];
-const runs: { prompt: string; model: string; effort: string; passes?: unknown[] }[] = [];
+const runs: { prompt: string; model: string; effort: string; passes?: unknown[]; steps?: string[] }[] = [];
 /** What the Agent SDK reports in modelUsage; empty means just the model asked for. */
 let usage: string[] = [];
 /** When set, the review fails with it. */
 let agentError: Error | undefined;
 vi.doMock('../agent.service', async (actual) => ({
   ...(await actual<typeof import('../agent.service')>()),
-  runAgent: async (prompt: string, o: { model: string; effort: string; passes?: unknown[] }) => {
-    runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes });
+  // `steps` is what the reply's schema limits `step` to: unset for 1.5's fixed steps.
+  runAgent: async (prompt: string, o: { model: string; effort: string; passes?: unknown[] }, format: { schema: any }) => {
+    const step = format.schema.properties.findings.items.properties.step;
+    const steps = format.schema === (await actual<typeof import('../agent.service')>()).SCHEMA ? undefined : (step.enum ?? []);
+    runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes, steps });
     if (agentError) throw agentError;
     const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: ['correctness', 'tests'], not_checked: 'n' };
     return { reply: review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
@@ -106,6 +110,8 @@ async function review(
     dryRun?: boolean;
     gates?: string[];
     refuseChecks?: boolean | 'progress';
+    checklists?: Checklist[];
+    open?: string;
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
@@ -123,14 +129,15 @@ async function review(
     skip: extra.skip ?? [],
     focus: extra.focus ?? [],
     bot: 'axonshaft[bot]',
-    prompt: { template: TEMPLATE, passes: extra.passes ?? [] },
+    prompt: { template: TEMPLATE, passes: extra.passes ?? [], open: extra.open, before: ['**Read.** The PR.'], after: ['**Verify.** Each finding.'] },
     checks: ['correctness', 'breakage', 'standards', 'tests', 'docs', 'security'],
+    checklists: extra.checklists,
     dryRun: extra.dryRun ?? true,
     runUrl: 'https://github.com/o/r/actions/runs/9',
     cwd: '.',
     gates: extra.gates,
   });
-  return { refs: fake.refs, prompt: runs.at(-1)!.prompt, run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
+  return { refs: fake.refs, prompt: runs.at(-1)?.prompt ?? '', run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
 
 beforeEach(() => {
@@ -449,4 +456,69 @@ test("with merge gates, the summary reports each of the project's gates and the 
   logs.length = 0;
   expect((await review([file('src/a.ts')])).summary).not.toContain('Merge gates');
   expect(logs.some((l) => l.includes('gates check'))).toBe(false);
+});
+
+const checklist = (key: string, paths: string[], mode: Checklist['mode'] = 'model'): Checklist => ({ key, name: `The ${key} list`, mode, model: 'main', paths, prestep: null, prompt: `**${key}.** Look.` });
+const CHECKLISTS = [checklist('correctness', ['**/*.ts']), checklist('migrations', ['**/migrations/**']), checklist('secrets', ['**'], 'script'), checklist('own-1', ['**/*.md'])];
+/** The open prompt: the template with `{{steps}}` left for the action. */
+const OPEN = `# Review\n\n## steps\n{{steps}}\n\n${SLOTS.map((s) => `## ${s}\n{{${s}}}`).join('\n\n')}\n`;
+const willPost = () => logs.filter((l) => l.startsWith('Would post the Axon Shaft /'));
+
+test('without checklists from the API, or without its open prompt, the review runs as 1.5: the template and the fixed steps', async () => {
+  for (const extra of [{}, { checklists: CHECKLISTS }]) {
+    const { prompt, run, outcome } = await review([file('src/a.ts')], extra);
+    expect(prompt.startsWith('# Review\n\n## repo\n')).toBe(true);
+    expect(run.steps).toBeUndefined();
+    expect(outcome.output.passes).toBeUndefined();
+    expect(outcome.output.checks.map((c) => c.key)).toEqual(['correctness', 'breakage', 'standards', 'tests', 'docs', 'security']);
+  }
+});
+
+test('with checklists, only those whose paths match run: their steps after the data, their keys in the schema, a check run each', async () => {
+  found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' }];
+  const { prompt, run, outcome, summary } = await review([file('src/a.ts'), file('README.md')], { checklists: CHECKLISTS, open: OPEN });
+  expect(prompt).toContain('## steps\nThey are at the end of this prompt, under "The steps for this run".\n');
+  expect(prompt.endsWith('+b\n\n## The steps for this run\n\n1. **Read.** The PR.\n2. **correctness.** Look.\n3. **own-1.** Look.\n4. **Verify.** Each finding.\n')).toBe(true);
+  expect(run.steps).toEqual(['correctness', 'own-1']);
+  expect(willPost()).toEqual([
+    'Would post the Axon Shaft / correctness check: failure',
+    'Would post the Axon Shaft / migrations check: skipped',
+    'Would post the Axon Shaft / secrets check: skipped',
+    'Would post the Axon Shaft / own-1 check: skipped',
+  ]);
+  expect(outcome.output.checks).toEqual([
+    { key: 'correctness', label: 'The correctness list', state: 'failed' },
+    { key: 'migrations', label: 'The migrations list', state: 'not_checked', reason: 'No matching files changed' },
+    { key: 'secrets', label: 'The secrets list', state: 'not_checked', reason: "Script checklists don't run in this version of the action yet" },
+    { key: 'own-1', label: 'The own-1 list', state: 'not_checked' },
+  ]);
+  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'] }]);
+  expect(summary).toContain('<kbd>❌ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
+});
+
+test('skip applies before the paths, so a skipped file fires no checklist', async () => {
+  const { run } = await review([file('src/a.ts'), file('db/migrations/1.sql')], { checklists: CHECKLISTS, open: OPEN, skip: ['**/migrations/**'] });
+  expect(run.steps).toEqual(['correctness']);
+});
+
+test('the part of the prompt before the steps is byte-identical whatever checklists run', async () => {
+  const files = [file('src/a.ts'), file('README.md')];
+  const pack = async (checklists: Checklist[]) => (await review(files, { checklists, open: OPEN })).prompt.split('## The steps for this run')[0];
+  expect(await pack(CHECKLISTS)).toBe(await pack([checklist('own-1', ['**'])]));
+});
+
+test('when no checklist matches, no model runs: a short summary and a skipped check run each', async () => {
+  const { outcome } = await review([file('assets/logo.png')], { checklists: CHECKLISTS.slice(0, 2), open: OPEN, dryRun: false });
+  expect(runs).toHaveLength(0);
+  expect(fake.written).toHaveLength(1);
+  expect(fake.written[0]).toContain('No checklist ran on `abc1234`, so no model was called.');
+  expect(fake.written[0]).toContain('<kbd>⬜ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
+  expect(outcome).toMatchObject({ verdict: 'looks-good', findings: 0, model: 'none', tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } });
+  expect(outcome.output.checks.map((c) => c.state)).toEqual(['not_checked', 'not_checked']);
+  expect(progress()).toEqual([STARTED, expect.stringMatching(/^create: No checklist ran/), `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`]);
+});
+
+test('with merge gates, the model runs even when no checklist matches, so a gate is never passed unjudged', async () => {
+  const { run } = await review([file('assets/logo.png')], { checklists: CHECKLISTS.slice(0, 2), open: OPEN, gates: ['Docs are updated'] });
+  expect(run.steps).toEqual([]);
 });

@@ -1,0 +1,32 @@
+import { expect, test } from 'vitest';
+import type { Checklist } from '../../services/api.service';
+import { NO_MATCH, NOT_YET, planChecklists, stepsBlock } from '../checklist-plan.util';
+
+const checklist = (key: string, paths: string[], mode: Checklist['mode'] = 'model'): Checklist => ({ key, name: key, mode, model: 'main', paths, prestep: null, prompt: `**${key}.** Look.` });
+
+test('a checklist runs when a changed file matches its paths, in the job order; the others say why not', () => {
+  const plan = planChecklists(
+    [checklist('correctness', ['**/*.ts']), checklist('migrations', ['**/migrations/**']), checklist('secrets', ['**'], 'script'), checklist('docs', ['**/*.md'], 'script+model')],
+    [{ filename: 'src/a.ts' }, { filename: 'README.md' }],
+  );
+  expect(plan.map((c) => `${c.key}:${c.skip ?? 'runs'}`)).toEqual(['correctness:runs', `migrations:${NO_MATCH}`, `secrets:${NOT_YET}`, 'docs:runs']);
+});
+
+test('paths match files under dot folders and dotfiles, so ** is any change', () => {
+  const runs = (paths: string[], filename: string) => !planChecklists([checklist('c', paths)], [{ filename }])[0]!.skip;
+  expect(runs(['**'], '.github/workflows/ci.yml')).toBe(true);
+  expect(runs(['**/*.ts'], '.storybook/main.ts')).toBe(true);
+  expect(runs(['**/.env*'], '.env.example')).toBe(true);
+  expect(runs(['.github/workflows/**'], 'src/workflows/a.yml')).toBe(false);
+  expect(runs(['**/*.ts'], 'src/a.md')).toBe(false);
+});
+
+test('with no changed files nothing runs', () => {
+  expect(planChecklists([checklist('c', ['**'])], [])[0]!.skip).toBe(NO_MATCH);
+});
+
+test('the steps are numbered from 1: before, each checklist that runs, then after', () => {
+  expect(stepsBlock(['**Read.** The PR.'], [checklist('correctness', [])], ['**Verify.** Each finding.'])).toBe(
+    '## The steps for this run\n\n1. **Read.** The PR.\n2. **correctness.** Look.\n3. **Verify.** Each finding.\n',
+  );
+});
