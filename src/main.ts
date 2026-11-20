@@ -11,7 +11,7 @@ import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } fro
 import { step } from './services/step.service';
 import { runTask } from './services/task.service';
 import { failureMarkdown, ShaftFailure } from './utils/failure.util';
-import { redact } from './utils/render.util';
+import { redact, workflowEditUrl } from './utils/render.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
 function oneOf(name: string, allowed: string[], value: unknown): string {
@@ -145,6 +145,7 @@ async function run(): Promise<void> {
     checks: job.checks,
     checklists: job.checklists,
     latestAction: grant.latest_action,
+    workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
   });
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);

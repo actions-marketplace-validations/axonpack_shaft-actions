@@ -72,6 +72,8 @@ export type ReviewOptions = {
   dashboardRunUrl?: string;
   /** A newer v1 release than this run's, for a line under the summary's card. */
   latestAction?: { version: string; url: string };
+  /** GitHub's web editor for the workflow file, linked with that line. */
+  workflowEditUrl?: string;
   cwd: string;
   /** The project's own variables the agent's commands get, by name. */
   env?: string[];
@@ -398,6 +400,7 @@ async function postReview(
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
     latestAction: o.latestAction,
+    workflowEditUrl: o.workflowEditUrl,
     models:
       models.main +
       (models.fellBack ? ` (${choice.model} unavailable)` : '') +

@@ -24124,6 +24124,11 @@ function parseState(body) {
     return;
   }
 }
+function workflowEditUrl(workflowRef, defaultBranch) {
+  const m = /^([^/]+\/[^/]+)\/(.+)@(.+)$/.exec(workflowRef ?? "");
+  const branch = m?.[3].startsWith("refs/heads/") ? m[3].slice("refs/heads/".length) : defaultBranch;
+  return m && branch ? `https://github.com/${m[1]}/edit/${encodeURI(`${branch}/${m[2]}`)}` : undefined;
+}
 var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
 function usage(t, costUsd) {
   const total = formatTokens(t.input + t.output + t.cache_read + t.cache_write);
@@ -24241,7 +24246,8 @@ function renderSummary(raw, placed, prior, f) {
   const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
   if (f.latestAction) {
     const { version, url } = f.latestAction;
-    out.push("", `Axon Shaft [v${version}](${url}) is out (this run used v${ACTION_VERSION}). To get each v1 release as it comes out, change \`uses:\` to \`axonpack/shaft-actions@v1\`.`);
+    const links = [f.workflowEditUrl && `[Update the workflow](${f.workflowEditUrl})`, `[Update from the dashboard](${f.dashboardRunUrl ?? DASHBOARD_URL})`];
+    out.push("", "> [!NOTE]", `> Axon Shaft [v${version}](${url}) is out. This run used v${ACTION_VERSION}.`, `> ${links.filter(Boolean).join(" · ")}`);
   }
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== "not_met").length;
@@ -60432,6 +60438,7 @@ ${c.body}`);
     runUrl: o.runUrl,
     dashboardRunUrl: o.dashboardRunUrl,
     latestAction: o.latestAction,
+    workflowEditUrl: o.workflowEditUrl,
     models: models.main + (models.fellBack ? ` (${choice.model} unavailable)` : "") + (models.subagents.length ? ` · subagents: ${models.subagents.join(", ")}` : ""),
     effort: useModel ? choice.effort : "scripts only",
     reason: useModel ? choice.reason : scripted.map((c) => c.key).join(", "),
@@ -61012,7 +61019,8 @@ ${grant.comment}`);
     prompt: job.prompt,
     checks: job.checks,
     checklists: job.checklists,
-    latestAction: grant.latest_action
+    latestAction: grant.latest_action,
+    workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch)
   });
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);

@@ -17,6 +17,7 @@ import {
   stateLine,
   startSummary,
   unposted,
+  workflowEditUrl,
 } from '../render.util';
 
 const patch = '@@ -40,4 +40,5 @@ export function retry() {\n   const max = 3;\n-  let attempt = max;\n+  let attempt = max;\n+  // retry\n   while (attempt < max) {\n   }';
@@ -181,14 +182,28 @@ test('a looks-good review with no findings: a TIP card with one chip, and no tab
   expect(body).not.toContain('fixed</kbd>');
 });
 
-test('a run on an older v1 release gets one line under the card with the newest release and how to stay on it', async () => {
+test('a run on an older v1 release gets a NOTE after the card, with the newest release and where to update it', async () => {
   const { version } = await import('../../../package.json');
   const latestAction = { version: '9.9.9', url: 'https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9' };
-  const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, { ...info, latestAction });
+  const looksGood = { ...review, verdict: 'looks-good' as const, findings: [], resolved: [] };
+  const edit = workflowEditUrl('acme/web/.github/workflows/shaft.yml@refs/heads/main', 'trunk');
+  expect(edit).toBe('https://github.com/acme/web/edit/main/.github/workflows/shaft.yml');
+  const body = renderSummary(looksGood, [], undefined, { ...info, latestAction, workflowEditUrl: edit, dashboardRunUrl: 'https://shaft.axonpack.dev/console/acme/web/runs/7' });
   expect(body).toContain(
-    `</sub>\n\nAxon Shaft [v9.9.9](https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9) is out (this run used v${version}). To get each v1 release as it comes out, change \`uses:\` to \`axonpack/shaft-actions@v1\`.\n`,
+    `</sub>\n\n> [!NOTE]\n> Axon Shaft [v9.9.9](https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9) is out. This run used v${version}.\n` +
+      '> [Update the workflow](https://github.com/acme/web/edit/main/.github/workflows/shaft.yml) · [Update from the dashboard](https://shaft.axonpack.dev/console/acme/web/runs/7)\n',
   );
-  expect(renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info)).not.toContain(' is out (this run used');
+  // Without the edit link, only the dashboard's.
+  expect(renderSummary(looksGood, [], undefined, { ...info, latestAction })).toContain('is out. This run used v' + version + '.\n> [Update from the dashboard](https://shaft.axonpack.dev)\n');
+  expect(renderSummary(looksGood, [], undefined, info)).not.toContain('[!NOTE]');
+});
+
+test('the workflow edit link takes the branch from the workflow ref, else the default branch, else none', () => {
+  expect(workflowEditUrl('acme/web/.github/workflows/review.yml@refs/heads/release/1.x', 'main')).toBe('https://github.com/acme/web/edit/release/1.x/.github/workflows/review.yml');
+  for (const ref of ['refs/tags/v2', 'refs/pull/7/merge'])
+    expect(workflowEditUrl(`acme/web/.github/workflows/shaft.yml@${ref}`, 'trunk')).toBe('https://github.com/acme/web/edit/trunk/.github/workflows/shaft.yml');
+  expect(workflowEditUrl('acme/web/.github/workflows/shaft.yml@refs/tags/v2', undefined)).toBeUndefined();
+  expect(workflowEditUrl(undefined, 'main')).toBeUndefined();
 });
 
 test('blocking is a CAUTION card; a check the project turned off shows ➖', () => {
