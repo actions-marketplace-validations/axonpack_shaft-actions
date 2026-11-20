@@ -5,7 +5,7 @@ import { matches, pick } from '../utils/auto-pick.util';
 import { runnerEnv } from '../utils/env.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { pushDenial, type PushTarget } from '../utils/push.util';
-import { parseState, prose, redact } from '../utils/render.util';
+import { parseState, prose, redact, type StateFinding } from '../utils/render.util';
 import { toolDenial } from '../utils/tool-guard.util';
 import { type ReplyFormat, runAgent } from './agent.service';
 import { type CheckResult, repoCommands, runCheck } from './commands.service';
@@ -44,12 +44,14 @@ export const TASK_FORMAT: ReplyFormat<TaskReply> = {
  * minted none) and the repo's page on GitHub, which the push and the commit link use.
  */
 export type TaskOptions = ReplyOptions & { bare: boolean; pushMode: string; pushToken?: string; repoUrl: string };
-/** A finished task, or one that stopped before its session because nothing could be pushed. */
-export type TaskOutcome = ReplyOutcome | { refused: string };
+/**
+ * A finished task, or one that stopped before its session: `push_failed` when nothing could be
+ * pushed, `nothing_to_fix` for a bare `/fix` with no open findings.
+ */
+export type TaskOutcome = ReplyOutcome | { refused: string; code: 'push_failed' | 'nothing_to_fix' };
 
 /** The request: the comment, or for a bare `/fix` the open findings the last review's summary keeps. */
-export function taskRequest(ask: Ask, bare: boolean, summary: string | undefined): string {
-  const findings = bare ? (parseState(summary)?.findings ?? []) : [];
+export function taskRequest(ask: Ask, findings: StateFinding[]): string {
   if (!findings.length) return ask.text;
   return `Fix these open findings from the last review (severity, place, title):\n\n${findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}`).join('\n')}`;
 }
@@ -84,7 +86,8 @@ const checksTable = (checks: CheckResult[]) =>
  * branch, and reply where it was asked with what changed, the commit and the checks. The model
  * never holds a GitHub token: our code commits and pushes after its session has ended, and only when
  * our own run of the checks passes. A push the mode refuses (a fork's PR, the default branch, push
- * mode Disabled) is caught before the session, which then doesn't run.
+ * mode Disabled) is caught before the session, which then doesn't run, and so is a bare `/fix` with
+ * no open findings.
  */
 export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   const ctx = await step('Read the pull request', () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
@@ -94,7 +97,13 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     pushDenial(o.pushMode, target) ?? (o.pushToken ? undefined : "The Axon Shaft API sent no push token. Check the project's Push mode on the dashboard.");
   if (refused) {
     await post(`${failureMarkdown(new ShaftFailure('push_failed', `${refused} Nothing was changed.`, DASHBOARD_URL))}\n\n${TASK_MARKER}`);
-    return { refused };
+    return { refused, code: 'push_failed' };
+  }
+  const findings = o.bare ? (parseState(ctx.summary?.body)?.findings ?? []) : [];
+  if (o.bare && !findings.length) {
+    const why = ctx.summary ? 'The last review has no open findings to fix.' : "There's nothing to fix yet: comment `/review` first.";
+    await post(`${why}\n\n${TASK_MARKER}`);
+    return { refused: why, code: 'nothing_to_fix' };
   }
 
   const commands = repoCommands(o.cwd);
@@ -104,7 +113,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   const prompt = buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, {
     template: o.template,
     focus: o.focus,
-    slots: { request: taskRequest(o.ask, o.bare, ctx.summary?.body), commands: commands.map((c) => `- \`${c}\``).join('\n') },
+    slots: { request: taskRequest(o.ask, findings), commands: commands.map((c) => `- \`${c}\``).join('\n') },
   });
   try {
     const result = await step('Make the change', () =>

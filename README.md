@@ -159,7 +159,7 @@ What counts as a command:
 
 `/fix` and `/axonshaft <prompt>` run the project's Task job from the dashboard, with its prompt.
 
-- The request is the comment. A bare `/fix` asks for the open findings of the last review, from its summary comment.
+- The request is the comment. A bare `/fix` asks for the open findings of the last review, from its summary comment. With no review yet, or nothing open in the last one, it replies with one line saying so and starts no session.
 - The model works on the pull request's head commit. It makes the smallest change that does what was asked and runs the repo's tests and lint.
 - After the session, the action commits the change as `axonshaft[bot]`, with one plain line saying what changed, and pushes it to the pull request's branch.
 - The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed or Failed.

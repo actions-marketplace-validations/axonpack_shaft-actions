@@ -59869,8 +59869,7 @@ var TASK_FORMAT = {
     return ok ? r : undefined;
   }
 };
-function taskRequest(ask, bare, summary) {
-  const findings = bare ? parseState(summary)?.findings ?? [] : [];
+function taskRequest(ask, findings) {
   if (!findings.length)
     return ask.text;
   return `Fix these open findings from the last review (severity, place, title):
@@ -59895,7 +59894,15 @@ async function runTask(o) {
     await post(`${failureMarkdown(new ShaftFailure("push_failed", `${refused} Nothing was changed.`, DASHBOARD_URL))}
 
 ${TASK_MARKER}`);
-    return { refused };
+    return { refused, code: "push_failed" };
+  }
+  const findings = o.bare ? parseState(ctx.summary?.body)?.findings ?? [] : [];
+  if (o.bare && !findings.length) {
+    const why = ctx.summary ? "The last review has no open findings to fix." : "There's nothing to fix yet: comment `/review` first.";
+    await post(`${why}
+
+${TASK_MARKER}`);
+    return { refused: why, code: "nothing_to_fix" };
   }
   const commands = repoCommands(o.cwd);
   const choice = pick({ mode: "task", model: o.model, effort: o.effort, maxTurns: o.maxTurns });
@@ -59904,7 +59911,7 @@ ${TASK_MARKER}`);
   const prompt = buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, {
     template: o.template,
     focus: o.focus,
-    slots: { request: taskRequest(o.ask, o.bare, ctx.summary?.body), commands: commands.map((c) => `- \`${c}\``).join(`
+    slots: { request: taskRequest(o.ask, findings), commands: commands.map((c) => `- \`${c}\``).join(`
 `) }
   });
   try {
@@ -60075,7 +60082,7 @@ ${grant.comment}`);
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
     }
     notice(out.refused);
-    return reportRun({ error: { code: "push_failed", message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
+    return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === "reply") {
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });

@@ -128,7 +128,7 @@ async function run(): Promise<void> {
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
     }
     core.notice(out.refused);
-    return reportRun({ error: { code: 'push_failed', message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
+    return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === 'reply') {
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });

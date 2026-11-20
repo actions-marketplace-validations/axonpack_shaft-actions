@@ -167,7 +167,7 @@ test("a fork's PR, the default branch, push mode Disabled or no push token: noth
   ] as const) {
     fake = o.fake;
     const out = await runTask(options({ ...o, fake: undefined }));
-    expect(out).toEqual({ refused: expect.stringContaining(why) });
+    expect(out).toEqual({ refused: expect.stringContaining(why), code: 'push_failed' });
     expect(fake.posted[0]).toMatch(/errors\/push_failed\.svg/);
     expect(fake.posted[0]).toContain(`${why}`);
     expect(fake.posted[0]).toContain('Nothing was changed.');
@@ -186,6 +186,20 @@ test("a bare /fix asks for the last review's open findings; an answer with no ch
   expect(sessions[0]!.prompt).toContain('Fix these open findings from the last review (severity, place, title):\n\n- blocking `src/retry.ts:4` Retries forever');
   expect(remote('pr')).toBe(before);
   expect(fake.posted[0]).toMatch(/^Nothing needed changing\.\n\n<sub>/);
+});
+
+test('a bare /fix with no review, or a review with nothing open, starts no session and says so in one line', async () => {
+  const empty = `<!-- shaft:summary -->\nThe card.\n${stateLine({ sha: 'abc', findings: [] })}`;
+  for (const [summary, why] of [
+    [undefined, "There's nothing to fix yet: comment `/review` first."],
+    [empty, 'The last review has no open findings to fix.'],
+  ] as const) {
+    fake = octokit('pr', 'acme/widgets', summary);
+    const out = await runTask(options({ ask: { id: 3, text: '/fix' }, bare: true }));
+    expect(out).toEqual({ refused: why, code: 'nothing_to_fix' });
+    expect(fake.posted).toEqual([`${why}\n\n<!-- shaft:task -->`]);
+  }
+  expect(sessions).toEqual([]);
 });
 
 test("the checks are the model's that the guard allows, else the repo's install, test and lint; the reply format needs all three fields", () => {

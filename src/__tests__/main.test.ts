@@ -453,7 +453,7 @@ test('/fix asks for a task grant and runs it with the push token, which the repo
 test('a task that refuses to push ends with a notice and reports push_failed with the reason', async () => {
   context.eventName = 'issue_comment';
   context.payload = comment;
-  taskOut = { refused: 'Pushing is turned off for this project.' };
+  taskOut = { refused: 'Pushing is turned off for this project.', code: 'push_failed' };
   api(Response.json(taskGrant));
   await main();
   expect(failed).toEqual([]);
