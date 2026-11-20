@@ -17,5 +17,6 @@ export const input = (files: ScriptInput['files'], tree: Record<string, string> 
   guides: [],
   checkout: { find: (globs) => Object.keys(tree).filter((p) => matches(p, globs)), read: (p) => tree[p] },
   base: async () => undefined,
+  octokit: {} as ScriptInput['octokit'],
   ...extra,
 });

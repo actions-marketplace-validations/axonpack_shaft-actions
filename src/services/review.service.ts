@@ -297,6 +297,7 @@ async function postReview(
     guides: ctx.guides,
     checkout: checkoutFiles(o.cwd),
     base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path)!,
+    octokit,
   };
   const scriptFindings = scripted.length ? await step('Run the script checklists', async () => runScripts(scripted, input)) : [];
   // With only script checklists to run, no model is called, unless merge gates need judging.
@@ -351,7 +352,7 @@ async function postReview(
     : scriptFindings.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
       ? 'needs-changes'
       : reply.verdict;
-  const review: Review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.map((c) => c.key)] };
+  const review: Review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
   await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 

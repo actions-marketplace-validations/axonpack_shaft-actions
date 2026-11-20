@@ -567,3 +567,18 @@ test("a script+model checklist runs in the model, with its pre-step's facts afte
   const missing = await review([file('apps/web/pnpm-lock.yaml')], { checklists: [deps], open: OPEN });
   expect(missing.prompt).toContain("### deps-diff, for dependencies\n\nNot available: Couldn't read `apps/web/pnpm-lock.yaml` from the checkout.");
 });
+
+test('a script that throws leaves its checklist not checked, with the reason, never passed', async () => {
+  // osv.dev is down, and the fake GitHub client has no advisory API.
+  vi.stubGlobal('fetch', async () => new Response('', { status: 503 }));
+  const vulns = { ...checklist('vulnerabilities', ['**/*.lock'], 'script'), prestep: 'osv' };
+  const { outcome } = await review([file('bun.lock')], { checklists: [vulns], open: OPEN });
+  vi.unstubAllGlobals();
+  expect(runs).toHaveLength(0);
+  expect(outcome.verdict).toBe('looks-good');
+  expect(outcome.output.checks).toEqual([
+    { key: 'vulnerabilities', label: 'The vulnerabilities list', state: 'not_checked', reason: expect.stringMatching(/^osv\.dev and GitHub's advisory database both failed \(osv\.dev answered 503; .+\), so no package was checked\.$/) },
+  ]);
+  expect(warnings.some((w) => w.startsWith("The vulnerabilities list wasn't checked: osv.dev and GitHub's"))).toBe(true);
+  expect(logs).not.toContain('Would post the Axon Shaft / vulnerabilities check: success');
+});

@@ -58743,7 +58743,7 @@ var NO_MATCH = "No matching files changed";
 var NOT_YET = "This version of the action doesn't have this checklist's script yet";
 var undot = (s) => s.replace(/(^|\/)\./g, "$1");
 var touches = (file, paths) => matches(file, paths) || matches(undot(file), paths.map(undot));
-var planChecklists = (checklists, files, scripts = []) => checklists.map((c) => !files.some((f) => touches(f.filename, c.paths)) ? { ...c, skip: NO_MATCH } : c.mode === "script" && !scripts.includes(c.prestep ?? "") ? { ...c, skip: NOT_YET } : c);
+var planChecklists = (checklists, files, scripts = []) => checklists.map((c) => !files.some((f) => touches(f.filename, c.paths)) ? { ...c, skip: NO_MATCH } : c.mode === "script" && !scripts.includes(c.prestep ?? "") ? { ...c, skip: NOT_YET } : { ...c });
 var STEPS_AT_END = 'They are at the end of this prompt, under "The steps for this run".';
 var stepsBlock = (before, run, after) => `## The steps for this run
 
@@ -58986,6 +58986,113 @@ var envVars = ({ files, checkout }) => {
   }));
 };
 
+// src/services/prestep/osv.service.ts
+var OSV = "https://api.osv.dev/v1";
+var USER_AGENT = "axon-shaft-action";
+var CALL_MS = 1e4;
+var TOTAL_MS = 60000;
+var BATCH = 1000;
+var GITHUB_MAX = 50;
+var GITHUB_ECOSYSTEM = { npm: "npm", PyPI: "pip", Go: "go", "crates.io": "rust" };
+var RANK = { critical: 4, high: 3, moderate: 2, medium: 2, low: 1 };
+async function getJson(url, signal, body) {
+  const res = await fetch(url, {
+    method: body ? "POST" : "GET",
+    headers: { "user-agent": USER_AGENT, ...body ? { "content-type": "application/json" } : {} },
+    body: body ? JSON.stringify(body) : undefined,
+    signal
+  });
+  if (!res.ok)
+    throw new Error(`osv.dev answered ${res.status}`);
+  return res.json();
+}
+function fromOsvRecord(v, name) {
+  const ids = [v.id, ...v.aliases ?? []];
+  const affected = (v.affected ?? []).filter((a) => String(a.package?.name).toLowerCase() === name.toLowerCase());
+  return {
+    id: ids.find((id) => id.startsWith("GHSA-")) ?? v.id,
+    severity: v.id.startsWith("MAL-") ? "critical" : String(v.database_specific?.severity ?? "unrated").toLowerCase(),
+    summary: v.summary ?? "",
+    fixed: affected.flatMap((a) => (a.ranges ?? []).filter((r) => r.type !== "GIT").flatMap((r) => r.events ?? [])).flatMap((e) => e.fixed ? [e.fixed] : [])
+  };
+}
+async function fromOsv(pins, signal) {
+  const ids = [];
+  for (let i = 0;i < pins.length; i += BATCH) {
+    const queries = pins.slice(i, i + BATCH).map((p) => ({ package: { name: p.name, ecosystem: p.ecosystem }, version: p.version }));
+    const { results } = await getJson(`${OSV}/querybatch`, signal(), { queries });
+    for (const r of results)
+      ids.push((r.vulns ?? []).map((v) => v.id));
+  }
+  const unique = [...new Set(ids.flat())];
+  const records = new Map(await Promise.all(unique.map(async (id) => [id, await getJson(`${OSV}/vulns/${encodeURIComponent(id)}`, signal())])));
+  return pins.map((p, i) => (ids[i] ?? []).map((id) => fromOsvRecord(records.get(id), p.name)));
+}
+function fromGitHub(octokit, pins, signal) {
+  return Promise.all(pins.map(async (p) => {
+    const { data } = await octokit.request("GET /advisories", {
+      affects: `${p.name}@${p.version}`,
+      ecosystem: GITHUB_ECOSYSTEM[p.ecosystem],
+      per_page: 100,
+      request: { signal: signal() }
+    });
+    return data.map((a) => ({
+      id: a.ghsa_id,
+      severity: a.severity,
+      summary: a.summary,
+      fixed: (a.vulnerabilities ?? []).filter((v) => v.package?.name === p.name).flatMap((v) => {
+        const fix = v.first_patched_version;
+        const version = typeof fix === "string" ? fix : fix?.identifier;
+        return version ? [version] : [];
+      })
+    }));
+  }));
+}
+function finding(p, found) {
+  const byId = new Map;
+  for (const a of found) {
+    const seen = byId.get(a.id);
+    byId.set(a.id, seen ? { ...seen, severity: (RANK[a.severity] ?? 0) > (RANK[seen.severity] ?? 0) ? a.severity : seen.severity, fixed: [...seen.fixed, ...a.fixed] } : a);
+  }
+  const all = [...byId.values()].sort((a, b) => (RANK[b.severity] ?? 0) - (RANK[a.severity] ?? 0));
+  const fixed = [...new Set(all.flatMap((a) => a.fixed))];
+  return {
+    severity: all.some((a) => (RANK[a.severity] ?? 0) >= RANK.high) ? "blocking" : "should-fix",
+    file: p.file,
+    line: p.line,
+    title: `${p.name} ${p.version} has a known vulnerability (${all[0].id}${all.length > 1 ? ` and ${all.length - 1} more` : ""})`,
+    body: [
+      `\`${p.name}\` ${p.version} has ${all.length === 1 ? "a published advisory" : `${all.length} published advisories`}:`,
+      ...all.map((a) => `- ${a.id} (${a.severity})${a.summary ? `: ${a.summary}` : ""}. ${a.fixed.length ? `Fixed in ${[...new Set(a.fixed)].join(", ")}.` : "No fixed version yet."}`),
+      fixed.length ? `Upgrade to a fixed version, or say in the pull request why this one is safe here.` : `No version fixes it yet, so say in the pull request why it's safe here or pick another package.`
+    ].join(`
+`)
+  };
+}
+var osv = async (input) => {
+  const pins = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) => changes.flatMap((c) => c.to.filter((p) => p.public && !p.name.startsWith("@")).map((p) => ({ ...p, file, ecosystem }))));
+  if (!pins.length)
+    return [];
+  const total = AbortSignal.timeout(TOTAL_MS);
+  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
+  let found;
+  try {
+    found = await fromOsv(pins, signal);
+  } catch (e) {
+    const why = e.message;
+    warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
+    try {
+      found = await fromGitHub(input.octokit, pins.slice(0, GITHUB_MAX), signal);
+    } catch (e2) {
+      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${e2.message}), so no package was checked.`);
+    }
+    if (pins.length > GITHUB_MAX && !found.flat().length) {
+      throw new Error(`osv.dev failed (${why}), and GitHub's advisory database checked only ${GITHUB_MAX} of the ${pins.length} versions, finding nothing.`);
+    }
+  }
+  return pins.flatMap((p, i) => found[i]?.length ? [finding(p, found[i])] : []);
+};
+
 // src/services/prestep/pr-meta.service.ts
 var TEMPLATE = ".github/pull_request_template.md";
 var HEADING = /^#{1,6}\s+(.+?)[\s#]*$/;
@@ -59092,9 +59199,20 @@ var secrets = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].
 }))));
 
 // src/services/prestep/prestep.service.ts
-var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs };
+var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
 var FACTS = { "deps-diff": depsDiffFacts };
-var runScripts = (run, input) => run.flatMap((c) => SCRIPTS[c.prestep](input).map((f) => ({ ...f, step: c.key })));
+async function runScripts(run, input) {
+  const found = await Promise.all(run.map(async (c) => {
+    try {
+      return (await SCRIPTS[c.prestep](input)).map((f) => ({ ...f, step: c.key }));
+    } catch (e) {
+      c.skip = e instanceof Error ? e.message : String(e);
+      warning(`${c.name} wasn't checked: ${c.skip}`);
+      return [];
+    }
+  }));
+  return found.flat();
+}
 async function factsBlock(run, input) {
   const keys = [...new Set(run.filter((c) => c.mode === "script+model" && c.prestep && FACTS[c.prestep]).map((c) => c.prestep))];
   const parts = await Promise.all(keys.map(async (k) => {
@@ -59366,7 +59484,8 @@ ${clean(body)}`);
     pr: ctx.pr,
     guides: ctx.guides,
     checkout: checkoutFiles(o.cwd),
-    base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path)
+    base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path),
+    octokit
   };
   const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, input)) : [];
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
@@ -59408,7 +59527,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
   const { reply } = result;
   const verdict = scriptFindings.some((f) => f.severity === "blocking") ? "blocking" : scriptFindings.some((f) => f.severity === "should-fix") && reply.verdict === "looks-good" ? "needs-changes" : reply.verdict;
-  const review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.map((c) => c.key)] };
+  const review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);

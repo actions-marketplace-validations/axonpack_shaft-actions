@@ -22,7 +22,7 @@ export const planChecklists = (checklists: Checklist[], files: { filename: strin
       ? { ...c, skip: NO_MATCH }
       : c.mode === 'script' && !scripts.includes(c.prestep ?? '')
         ? { ...c, skip: NOT_YET }
-        : c,
+        : { ...c },
   );
 
 /** What fills the open prompt's `{{steps}}`: the steps come after the run's data, so everything before them reads the same whatever runs. */
