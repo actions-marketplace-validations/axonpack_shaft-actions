@@ -59576,6 +59576,31 @@ var exportsDiff = async ({ files }) => {
   return capFacts(lines, "The pull request changes no exported name, no package entry point or version, and no changeset bump.");
 };
 
+// src/services/prestep/routes.service.ts
+var ROUTES = [
+  /\.(get|post|put|patch|delete|all|head|options|route|any)\(\s*['"`](\/[^'"`]*)/i,
+  /@(?:\w+\.)?(get|post|put|patch|delete|route|api_route|request)(?:mapping)?\(\s*['"]?([^'")]*)/i,
+  /\bexport\s+(?:async\s+)?(?:function|const)\s+(GET|POST|PUT|PATCH|DELETE|loader|action)\b()/,
+  /\b(Handle(?:Func)?|path|re_path)\(\s*['"`]([^'"`]*)/
+];
+var AUTH = /\b(?:auth\w*|\w*Auth\w*|session|currentUser|getUser|requireUser|user_id|userId|ownerId|owner|tenant\w*|role\w*|permission\w*|can|isAdmin|guard\w*|UseGuards|jwt|verify\w*|beforeHandle|login_required|Depends|policy|policies|authorize\w*|forbidden|unauthori[sz]ed|401|403)\b/i;
+var NEAR = 15;
+var routes = async ({ files, checkout }) => {
+  const lines = [];
+  for (const f of files) {
+    const text = checkout.read(f.filename)?.split(`
+`);
+    for (const [line, code] of diffLines(f.patch, true)) {
+      const m = ROUTES.map((r) => r.exec(code)).find(Boolean);
+      if (!m)
+        continue;
+      const near = (text ?? []).map((l, i) => [i + 1, l]).filter(([n, l]) => Math.abs(n - line) <= NEAR && AUTH.test(l)).slice(0, 5).map(([n, l]) => `line ${n} \`${l.trim().slice(0, 120)}\``);
+      lines.push(`- ${f.filename}:${line} ${m[1].toUpperCase()} ${m[2] || "(path from the file)"}: ${text === undefined ? "the checkout doesn't have the file" : near.length ? `auth nearby: ${near.join(", ")}` : `no auth call within ${NEAR} lines`}`);
+    }
+  }
+  return capFacts(lines, "The added lines define no route.");
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
 var FACTS = {
@@ -59583,7 +59608,8 @@ var FACTS = {
   callers,
   unused,
   imports,
-  "exports-diff": exportsDiff
+  "exports-diff": exportsDiff,
+  routes
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {

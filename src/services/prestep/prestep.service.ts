@@ -13,6 +13,7 @@ import { callers } from './callers.service';
 import { unused } from './unused.service';
 import { imports } from './imports.service';
 import { exportsDiff } from './exports-diff.service';
+import { routes } from './routes.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv };
@@ -24,6 +25,7 @@ export const FACTS: Record<string, Facts> = {
   unused,
   imports,
   'exports-diff': exportsDiff,
+  routes,
 };
 
 /**
