@@ -449,6 +449,8 @@ async function postReview(
       title: cut(clean(p.title), 300),
       body: cut(clean(p.body), 5000),
       ...(p.suggestion ? { suggestion: cut(clean(p.suggestion), 5000) } : {}),
+      // A link cut short would lead nowhere, so one over the API's limit is left out.
+      ...(p.url && p.url.length <= 500 ? { url: p.url } : {}),
       inline: p.inline,
     })),
     fixed: fixed.length,

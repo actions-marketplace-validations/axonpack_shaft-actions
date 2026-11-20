@@ -88,6 +88,25 @@ test('each review check that is on gets its own run, its conclusion from its sta
   expect(create.mock.calls[2]![0]).toMatchObject({ output: { title: 'Checked, nothing found', summary: 'Checked, nothing found' } });
 });
 
+test("a check's details link is the page of its most severe finding that has one, and unset when none has", async () => {
+  const create = vi.fn(async (_: object) => ({ data: { id: 1 } }));
+  const osv = { ...finding, step: 'osv', title: 'lodash 4.17.21 has a known vulnerability (GHSA-xxxx)' };
+  const found: Placed[] = [
+    { ...osv, severity: 'should-fix', url: 'https://osv.dev/vulnerability/PYSEC-2026-5' },
+    { ...osv, url: 'https://github.com/advisories/GHSA-xxxx' },
+    // A blocking finding with no ID has no page, so it doesn't pick the link.
+    { ...osv, title: 'No ID' },
+  ];
+  const states = [
+    { key: 'osv', state: 'failed' as const },
+    { key: 'correctness', state: 'failed' as const },
+  ];
+  await postCategoryChecks({ rest: { checks: { create } } } as any, 'o', 'r', 'abc1234', states, [...found, finding], (s) => s);
+  expect(create.mock.calls[0]![0]).toMatchObject({ name: 'Axon Shaft / osv', details_url: 'https://github.com/advisories/GHSA-xxxx' });
+  expect((create.mock.calls[0]![0] as any).output.summary).toContain('| [lodash 4.17.21 has a known vulnerability (GHSA-xxxx)](https://github.com/advisories/GHSA-xxxx) |');
+  expect(create.mock.calls[1]![0]).not.toHaveProperty('details_url');
+});
+
 test("a checklist that didn't run is skipped with its reason as the title and summary", async () => {
   const create = vi.fn(async (_: object) => ({ data: { id: 1 } }));
   await postCategoryChecks({ rest: { checks: { create } } } as any, 'o', 'r', 'abc1234', [{ key: 'migrations', state: 'not_checked', reason: 'No matching files changed' }], [], (s) => s);

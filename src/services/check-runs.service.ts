@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import type { Octokit } from '../types/octokit.type';
-import { type CheckState, findingsTable, type Gate, gatesTable, type Placed } from '../utils/render.util';
+import { type CheckState, findingsTable, type Gate, gatesTable, type Placed, SEVERITIES } from '../utils/render.util';
 
 /** The check run branch protection can require. */
 export const GATES_CHECK = 'Axon Shaft / gates';
@@ -99,8 +99,8 @@ const CATEGORY_TITLE: Record<CheckState, string> = {
 
 /**
  * Posts one check run per review check that's on, with that check's findings as its summary, or the
- * `reason` a checklist didn't run. After the first refusal the rest are skipped: the same token would
- * refuse them too.
+ * `reason` a checklist didn't run, and as its details link the page of its most severe finding that
+ * has one. After the first refusal the rest are skipped: the same token would refuse them too.
  */
 export async function postCategoryChecks(
   octokit: Octokit,
@@ -117,6 +117,7 @@ export async function postCategoryChecks(
     const found = placed.filter((p) => p.step === key);
     const title = reason ?? CATEGORY_TITLE[state];
     const summary = found.length ? findingsTable(found, { repo: `${owner}/${repo}`, sha }) : title;
-    if (!(await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title, summary }, clean))) return;
+    const detailsUrl = SEVERITIES.flatMap((s) => found.filter((p) => p.severity === s && p.url))[0]?.url;
+    if (!(await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title, summary, detailsUrl }, clean))) return;
   }
 }

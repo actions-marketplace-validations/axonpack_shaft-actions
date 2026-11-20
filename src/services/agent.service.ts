@@ -146,6 +146,8 @@ export function parseReview(x: unknown): Review | undefined {
     ...rest,
     ...(walkthrough && { walkthrough }),
     ...(gates && { gates }),
+    // Only a script links a finding to a page; the model's text never picks where a link goes.
+    findings: r.findings.map(({ url: _, ...f }) => f),
     resolved: Array.isArray(r.resolved) ? r.resolved : [],
     checked: Array.isArray(r.checked) ? r.checked.filter((c) => typeof c === 'string') : [],
     not_checked: r.not_checked ?? '',

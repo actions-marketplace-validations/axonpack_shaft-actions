@@ -236,6 +236,28 @@ test("a title or body with | or a line break can't break the table; a range link
   expect(body).toContain('<details><summary>Suggested change for <code>src/a b.ts:3-5</code></summary>\n\n```\nx = 1;\ny = 2;\n```\n\n</details>');
 });
 
+test("a finding with a page links its title there in the summary table; one without keeps plain text", () => {
+  const url = 'https://github.com/advisories/GHSA-35jh-r3h4-6jhm';
+  const placed = place(
+    [
+      finding({ step: 'osv', file: 'package-lock.json', line: 23, title: 'lodash 4.17.21 has a known vulnerability (GHSA-35jh-r3h4-6jhm)', body: 'b', url }),
+      finding({ title: 'No ID', body: 'c' }),
+    ],
+    files,
+    'summary',
+  );
+  const body = renderSummary(review, placed, undefined, info);
+  expect(body).toContain(
+    `| 🟡 Should fix | [\`package-lock.json:23\`](https://github.com/acme/widgets/blob/abc1234/package-lock.json#L23) | [lodash 4.17.21 has a known vulnerability (GHSA-35jh-r3h4-6jhm)](${url}) | b |`,
+  );
+  expect(body).toContain('| No ID | inline |');
+});
+
+test("the model can't set a finding's link", () => {
+  const reply = { ...review, findings: [{ ...finding({}), url: 'https://evil.example' }] };
+  expect(parseReview(reply)!.findings[0]).not.toHaveProperty('url');
+});
+
 test('the state line survives a title with --> in it', () => {
   const state = { sha: 'abc', findings: [{ fp: '123456', file: 'a.ts', line: 1, severity: 'nit' as const, title: 'x --> y' }] };
   expect(stateLine(state)).not.toContain('x -->');

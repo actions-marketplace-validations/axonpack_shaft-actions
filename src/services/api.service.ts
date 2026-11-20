@@ -86,7 +86,7 @@ export type RunOutput = {
   checks: { key: string; label: string; state: string }[];
   /** Each model session the run made, with the checklists it ran. Only when the job has checklists. */
   passes?: { name: string; model: string; tokens: { input: number; output: number; cache_read: number; cache_write: number }; checklists: string[] }[];
-  findings: { severity: string; check: string; file: string; line: number; end_line?: number; title: string; body: string; suggestion?: string; inline: boolean }[];
+  findings: { severity: string; check: string; file: string; line: number; end_line?: number; title: string; body: string; suggestion?: string; url?: string; inline: boolean }[];
   fixed: number;
 };
 
