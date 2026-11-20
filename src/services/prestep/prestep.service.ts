@@ -9,12 +9,18 @@ import { osv } from './osv.service';
 import { prMeta } from './pr-meta.service';
 import { schemaPairs } from './schema-pairs.service';
 import { secrets } from './secrets.service';
+import { callers } from './callers.service';
+import { unused } from './unused.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */
-export const FACTS: Record<string, Facts> = { 'deps-diff': depsDiffFacts };
+export const FACTS: Record<string, Facts> = {
+  'deps-diff': depsDiffFacts,
+  callers,
+  unused,
+};
 
 /**
  * The findings of each script checklist, under its key. Every checklist passed here has its script in

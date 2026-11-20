@@ -59344,9 +59344,134 @@ var secrets = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].
   body: `This line adds what looks like ${kind}. The value isn't shown here. If it's real, rotate it now, since it's already in the branch's history, and load it from a secret or an env var instead.`
 }))));
 
+// src/utils/exports.util.ts
+var EXPORTS = [
+  /^\s*export\s+(?:declare\s+)?(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|var|class|abstract\s+class|interface|type|enum|namespace)\s+([A-Za-z_$][\w$]*)/,
+  /^(?:async\s+)?def\s+([A-Za-z]\w*)|^class\s+([A-Za-z]\w*)/,
+  /^func\s+(?:\([^)]*\)\s*)?([A-Z]\w*)|^type\s+([A-Z]\w*)/,
+  /^\s*pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type|const|static)\s+([A-Za-z_]\w*)/
+];
+var EXPORT_LIST = /^\s*export\s+(?:type\s+)?\{([^}]*)\}/;
+function exportNames(line) {
+  const list = EXPORT_LIST.exec(line);
+  if (list)
+    return list[1].split(",").map((s) => s.trim().split(/\s+as\s+/).pop().replace(/^type\s+/, "")).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n) && n !== "default");
+  return EXPORTS.flatMap((r) => r.exec(line)?.slice(1).filter(Boolean) ?? []);
+}
+
+// src/utils/facts.util.ts
+var FACTS_MAX2 = 16000;
+function capFacts(lines, none) {
+  if (!lines.length)
+    return none;
+  let text = "";
+  for (const [i, l] of lines.entries()) {
+    if (text.length + l.length > FACTS_MAX2)
+      return `${text}... and ${lines.length - i} more lines, cut to fit.`;
+    text += `${l}
+`;
+  }
+  return text.trimEnd();
+}
+var removedLines = (patch) => (patch ?? "").split(`
+`).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
+
+// src/services/prestep/search.service.ts
+var CODE = ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs,vue,svelte,astro,py,go,rs,java,kt,kts,swift,m,mm,c,h,cc,cpp,hpp,cs,rb,php,dart,scala,ex,exs}"];
+var BUILT = ["**/{dist,build,out,vendor,coverage,.next,.expo}/**", "**/*.min.*", "**/*.d.ts"];
+var SEARCH_MAX = { files: 5000, bytes: 20000000, names: 50, perName: 20 };
+var escape2 = (s) => s.replace(/[$]/g, "\\$");
+function search(checkout, names) {
+  const cut = [];
+  const wanted = [...new Set(names)];
+  if (wanted.length > SEARCH_MAX.names)
+    cut.push(`searched for the first ${SEARCH_MAX.names} of ${wanted.length} names`);
+  const hits = new Map(wanted.slice(0, SEARCH_MAX.names).map((n) => [n, []]));
+  if (!hits.size)
+    return { hits, cut };
+  const any = new RegExp(`(?<![\\w$])(${[...hits.keys()].map(escape2).join("|")})(?![\\w$])`, "g");
+  const files = checkout.find(CODE).filter((p) => !matches(p, BUILT)).sort();
+  if (files.length > SEARCH_MAX.files)
+    cut.push(`searched the first ${SEARCH_MAX.files} of ${files.length} code files`);
+  let bytes = 0;
+  for (const [i, file] of files.slice(0, SEARCH_MAX.files).entries()) {
+    if (bytes > SEARCH_MAX.bytes) {
+      cut.push(`stopped after ${SEARCH_MAX.bytes / 1e6} MB, with ${Math.min(files.length, SEARCH_MAX.files) - i} code files left`);
+      break;
+    }
+    const text = checkout.read(file);
+    if (!text)
+      continue;
+    bytes += text.length;
+    if (text.search(any) < 0)
+      continue;
+    const found = new Map;
+    text.split(`
+`).forEach((l, n) => {
+      for (const m of l.matchAll(any)) {
+        const lines = found.get(m[1]) ?? found.set(m[1], []).get(m[1]);
+        if (lines.at(-1) !== n + 1)
+          lines.push(n + 1);
+      }
+    });
+    for (const [name, lines] of found)
+      hits.get(name).push({ file, lines });
+  }
+  return { hits, cut };
+}
+
+// src/services/prestep/callers.service.ts
+function changedExports(files) {
+  const out = new Map;
+  for (const f of files) {
+    const added = new Map([...diffLines(f.patch, true)].flatMap(([line, text]) => exportNames(text).map((n) => [n, line])));
+    const removed = new Set(removedLines(f.patch).flatMap(exportNames));
+    for (const n of new Set([...added.keys(), ...removed]))
+      if (!out.has(n))
+        out.set(n, { file: f.filename, line: added.get(n), kind: !removed.has(n) ? "added" : !added.has(n) ? "removed" : "changed" });
+  }
+  return out;
+}
+var cutNote = (cut) => cut.length ? [`Search cut: ${cut.join("; ")}.`] : [];
+var callers = async ({ files, checkout }) => {
+  const changed = changedExports(files);
+  if (!changed.size)
+    return "The pull request adds, removes or changes no exported name.";
+  const { hits, cut } = search(checkout, [...changed.keys()]);
+  const inPr = new Set(files.map((f) => f.filename));
+  const lines = [...hits].flatMap(([name, found]) => {
+    const at = changed.get(name);
+    const others = found.filter((h) => h.file !== at.file);
+    return [
+      `\`${name}\` (${at.kind} in ${at.file}${at.line ? `:${at.line}` : ""}): ${others.length ? `named in ${others.length} other file${others.length > 1 ? "s" : ""}` : "no other code file names it"}`,
+      ...others.slice(0, SEARCH_MAX.perName).map((h) => `- ${h.file}:${h.lines.slice(0, 10).join(",")}${inPr.has(h.file) ? " (changed in this pull request)" : ""}`),
+      ...others.length > SEARCH_MAX.perName ? [`- and ${others.length - SEARCH_MAX.perName} more files`] : []
+    ];
+  });
+  return capFacts([...cutNote(cut), ...lines], "");
+};
+
+// src/services/prestep/unused.service.ts
+var unused = async ({ files, checkout }) => {
+  const added = new Map([...changedExports(files)].filter(([, at]) => at.kind === "added"));
+  if (!added.size)
+    return "The pull request exports no new name.";
+  const { hits, cut } = search(checkout, [...added.keys()]);
+  const lines = [...hits].filter(([name, found]) => found.every((h) => h.file === added.get(name).file)).map(([name]) => {
+    const { file, line } = added.get(name);
+    return `- \`${name}\` (${file}${line ? `:${line}` : ""})`;
+  });
+  const head = lines.length ? `${lines.length} of the ${hits.size} new exports are named in no other code file:` : `Each of the ${hits.size} new exports is named in another code file.`;
+  return capFacts([...cutNote(cut), head, ...lines], "");
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
-var FACTS = { "deps-diff": depsDiffFacts };
+var FACTS = {
+  "deps-diff": depsDiffFacts,
+  callers,
+  unused
+};
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
     try {
