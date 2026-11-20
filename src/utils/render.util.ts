@@ -205,25 +205,7 @@ export type CheckState = 'failed' | 'warned' | 'passed' | 'not_checked' | 'off';
 const CHECK_MARK: Record<CheckState, string> = { failed: '❌', warned: '⚠️', passed: '✅', not_checked: '⬜', off: '➖' };
 
 export type CheckItem = { key: string; label: string; state: CheckState; reason?: string };
-
-/** Each severity with findings and how many, such as `1 blocking`, `2 should fix` or `3 nits`. */
-const tally = (found: Placed[]) =>
-  SEVERITIES.map((s) => [s, found.filter((p) => p.severity === s).length] as const)
-    .filter(([, k]) => k)
-    .map(([s, k]) => [s, s === 'nit' ? plural(k, 'nit') : `${k} ${SEVERITY_LABEL[s].toLowerCase()}`] as const);
-
-/** One row per check that's on, in order: its mark and what it found, or why it didn't run. No rows, no table. */
-function checksTable(states: CheckItem[], placed: Placed[]): string[] {
-  const rows = states
-    .filter((c) => c.state !== 'off')
-    .map((c) => {
-      const skip = c.reason?.replace(/^[A-Z](?=[a-z])/, (l) => l.toLowerCase());
-      const found = tally(placed.filter((p) => p.step === c.key)).map(([, t]) => t);
-      const text = c.state === 'not_checked' ? (skip ? `Skipped: ${skip}` : 'Not checked') : found.join(', ');
-      return `| ${cell(c.label)} | ${cell(`${CHECK_MARK[c.state]} ${text}`.trim())} |`;
-    });
-  return rows.length ? ['| Checklist | Result |', '|---|---|', ...rows] : [];
-}
+const stateChip = (c: CheckItem) => chip(`${CHECK_MARK[c.state]} ${c.label}`);
 
 /**
  * Each check's result: failed (a blocking finding), warned (any other), passed (checked with none),
@@ -256,31 +238,33 @@ export function checkStates(review: Review, placed: Placed[], checks?: string[],
 }
 
 /**
- * The card at the top: the verdict as a GitHub alert, the headline, chips for the counts (or "No
- * findings."), a table with each check's result, then the PR's type, the confidence and the commit.
+ * The card at the top: the verdict as a GitHub alert, the headline, chips for the counts and for
+ * each check (❌ a blocking finding, ⚠️ any other, ✅ checked with none, ⬜ not checked, ➖ turned off), and the PR's type.
  * The headline is model text, so `<` and `>` are escaped and every line stays in the alert.
  */
 function card(review: Review, placed: Placed[], fixed: number, f: Footer): string {
-  const counts = [
-    !placed.length && 'No findings.',
-    ...tally(placed).map(([s, t]) => chip(`${SEVERITY_DOT[s]} ${t}`)),
+  const n = (s: Severity) => placed.filter((p) => p.severity === s).length;
+  const countChips = [
+    n('blocking') && chip(`🔴 ${n('blocking')} blocking`),
+    n('should-fix') && chip(`🟡 ${n('should-fix')} should fix`),
+    n('nit') && chip(`⚪ ${plural(n('nit'), 'nit')}`),
+    !placed.length && chip('✅ No findings'),
     fixed && chip(`✅ ${fixed} fixed`),
   ].filter(Boolean);
-  const rows = checksTable(checkStates(review, placed, f.checks, f.checklists), placed);
+  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, ' ');
   const alert = VERDICT_ALERT[review.verdict];
-  const commit = `commit [${f.sha.slice(0, 7)}](https://github.com/${f.repo}/commit/${f.sha})`;
   return [
     `> [!${alert}]`,
     `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict]!)}`,
     ...headline.map((l) => `> ${l}`),
     '>',
-    `> ${counts.join(' ')}`,
+    `> ${countChips.join(' ')}`,
     '>',
-    // A blank quote line ends the table; without it the next line would be one more row.
-    ...(rows.length ? [...rows.map((l) => `> ${l}`), '>'] : []),
-    `> <sub>${[type, `${review.confidence}% confidence`, commit].filter(Boolean).join(' · ')}</sub>`,
+    `> ${checkChips.join(' ')}`,
+    '>',
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed \`${f.sha.slice(0, 7)}\``].filter(Boolean).join(' · ')}</sub>`,
   ].join('\n');
 }
 
@@ -325,14 +309,14 @@ export function startSummary(sha: string, prior?: State): string {
   return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
-/** The summary when none of the job's checklists ran: a row each saying why, and no model was asked. */
+/** The summary when none of the job's checklists ran: one chip each, and no model was asked. */
 export function idleSummary(states: CheckItem[], prior: State | undefined, f: Pick<Footer, 'sha' | 'runUrl' | 'dashboardRunUrl'>): string {
   const run = f.runUrl ? ` · [run](${f.runUrl})` : '';
   return [
     SUMMARY_MARKER,
     `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
     '',
-    ...checksTable(states, []),
+    states.map(stateChip).join(' '),
     '',
     `<sub>[Axon Shaft](${f.dashboardRunUrl ?? DASHBOARD_URL})${run} · no model call</sub>`,
     ...(prior ? [stateLine(prior)] : []),
