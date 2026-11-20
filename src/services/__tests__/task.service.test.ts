@@ -18,8 +18,10 @@ vi.doMock('../agent.service', async (actual) => ({
 }));
 // The sandbox runs only on Linux (sandbox.service.test.ts): here the commands run as they would inside it.
 let unsandboxed: string | undefined;
+let ended = 0;
 vi.doMock('../sandbox.service', () => ({
   prepareSandbox: () => unsandboxed,
+  endSandboxes: () => ended++,
   inSandbox: (cwd: string, file: string, args: string[], o: cp.ExecFileSyncOptions) => cp.execFileSync(file, args, { ...o, cwd }),
 }));
 /** The push token is asked for only after the checks: each ask notes whether the check had run by then. */
@@ -77,6 +79,7 @@ beforeEach(() => {
   asked.length = 0;
   pushes.length = 0;
   unsandboxed = undefined;
+  ended = 0;
 });
 
 /** A fake Octokit for PR 7 from `head` (in `headRepo`) into `main`, recording what's posted. */
@@ -162,6 +165,8 @@ test('a change is checked by our own run of its checks, then pushed as the bot w
   expect(git(origin, 'log', '-1', '--format=%an <%ae>|%s', 'pr')).toBe('axonshaft[bot] <4242+axonshaft[bot]@users.noreply.github.com>|Retry failed uploads three times');
   expect(pushes).toEqual([expect.objectContaining({ token: 'ghs_push', branch: 'pr', base: before, changes: [{ path: 'fix.txt', mode: '100644', content: Buffer.from('x') }] })]);
   expect(asked).toEqual(['after the checks']);
+  // Every sandbox was killed once the session ended, before its changes were read.
+  expect(ended).toBe(1);
   expect(remote('main')).toBe(git(origin, 'rev-parse', 'main'));
   // The session got the repo's commands, the request and the time limit, and no GitHub token at all.
   const [{ prompt, options: o }] = sessions;

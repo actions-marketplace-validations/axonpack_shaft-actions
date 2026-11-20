@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, readlinkSync } from 'node:fs';
+import { closeSync, constants, fstatSync, openSync, readFileSync, readlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as core from '@actions/core';
 import { getOctokit } from '@actions/github';
@@ -15,8 +15,9 @@ const git = (cwd: string, args: string[]) =>
 /**
  * What the session changed in the checkout, read before the checks run so that what they write
  * isn't pushed. A file's mode comes from the file itself (executable or not), a link is kept as a
- * link and never followed, and a deleted file has no mode. HEAD must still be `base`, the commit the
- * action checked out, and the paths must pass `commitDenial`.
+ * link and never followed, and a deleted file has no mode. Nothing in the sandbox runs by now
+ * (`endSandboxes`). HEAD must still be `base`, the commit the action checked out, and the paths
+ * must pass `commitDenial`.
  */
 export function readChanges(cwd: string, base: string): Change[] {
   assertHead(cwd, base);
@@ -28,15 +29,24 @@ export function readChanges(cwd: string, base: string): Change[] {
   if (why) throw new ShaftFailure('push_failed', why);
   return paths.map((path) => {
     const file = join(cwd, path);
-    let st;
+    let fd;
     try {
-      st = lstatSync(file);
-    } catch {
-      return { path };
+      // Never through a link, so one swapped in after `git status` can't lead out of the checkout, and
+      // never waiting on a FIFO. What was opened is what's read.
+      fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return { path };
+      if (code === 'ELOOP') return { path, mode: '120000', content: Buffer.from(readlinkSync(file)) };
+      throw new ShaftFailure('push_failed', `${path} couldn't be read (${code}), so nothing was pushed.`);
     }
-    if (st.isSymbolicLink()) return { path, mode: '120000', content: Buffer.from(readlinkSync(file)) };
-    if (!st.isFile()) throw new ShaftFailure('push_failed', `${path} isn't a file or a link, so nothing was pushed.`);
-    return { path, mode: st.mode & 0o100 ? '100755' : '100644', content: readFileSync(file) };
+    try {
+      const st = fstatSync(fd);
+      if (!st.isFile()) throw new ShaftFailure('push_failed', `${path} isn't a file or a link, so nothing was pushed.`);
+      return { path, mode: st.mode & 0o100 ? '100755' : '100644', content: readFileSync(fd) };
+    } finally {
+      closeSync(fd);
+    }
   });
 }
 

@@ -47,7 +47,16 @@ test('the CLI gets the allowlist, the project\'s own names and the Claude token,
     CI: 'true',
     NODE_OPTIONS: '--max-old-space-size=4096',
   });
-  expect(Object.keys(env).filter((k) => !ENV_ALLOW.includes(k)).sort()).toEqual(['CLAUDE_AGENT_SDK_CLIENT_APP', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB', 'NODE_OPTIONS']);
+  expect(Object.keys(env).filter((k) => !ENV_ALLOW.includes(k)).sort()).toEqual([
+    'CLAUDE_AGENT_SDK_CLIENT_APP',
+    'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS',
+    'CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB',
+    'NODE_OPTIONS',
+  ]);
+  // Background commands are off, so no repo code runs while the CLI's file tools act.
+  expect(env).toMatchObject({ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1' });
   expect(JSON.stringify(env)).not.toMatch(/oidc|runtime-secret|ghs_|sk-ant-api|not-passed/);
   expect(cliEnv({ kind: 'api_key', value: 'sk-ant-api-1' })).toMatchObject({ ANTHROPIC_API_KEY: 'sk-ant-api-1' });
 });
@@ -104,6 +113,7 @@ test("a task's session may edit and run the repo's commands, each call through t
   const hook = task!.hooks.PreToolUse[0]!.hooks[0]!;
   const decide = async (tool_name: string, tool_input: object) => (await hook({ tool_name, tool_input }))?.hookSpecificOutput?.permissionDecision ?? 'allow';
   expect(await decide('Bash', { command: 'bun run test src/a.test.ts' })).toBe('allow');
+  expect(await decide('Bash', { command: 'bun run test', run_in_background: true })).toBe('deny');
   expect(await decide('Edit', { file_path: 'src/a.ts' })).toBe('allow');
   for (const command of ['git push origin HEAD', 'gh pr view', 'git commit -m x', 'npm install left-pad', 'bun run deploy']) expect(await decide('Bash', { command }), command).toBe('deny');
   expect(await decide('Write', { file_path: '.git/hooks/pre-push' })).toBe('deny');

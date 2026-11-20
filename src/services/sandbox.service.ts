@@ -72,6 +72,18 @@ export const sandboxPrefix = (cwd: string): string =>
   ['env', '-u', 'ANTHROPIC_API_KEY', '-u', 'CLAUDE_CODE_OAUTH_TOKEN', 'bwrap', ...sandboxArgs(cwd), '--'].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
 
 /**
+ * Kill every sandbox still running, and so everything in it: with `--die-with-parent` and its own
+ * PID namespace, bubblewrap takes all it started down with it. The CLI starts each shell in a
+ * process group of its own, so killing the CLI's group wouldn't reach them. A task runs only on a
+ * GitHub-hosted runner, where every bubblewrap of this user is the action's.
+ */
+export function endSandboxes(): void {
+  try {
+    execFileSync('pkill', ['-KILL', '-u', String(process.getuid?.()), '-x', 'bwrap'], { stdio: 'ignore' });
+  } catch {} // pkill exits 1 when none was running
+}
+
+/**
  * Make sure the sandbox starts: on Linux, install bubblewrap from the runner's Ubuntu archive when
  * it's missing (with `sudo -n`, as a hosted runner allows), check its version, and run `true` in
  * it. Why it can't, or undefined when it can. A task never runs its commands without it.

@@ -44,8 +44,8 @@ export const isRepoCommand = (command: string, commands: string[]): boolean =>
   commands.some((c) => command === c || (!INSTALL.test(c) && command.startsWith(`${c} `)));
 
 /**
- * Why the agent may not make this tool call, or undefined when it may. The agent reads the checkout
- * and nothing else: never the runner's environment (`/proc/self/environ` holds the Claude token),
+ * Why the agent may not make this tool call, or undefined when it may. Nothing runs in the
+ * background. The agent reads the checkout and nothing else: never the runner's environment (`/proc/self/environ` holds the Claude token),
  * home, temp or tool folders. Bash runs only plain `git diff`, `git log` and `git show`.
  *
  * A task passes the repo's `commands`: it may also edit files in the checkout (never under `.git/` or `.github/`),
@@ -53,6 +53,8 @@ export const isRepoCommand = (command: string, commands: string[]): boolean =>
  * no `git commit` or `git push`, no `gh`, and no install beyond the repo's own.
  */
 export function toolDenial(tool: string, input: Record<string, unknown>, cwd: string, commands?: string[]): string | undefined {
+  // A background command would keep repo code running while the file tools act, racing their checks.
+  if (input.run_in_background) return 'Nothing runs in the background: run it in the foreground.';
   const outside = (p: unknown) => typeof p === 'string' && !insideCheckout(p, cwd);
   if (tool === 'Read' && (typeof input.file_path !== 'string' || outside(input.file_path))) return 'Only files in the checkout can be read.';
   if ((tool === 'Grep' || tool === 'Glob') && outside(input.path)) return 'Only the checkout can be searched.';

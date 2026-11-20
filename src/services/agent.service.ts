@@ -200,13 +200,17 @@ function claudeBinary(): string | undefined {
  * The CLI's environment, which every command the model runs inherits: `ENV_ALLOW`, the project's own
  * `names` (never one `ENV_DENIED` matches) and the Claude token. Nothing else the runner holds (the
  * OIDC request token, the action's inputs, GITHUB_TOKEN) and no GitHub token of ours is there to
- * leak. The CLI scrubs the Claude token from the environment of what it runs.
+ * leak. The CLI scrubs the Claude token from the environment of what it runs. Background commands
+ * are off, including the CLI's own move of a slow command to the background and its hand-off of
+ * running ones at exit: repo code must never run while the CLI's file tools act.
  */
 export function cliEnv(claude: ClaudeToken, names: string[] = []): Record<string, string | undefined> {
   return {
     ...runnerEnv(names),
     [claude.kind === 'oauth' ? 'CLAUDE_CODE_OAUTH_TOKEN' : 'ANTHROPIC_API_KEY']: claude.value,
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1',
+    CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
+    CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}`,
   };
 }

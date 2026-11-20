@@ -13,7 +13,7 @@ import { assertHead, head, pushChanges, readChanges } from './push.service';
 import { ANSWER_MAX, answerFooter, buildReplyPrompt, postInThread, type ReplyOptions, type ReplyOutcome } from './reply.service';
 import { FALLBACK } from './review.service';
 import type { Ask } from './route.service';
-import { prepareSandbox } from './sandbox.service';
+import { endSandboxes, prepareSandbox } from './sandbox.service';
 import { step } from './step.service';
 
 /** Ends everything a task posts. */
@@ -121,7 +121,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
           commands,
         },
         TASK_FORMAT,
-      ),
+      ).finally(endSandboxes),
     );
     const lines = [prose(result.reply.answer)];
     const changes = readChanges(o.cwd, base);

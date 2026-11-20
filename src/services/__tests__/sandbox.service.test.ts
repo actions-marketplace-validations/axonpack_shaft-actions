@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, test, vi } from 'vitest';
 
 vi.doMock('@actions/core', () => ({ info: () => {} }));
-const { inSandbox, prepareSandbox, sandboxArgs, sandboxPrefix } = await import('../sandbox.service');
+const { endSandboxes, inSandbox, prepareSandbox, sandboxArgs, sandboxPrefix } = await import('../sandbox.service');
 const { runCheck } = await import('../commands.service');
 const { runnerEnv } = await import('../../utils/env.util');
 
@@ -95,6 +95,16 @@ describe.skipIf(!!reason)('in bubblewrap', () => {
       out = (e as { stdout: string }).stdout;
     }
     check(out);
+  });
+
+  test('once the session ends, no sandbox outlives it: a command left running, and what it started, are killed', async () => {
+    // A shell of its own process group, as the CLI starts each one, whose sandbox leaves a child behind.
+    const shell = spawn('bash', ['-c', `${sandboxPrefix(cwd)} sh -c 'sleep 300 & sleep 300'`], { cwd, detached: true, stdio: 'ignore', env: runnerEnv() });
+    const running = () => execFileSync('ps', ['-eo', 'args'], { encoding: 'utf8' }).split('\n').filter((l) => l.trim() === 'sleep 300').length;
+    await expect.poll(running).toBe(2);
+    endSandboxes();
+    await expect.poll(running).toBe(0);
+    shell.kill();
   });
 
   test("git runs in it as well: the session's changes are read from the checkout", async () => {

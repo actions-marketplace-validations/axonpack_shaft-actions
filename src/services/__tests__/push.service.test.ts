@@ -68,6 +68,20 @@ test('the changes keep each file\'s executable bit, a link as a link, and a dele
   ]);
 });
 
+test('a file is opened without following links: one swapped in for it is pushed as a link, never what it points to, and a FIFO is refused', () => {
+  const secret = join(dir, `secret-${n}`);
+  writeFileSync(secret, 'runner-secret');
+  writeFileSync(join(work, 'edit.ts'), 'b');
+  const base = git(work, 'rev-parse', 'HEAD');
+  // As if the file had been swapped for a link after git status listed it: the link itself is read.
+  unlinkSync(join(work, 'edit.ts'));
+  symlinkSync(secret, join(work, 'edit.ts'));
+  expect(readChanges(work, base)).toEqual([{ path: 'edit.ts', mode: '120000', content: Buffer.from(secret) }]);
+  unlinkSync(join(work, 'edit.ts'));
+  cp.execFileSync('mkfifo', [join(work, 'edit.ts')]);
+  expect(() => readChanges(work, base)).toThrow(expect.objectContaining({ code: 'push_failed', message: "edit.ts isn't a file or a link, so nothing was pushed." }));
+});
+
 test('a change under .github/, or a HEAD the run moved, is refused before anything is pushed', () => {
   const base = git(work, 'rev-parse', 'HEAD');
   mkdirSync(join(work, '.github', 'workflows'), { recursive: true });

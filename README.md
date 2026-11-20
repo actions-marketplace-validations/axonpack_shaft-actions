@@ -177,20 +177,21 @@ What counts as a command:
   - the `package.json` scripts and `make` targets named `test`, `lint`, `check`, `typecheck`, `types`, `tsc`, `build`, `format` or `fmt`, or starting with one of those and `:`, `-`, `_` or `.`, run through the package manager, with more words allowed after them;
   - `cargo test`, `check`, `clippy`, `fmt` and `build` when there's a `Cargo.toml`, and `go test`, `vet` and `build` when there's a `go.mod`.
 - Anything else is refused: `git commit`, `git push`, `gh`, installing a package by name, and shell operators.
+- Background commands are off. Every command runs in the foreground and ends before the model's next step, so no repo code runs while the model reads or edits files.
 - Its commands and the action's own checks run in the sandbox:
   - in a PID namespace with its own `/proc`, so they can't see or read the runner, the Claude Code CLI or the action, or their environment;
   - with no-new-privs and no capabilities, so `sudo` and setuid programs don't work;
   - with the whole system read-only, and the checkout the only folder they can write;
   - with an empty home folder, `/tmp`, `/run` (which holds the Docker socket) and runner temp folder. Tools on the `PATH` under home stay, read-only;
   - with the network on, for the install;
-  - and stopped when the action stops.
+  - and killed, with everything they started, when the session ends, before the action reads the change.
 - The project's Push mode decides where the commit may go, and the action checks it before the session starts:
   - Disabled: nothing is pushed.
   - Restricted (the default): only the pull request's own branch, and never a fork's.
   - Enabled: any branch, but the run still pushes only to the pull request's branch.
 - Nothing is ever pushed to the default branch, in any mode, and never with `--force`.
 - When the push can't happen, because Push mode is Disabled, the pull request comes from a fork or its branch is the default branch, the session doesn't run. The reply and a notice say why, and the run ends with `push_failed` on the dashboard.
-- The commit holds the files the session changed, read before the checks run, with each file's executable bit, links kept as links, and deleted files removed. These can't be committed, and the whole change is refused with `push_failed` when it has one:
+- The commit holds the files the session changed, read before the checks run, with each file's executable bit, links kept as links (never followed), and deleted files removed. These can't be committed, and the whole change is refused with `push_failed` when it has one:
   - anything under `.github/`, since workflows run with the repo's secrets;
   - a path outside the checkout or under `.git/`;
   - something that isn't a file or a link, such as a submodule.
