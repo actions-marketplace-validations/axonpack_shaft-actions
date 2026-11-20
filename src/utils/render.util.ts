@@ -250,7 +250,7 @@ function card(review: Review, placed: Placed[], fixed: number, f: Footer): strin
 }
 
 /** A table of findings, each location linked to its lines at the reviewed commit. */
-function table(rows: Placed[], f: Footer): string {
+function table(rows: Placed[], f: Pick<Footer, 'repo' | 'sha'>): string {
   const link = (p: Placed) => {
     const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : '';
     return `[${where(p)}](https://github.com/${f.repo}/blob/${f.sha}/${encodeURI(p.file)}#L${p.line}${end})`;
@@ -261,6 +261,13 @@ function table(rows: Placed[], f: Footer): string {
     ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.title)} | ${p.inline ? 'inline' : cell(p.body)} |`),
   ].join('\n');
 }
+
+/** One check's findings as a table, for its check run. */
+export const findingsTable = (found: Placed[], f: Pick<Footer, 'repo' | 'sha'>) =>
+  table(
+    found.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) })),
+    f,
+  );
 
 const details = (summary: string, body: string) => `<details><summary>${summary}</summary>\n\n${body}\n\n</details>`;
 

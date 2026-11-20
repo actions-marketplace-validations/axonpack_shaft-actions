@@ -345,6 +345,19 @@ test('the outcome has the card for the dashboard, and each step is a group in th
   expect(logs.filter((l) => l.startsWith('::group::'))).toEqual(['::group::Review', '::group::Post the review']);
 });
 
+test('a dry run logs the check run each review check would get', async () => {
+  found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' }];
+  await review([file('src/a.ts')]);
+  expect(logs.filter((l) => l.startsWith('Would post the Axon Shaft /'))).toEqual([
+    'Would post the Axon Shaft / correctness check: failure',
+    'Would post the Axon Shaft / breakage check: skipped',
+    'Would post the Axon Shaft / standards check: skipped',
+    'Would post the Axon Shaft / tests check: success',
+    'Would post the Axon Shaft / docs check: skipped',
+    'Would post the Axon Shaft / security check: skipped',
+  ]);
+});
+
 test("the card is cut to the API's limits, so a long finding never loses the report", async () => {
   found = [{ severity: 'nit', step: 'standards', file: 'src/a.ts', line: 1, title: 't'.repeat(400), body: 'b'.repeat(6000) }];
   const { outcome } = await review([file('src/a.ts')]);

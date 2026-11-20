@@ -58110,6 +58110,7 @@ function table(rows, f) {
   ].join(`
 `);
 }
+var findingsTable = (found, f) => table(found.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) })), f);
 var details = (summary, body) => `<details><summary>${summary}</summary>
 
 ${body}
@@ -58524,7 +58525,7 @@ async function collectContext(octokit, owner, repo, number, bot) {
   };
 }
 
-// src/services/gates-check.service.ts
+// src/services/check-runs.service.ts
 var GATES_CHECK = "Axon Shaft / gates";
 var norm = (s) => s.trim().toLowerCase();
 function gateResults(gates, reported = []) {
@@ -58534,11 +58535,42 @@ function gateResults(gates, reported = []) {
   });
 }
 var gatesConclusion = (gates) => gates.some((g) => g.status === "not_met") ? "failure" : "success";
+async function postCheck(octokit, owner, repo, sha, c, clean) {
+  return octokit.rest.checks.create({ owner, repo, name: c.name, head_sha: sha, status: "completed", conclusion: c.conclusion, output: { title: c.title, summary: clean(c.summary) } }).then(() => true, (e) => {
+    warning(`Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`);
+    return false;
+  });
+}
 async function postGatesCheck(octokit, owner, repo, sha, gates, clean) {
-  const conclusion = gatesConclusion(gates);
   const failed = gates.filter((g) => g.status === "not_met").length;
   const title = failed ? `${failed} of ${gates.length} gates not met` : "Every gate met or not applicable";
-  await octokit.rest.checks.create({ owner, repo, name: GATES_CHECK, head_sha: sha, status: "completed", conclusion, output: { title, summary: clean(gatesTable(gates)) } }).catch((e) => warning(`Couldn't post the ${GATES_CHECK} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`));
+  await postCheck(octokit, owner, repo, sha, { name: GATES_CHECK, conclusion: gatesConclusion(gates), title, summary: gatesTable(gates) }, clean);
+}
+var categoryCheck = (key) => `Axon Shaft / ${key}`;
+var CATEGORY_CONCLUSION = {
+  failed: "failure",
+  warned: "neutral",
+  passed: "success",
+  not_checked: "skipped",
+  off: undefined
+};
+var CATEGORY_TITLE = {
+  failed: "Blocking findings",
+  warned: "Findings, none blocking",
+  passed: "Checked, nothing found",
+  not_checked: "The review didn't do this check",
+  off: ""
+};
+async function postCategoryChecks(octokit, owner, repo, sha, states, placed, clean) {
+  for (const { key, state } of states) {
+    const conclusion = CATEGORY_CONCLUSION[state];
+    if (!conclusion)
+      continue;
+    const found = placed.filter((p) => p.step === key);
+    const summary = found.length ? findingsTable(found, { repo: `${owner}/${repo}`, sha }) : CATEGORY_TITLE[state];
+    if (!await postCheck(octokit, owner, repo, sha, { name: categoryCheck(key), conclusion, title: CATEGORY_TITLE[state], summary }, clean))
+      return;
+  }
 }
 
 // src/services/step.service.ts
@@ -58735,6 +58767,13 @@ ${clean(body)}`);
     info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
   else if (gates)
     await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
+  const states = checkStates(review, placed, o.checks);
+  if (o.dryRun) {
+    for (const c of states)
+      if (CATEGORY_CONCLUSION[c.state])
+        info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
+  } else
+    await postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean);
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun)
     info(`Would resolve the threads of ${fixed.join(", ")}`);
@@ -58753,7 +58792,7 @@ ${clean(body)}`);
     type: cut(review.type, 40),
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? "" : summary?.html_url ?? "",
-    checks: checkStates(review, placed, o.checks),
+    checks: states,
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,
