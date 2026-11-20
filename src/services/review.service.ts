@@ -6,7 +6,7 @@ import type { Octokit } from '../types/octokit.type';
 import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
 import { runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
-import { gateResults, GATES_CHECK, gatesConclusion, postGatesCheck } from './gates-check.service';
+import { CATEGORY_CONCLUSION, categoryCheck, gateResults, GATES_CHECK, gatesConclusion, postCategoryChecks, postGatesCheck } from './check-runs.service';
 import { step } from './step.service';
 import {
   checkStates,
@@ -284,6 +284,11 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
   if (gates && o.dryRun) core.info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
   else if (gates) await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
 
+  const states = checkStates(review, placed, o.checks);
+  if (o.dryRun) {
+    for (const c of states) if (CATEGORY_CONCLUSION[c.state]) core.info(`Would post the ${categoryCheck(c.key)} check: ${CATEGORY_CONCLUSION[c.state]}`);
+  } else await postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean);
+
   const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)).map((p) => p.fp) ?? [];
   if (fixed.length && o.dryRun) core.info(`Would resolve the threads of ${fixed.join(', ')}`);
   else if (fixed.length) {
@@ -304,7 +309,7 @@ export async function reviewContext(ctx: Context, o: ReviewOptions): Promise<Rev
     type: cut(review.type, 40),
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
-    checks: checkStates(review, placed, o.checks),
+    checks: states,
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,

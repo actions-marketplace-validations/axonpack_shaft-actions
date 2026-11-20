@@ -245,6 +245,23 @@ When the project has merge gates, the action also posts a check run named `Axon 
 - The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation. Until it is, the review still posts, and the job log warns that the check couldn't be posted.
 - A dry run logs the conclusion and posts nothing.
 
+### A check run per review check
+
+The action also posts one check run per review check on the reviewed commit, named after the check's key: `Axon Shaft / correctness`, `Axon Shaft / breakage`, `Axon Shaft / standards`, `Axon Shaft / tests`, `Axon Shaft / docs`, `Axon Shaft / security`, and `Axon Shaft / rules` for the checks the repo added. Each one's summary is a table of that check's findings.
+
+| Card chip | Conclusion |
+|---|---|
+| ❌ A blocking finding | `failure` |
+| ⚠️ Only should-fix or nit findings | `neutral` |
+| ✅ Checked, nothing found | `success` |
+| ⬜ Not checked | `skipped` |
+| ➖ Turned off on the dashboard | no check run |
+
+- `Axon Shaft / rules` is posted only when the repo's own checks found something, as the card's chip is.
+- Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
+- The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run once its matching update ships. Until then it asks only when the project has merge gates, so on a project without gates the job log warns once and the review posts as usual.
+- A dry run logs each conclusion and posts nothing.
+
 ### Inline comments
 
 - One inline comment per blocking or should-fix finding, on its lines in the diff. Nits get one too when the dashboard says to post them inline.
