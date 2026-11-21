@@ -71,6 +71,8 @@ A comment on the pull request's conversation tab doesn't carry the branch, so a 
 When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt.
 Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`.
 
+Before the session starts, the action downloads the Claude Code binary the Agent SDK runs: the npm package `@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, at the SDK version the release pins, fetched with `npm pack` into the runner's temp folder. It unpacks the tarball only when its sha512 matches the one the release recorded from its `bun.lock` at build time. If it doesn't match, or the release has no hash for the runner's platform, the step fails with `claude_binary_unverified` and the binary never runs. This is the only code the action downloads for itself.
+
 After the review, the action sends the run to the dashboard, where it has its own page. It sends:
 
 - the verdict, the model, the finding counts and the tokens used;
@@ -451,6 +453,7 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `review_timed_out` | The review, reply or task ran past the time limit set on the dashboard. The link opens the dashboard. |
 | `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. The job log names each reply's fields, without their text, and the link opens the run. |
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
+| `claude_binary_unverified` | The Claude Code binary downloaded from npm didn't match the sha512 the release records, or the release has no hash for the runner's platform, so it wasn't run. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
 | `self_hosted_unsupported` | A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran. |
 | `credentials_in_checkout` | A task's checkout kept a token in `.git/config`, so no session ran. Set `persist-credentials: false` on `actions/checkout`. |
@@ -551,7 +554,7 @@ bun run test
 bun run build   # writes dist/index.js, which is committed
 ```
 
-The build also writes `dist/meta.json`, which is committed too: the action's version, inputs and outputs, the codes it reports with what each means, its pre-step script keys, the guide files it reads and their size caps, and the lockfiles it parses. The Axon Shaft docs are generated from a copy of it.
+Before the bundle, the build writes `src/consts/claude-binary.const.ts`: the sha512 `bun.lock` records for each platform's Claude Code binary package, which the action checks its download against. It also writes `dist/meta.json`, which is committed too: the action's version, inputs and outputs, the codes it reports with what each means, its pre-step script keys, the guide files it reads and their size caps, and the lockfiles it parses. The Axon Shaft docs are generated from a copy of it.
 
 The sandbox tests that start bubblewrap run only on Linux, and skip elsewhere with the reason. To run them from macOS, use a Linux container with bubblewrap and git, as a user other than root. It must be `--privileged`, because Docker's masked `/proc` stops bubblewrap from mounting its own:
 

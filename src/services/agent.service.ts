@@ -1,8 +1,3 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import * as core from '@actions/core';
 import { type AgentDefinition, type EffortLevel, type HookCallback, type ModelUsage, type PreToolUseHookInput, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import pkg from '../../package.json' with { type: 'json' };
@@ -13,6 +8,7 @@ import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TY
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
 import { sandboxPrefix } from './sandbox.service';
+import { claudeBinary } from './claude-binary.service';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -176,28 +172,6 @@ export const guard =
     const updatedInput = { ...args, command: `${sandboxPrefix(cwd)} ${String(args.command).trim()}` };
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput } };
   };
-const SDK_VERSION = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
-
-/**
- * The Agent SDK runs a native Claude Code binary from a per-platform npm package. dist/index.js
- * can't carry it (about 350 MB), so on a runner we install the matching one into RUNNER_TEMP.
- */
-function claudeBinary(): string | undefined {
-  const name = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
-  const file = `${name}/claude${process.platform === 'win32' ? '.exe' : ''}`;
-  try {
-    return createRequire(import.meta.url).resolve(file); // running from source, with node_modules
-  } catch {}
-  // ponytail: glibc only; a musl runner (Alpine) needs the -musl package
-  const dir = join(process.env.RUNNER_TEMP ?? tmpdir(), 'shaft-claude');
-  const bin = join(dir, 'node_modules', file);
-  if (!existsSync(bin)) {
-    core.info(`Installing ${name}@${SDK_VERSION}`);
-    execFileSync('npm', ['install', '--no-save', '--no-package-lock', '--prefix', dir, `${name}@${SDK_VERSION}`], { stdio: 'inherit' });
-  }
-  return bin;
-}
-
 /**
  * The CLI's environment, which every command the model runs inherits: `ENV_ALLOW`, the project's own
  * `names` (never one `ENV_DENIED` matches) and the Claude token. Nothing else the runner holds (the

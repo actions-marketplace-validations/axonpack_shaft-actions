@@ -23764,7 +23764,7 @@ var package_default = {
   license: "MIT",
   type: "module",
   scripts: {
-    build: "bun build src/main.ts --target node --outfile dist/index.js && bun src/meta.ts",
+    build: "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js",
     lint: "oxlint src",
     typecheck: "tsc --noEmit",
     test: "vitest run",
@@ -24339,13 +24339,6 @@ function unposted(placed, reviewComments, bot) {
   const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
   return placed.filter((p) => p.inline && !posted.has(p.fp));
 }
-
-// src/services/agent.service.ts
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
-import { createRequire as createRequire2 } from "node:module";
-import { tmpdir } from "node:os";
-import { join as join5 } from "node:path";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as DQ } from "node:module";
@@ -58544,6 +58537,51 @@ function prepareSandbox(cwd) {
   }
 }
 
+// src/services/claude-binary.service.ts
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, rmSync as rmSync2 } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
+import { tmpdir } from "node:os";
+import { join as join5 } from "node:path";
+
+// src/consts/claude-binary.const.ts
+var CLAUDE_BINARIES = {
+  "@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.325": "sha512-0u8bTug2zH+zWE8CMiFrm/ldmH20uA9B/zhXpI7ATHFJnpPMdwTqE56CFM0m3LOwnNum0jpRn7XV1dn6Pf2pqA==",
+  "@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.325": "sha512-HD3YRFyM5H5QH2usS/WD6gobk3BEp2jq9dKyrkhAVdQIqFMlrcSrRhGA0i3R1IOLxtPAYkmDGepZ62k1kMOW9Q==",
+  "@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.325": "sha512-28oVrCEN6M6MJP8Od4SK/scal1QdLbn5Sci+qL8j55l6csHtPeUYF9zdjWLniFKph43pejfZf5te/Vf/bwehkw==",
+  "@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.325": "sha512-72y6QNRZC4eMCxne/wNsuwNHsViSkgFKlYMCUVXxmiR9gpIMd3rf++oJMIsSuEAQqzqT7jwCrdtibv6R4bx5PA==",
+  "@anthropic-ai/claude-agent-sdk-linux-x64@0.3.325": "sha512-wXEWbDmNYiorY5EKASYjvQct8zHShUPmAS9N/IAsgPA/cx2vsOFqPQw8jRQKeaW6AmFgx7k/Wf7THalNXbMEkQ==",
+  "@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.325": "sha512-BHewYUTd7mDLR5iHTVt6Q28gJKLC5C24b1H3NM0qGt9dxnjVUh1Lza52GzHY2Rb9hAPQymLSXWuVh1OFoFQatA==",
+  "@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.325": "sha512-NH3I2o105oKK8lfJ5RlzCp+YTZn3qncwQ1xSzQ4jqn7LUddThIidpFU7B+TKQxh1X9eayAp7EtrBQ36mXflQwQ==",
+  "@anthropic-ai/claude-agent-sdk-win32-x64@0.3.325": "sha512-pjqVL++V/2oMJ6u1HdB608bcTUvzts1e8hX93Q8khasy2JB+R823bnvpQapcOurOWB3+v1X2JXIjXyWcGPJCQQ=="
+};
+
+// src/services/claude-binary.service.ts
+var SDK_VERSION = package_default.dependencies["@anthropic-ai/claude-agent-sdk"];
+function claudeBinary() {
+  const name = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
+  const file = `${name}/claude${process.platform === "win32" ? ".exe" : ""}`;
+  try {
+    return createRequire2(import.meta.url).resolve(file);
+  } catch {}
+  const spec = `${name}@${SDK_VERSION}`;
+  const integrity = CLAUDE_BINARIES[spec];
+  if (!integrity)
+    throw new ShaftFailure("claude_binary_unverified", `This release records no sha512 for ${spec}, so Claude Code can't be installed on this runner's platform.`);
+  const dir = join5(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
+  rmSync2(dir, { recursive: true, force: true });
+  mkdirSync2(dir, { recursive: true });
+  info(`Installing ${spec}`);
+  const [{ filename }] = JSON.parse(execFileSync3("npm", ["pack", "--json", "--pack-destination", dir, spec], { encoding: "utf8" }));
+  const tarball = join5(dir, filename);
+  if (`sha512-${createHash2("sha512").update(readFileSync4(tarball)).digest("base64")}` !== integrity) {
+    throw new ShaftFailure("claude_binary_unverified", `The ${spec} tarball npm downloaded doesn't match the sha512 this release records, so it wasn't unpacked or run. Check the runner's npm registry.`);
+  }
+  execFileSync3("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, tarball], { stdio: "inherit" });
+  return join5(dir, "node_modules", file);
+}
+
 // src/services/agent.service.ts
 var SCHEMA = {
   type: "object",
@@ -58674,21 +58712,6 @@ var guard = (cwd, commands) => async (input) => {
   const updatedInput = { ...args, command: `${sandboxPrefix(cwd)} ${String(args.command).trim()}` };
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput } };
 };
-var SDK_VERSION = package_default.dependencies["@anthropic-ai/claude-agent-sdk"];
-function claudeBinary() {
-  const name = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
-  const file = `${name}/claude${process.platform === "win32" ? ".exe" : ""}`;
-  try {
-    return createRequire2(import.meta.url).resolve(file);
-  } catch {}
-  const dir = join5(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
-  const bin = join5(dir, "node_modules", file);
-  if (!existsSync5(bin)) {
-    info(`Installing ${name}@${SDK_VERSION}`);
-    execFileSync3("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
-  }
-  return bin;
-}
 function cliEnv(claude, names = []) {
   return {
     ...runnerEnv(names),
@@ -60759,7 +60782,7 @@ var RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lock
 var runsCode = (paths) => paths.filter((p) => RUNS_CODE.test(p));
 
 // src/services/commands.service.ts
-import { existsSync as existsSync6, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
 import { join as join9 } from "node:path";
 var CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
 var LOCKS = [
@@ -60769,12 +60792,12 @@ var LOCKS = [
   ["yarn.lock", "yarn", "yarn install --frozen-lockfile"],
   ["package-lock.json", "npm", "npm ci"]
 ];
-var read = (cwd, file) => existsSync6(join9(cwd, file)) ? readFileSync4(join9(cwd, file), "utf8") : undefined;
+var read = (cwd, file) => existsSync5(join9(cwd, file)) ? readFileSync5(join9(cwd, file), "utf8") : undefined;
 function repoCommands(cwd) {
   const out = [];
   const pkg = read(cwd, "package.json");
   if (pkg) {
-    const [, pm, install] = LOCKS.find(([lock]) => existsSync6(join9(cwd, lock))) ?? ["", "npm", "npm install"];
+    const [, pm, install] = LOCKS.find(([lock]) => existsSync5(join9(cwd, lock))) ?? ["", "npm", "npm install"];
     let scripts = {};
     try {
       scripts = JSON.parse(pkg).scripts ?? {};
@@ -60806,7 +60829,7 @@ function runCheck(cwd, command, env = []) {
 }
 
 // src/services/push.service.ts
-import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2 } from "node:fs";
+import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync6, readlinkSync as readlinkSync2 } from "node:fs";
 import { dirname as dirname8, join as join10 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
@@ -60832,7 +60855,7 @@ function readChanges(cwd, base) {
       const st = fstatSync(fd);
       if (!st.isFile())
         throw new ShaftFailure("push_failed", `${path} isn't a file or a link, so nothing was pushed.`);
-      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync5(fd) };
+      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync6(fd) };
     } finally {
       closeSync2(fd);
     }

@@ -14,6 +14,10 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
   review_timed_out: { kind: 'failure', message: 'The review, reply or task ran past the time limit set on the dashboard.' },
   review_invalid_reply: { kind: 'failure', message: "The model's reply didn't match the review, reply or task format twice, so nothing was posted." },
   review_failed: { kind: 'failure', message: 'The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit.' },
+  claude_binary_unverified: {
+    kind: 'failure',
+    message: "The Claude Code binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run.",
+  },
   push_failed: {
     kind: 'both',
     message: "A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out, the change touched `.github/`, or GitHub refused the push.",
