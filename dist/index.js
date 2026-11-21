@@ -57886,15 +57886,22 @@ function fingerprint(f, code = "") {
 ${f.title.trim().toLowerCase()}
 ${code.replace(/\s+/g, " ").trim()}`).digest("hex").slice(0, 6);
 }
-function place(findings, files, nits) {
+var LINE_DRIFT = 2;
+function place(findings, files, nits, prior = []) {
   const byFile = new Map(files.map((f) => [f.filename, diffLines(f.patch)]));
+  const left = [...prior];
+  const same = (a, b) => a.trim().toLowerCase() === b.trim().toLowerCase();
   return findings.filter((f) => nits !== "off" || f.severity !== "nit").map((f) => {
     const lines = byFile.get(f.file);
     const end = Math.max(f.end_line ?? f.line, f.line);
     let inDiff = !!lines;
     for (let n = f.line;inDiff && n <= end; n++)
       inDiff = lines.has(n);
-    return { ...f, fp: fingerprint(f, lines?.get(f.line)), inline: inDiff && (f.severity !== "nit" || nits === "inline") };
+    const fp = fingerprint(f, lines?.get(f.line));
+    const match = left.find((p) => p.fp === fp) ?? left.filter((p) => p.file === f.file && same(p.title, f.title) && Math.abs(p.line - f.line) <= LINE_DRIFT).sort((a, b) => Math.abs(a.line - f.line) - Math.abs(b.line - f.line))[0];
+    if (match)
+      left.splice(left.indexOf(match), 1);
+    return { ...f, fp: match?.fp ?? fp, inline: inDiff && (f.severity !== "nit" || nits === "inline") };
   });
 }
 var SEVERITY_LABEL = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
@@ -60717,7 +60724,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   const review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
-  const placed = place(review.findings, files, o.nits);
+  const placed = place(review.findings, files, o.nits, prior?.findings);
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {

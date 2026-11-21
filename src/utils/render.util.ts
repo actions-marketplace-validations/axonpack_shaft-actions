@@ -105,12 +105,19 @@ export function fingerprint(f: Pick<Finding, 'file' | 'title'>, code = ''): stri
     .slice(0, 6);
 }
 
+/** How far a finding's line may move between reviews and still be the earlier finding. */
+export const LINE_DRIFT = 2;
+
 /**
  * Decide where each finding goes. A blocking or should-fix finding whose lines are all in the
- * diff goes inline; anything else goes in the summary. Nits follow the `nits` input.
+ * diff goes inline; anything else goes in the summary. Nits follow the `nits` input. A finding with
+ * the same file and title as one of the last review's (`prior`), a line or two away, keeps that
+ * one's fingerprint, so a push that moves it doesn't post it again.
  */
-export function place(findings: Finding[], files: { filename: string; patch?: string }[], nits: string): Placed[] {
+export function place(findings: Finding[], files: { filename: string; patch?: string }[], nits: string, prior: StateFinding[] = []): Placed[] {
   const byFile = new Map(files.map((f) => [f.filename, diffLines(f.patch)]));
+  const left = [...prior];
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
   return findings
     .filter((f) => nits !== 'off' || f.severity !== 'nit')
     .map((f) => {
@@ -118,7 +125,13 @@ export function place(findings: Finding[], files: { filename: string; patch?: st
       const end = Math.max(f.end_line ?? f.line, f.line);
       let inDiff = !!lines;
       for (let n = f.line; inDiff && n <= end; n++) inDiff = lines!.has(n);
-      return { ...f, fp: fingerprint(f, lines?.get(f.line)), inline: inDiff && (f.severity !== 'nit' || nits === 'inline') };
+      const fp = fingerprint(f, lines?.get(f.line));
+      // Each earlier finding is matched once, by the first finding to claim it: the same fingerprint, else the nearest line.
+      const match =
+        left.find((p) => p.fp === fp) ??
+        left.filter((p) => p.file === f.file && same(p.title, f.title) && Math.abs(p.line - f.line) <= LINE_DRIFT).sort((a, b) => Math.abs(a.line - f.line) - Math.abs(b.line - f.line))[0];
+      if (match) left.splice(left.indexOf(match), 1);
+      return { ...f, fp: match?.fp ?? fp, inline: inDiff && (f.severity !== 'nit' || nits === 'inline') };
     });
 }
 

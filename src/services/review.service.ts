@@ -394,7 +394,7 @@ async function postReview(
   await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 
-  const placed = place(review.findings, files, o.nits);
+  const placed = place(review.findings, files, o.nits, prior?.findings);
   // Before anything is posted, so a withheld finding's details never reach the PR.
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);

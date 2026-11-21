@@ -92,6 +92,20 @@ test('the fingerprint survives the line moving, and changes with the title', () 
   expect(fingerprint({ file: 'src/retry.ts', title: 'other' }, '  let attempt = max;')).not.toBe(a);
 });
 
+test("a finding a line or two from the last review's with the same file and title keeps that one's fingerprint, once", () => {
+  const first = place([finding({ line: 42 })], files, 'summary')[0]!;
+  const prior = [{ fp: first.fp, file: first.file, line: 42, severity: first.severity, title: first.title }];
+  // The model points one line up this time, at different code: still the same finding.
+  expect(place([finding({ line: 41 })], files, 'summary', prior)[0]!.fp).toBe(first.fp);
+  expect(place([finding({ line: 41, title: `  ${first.title.toUpperCase()} ` })], files, 'summary', prior)[0]!.fp).toBe(first.fp);
+  // Three lines away, another file or another title is a new finding.
+  expect(place([finding({ line: 45 })], files, 'summary', prior)[0]!.fp).not.toBe(first.fp);
+  expect(place([finding({ line: 41, title: 'Another bug' })], files, 'summary', prior)[0]!.fp).not.toBe(first.fp);
+  // Two new findings near one earlier one: only the first takes its fingerprint.
+  const both = place([finding({ line: 44 }), finding({ line: 43 })], files, 'summary', prior);
+  expect(both.map((p) => p.fp === first.fp)).toEqual([true, false]);
+});
+
 test('dedupe: an inline finding already posted is not posted again', () => {
   const placed = place(review.findings, files, 'summary');
   const old = [{ body: inlineBody(placed[0]), author: 'axonshaft[bot]' }, { body: 'a human comment', author: 'someone' }];
