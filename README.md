@@ -174,6 +174,7 @@ What counts as a command:
   - The other findings go to the model with the review's whole comment on each, marked as data, and only the diff of the files they name.
   - When every finding had a suggestion, no model runs: the action checks the change and pushes it, and the reply lists the suggestions it applied.
   - The fix may change only the files the findings name. When it changes any other file, nothing is pushed, and the reply names the files.
+- A `/fix` with words, or `/axonshaft`, may change what runs on install and in CI only when the request asks for it. That covers a `package.json`'s scripts or dependencies, `.npmrc`, `.yarnrc`, `bunfig.toml`, a Makefile, a Dockerfile, `.husky/`, `.git-hooks/`, and a lockfile changed without its manifest. The request has to name the file, or say "dependency" or "script" (or "lockfile", "Git hook"). Otherwise nothing is pushed, and the reply lists the files and says to ask for them by name.
 - The model works on the pull request's head commit. It makes the smallest change that does what was asked and runs the repo's tests and lint.
 - After the session, the action commits the change as `axonshaft[bot]`, with one plain line saying what changed, and pushes it to the pull request's branch.
 - The push starts the repo's own CI on the pull request before anyone has read the change, and CI runs the changed code with whatever secrets its workflows get. Read the commit before you merge or deploy it, and keep secrets out of the workflows that run on pull requests.
@@ -438,7 +439,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
   So the OIDC request token, the action's inputs, `GITHUB_TOKEN` and the GitHub token from the API are never there.
   The commands the model runs don't get the Claude token either.
 - The prompt has the PR's title, body, commits and diff, and only the comments of people inside the repo: its owners, members and collaborators, and anyone GitHub's permission check gives admin or write access, such as a teammate with access through an org team. The action asks that check once per commenter. Comments from anyone else are left out, and so are those of a commenter it couldn't check, with a warning in the job log.
-- Images are stripped from everything the model writes before it's posted, so an image URL can't carry data out.
+- In everything the model writes before it's posted, an image stays only when it loads from `github.com`, `*.githubusercontent.com` or `shaft.axonpack.dev`. Any other image becomes a plain link with its alt text, which loads nothing until someone clicks it, so an image URL can't carry data out. The action's own cards stay.
 - The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments `axonshaft[bot]` wrote, so a copy posted by someone else is ignored.
 - Before anything is posted, the action replaces the tokens it holds with `***`. It masks every token in the job log.
 

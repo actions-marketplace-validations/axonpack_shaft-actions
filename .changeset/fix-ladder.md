@@ -9,3 +9,5 @@
 - **Inline `/fix`**: a `/fix` on a line of the diff sends the comment's ID to the API, which replies on that thread when it refuses the run.
 - **No repeat inline comments**: a finding that moved a line or two since the last review isn't posted again.
 - **Failed Bash calls in the log**: each one gets a short line with the command and what it printed.
+- **Build files need asking**: a `/fix` with words won't push a change to package scripts or dependencies, lockfiles, `.npmrc`, `.yarnrc`, `bunfig.toml`, a Makefile, a Dockerfile or Git hooks unless the request names the file or says dependency or script.
+- **Images in posted text**: an image the model wrote stays only when it loads from GitHub or the dashboard; any other becomes a plain link.
