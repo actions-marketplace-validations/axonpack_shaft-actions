@@ -6,11 +6,11 @@ import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
 import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
-import { postInThread, replyToComment } from './services/reply.service';
+import { replyToComment } from './services/reply.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
-import { inlineRefusal, runTask, TASK_MARKER } from './services/task.service';
+import { runTask } from './services/task.service';
 import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util';
 import { redact, workflowEditUrl } from './utils/render.util';
 
@@ -44,7 +44,12 @@ async function run(): Promise<void> {
   const { owner, repo } = context.repo;
   const pull_request = pullRequestOf(context.payload);
   const grant = await step('Config from the dashboard', () =>
-    fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork, pull_request } : { job: r.mode, pull_request }),
+    fetchGrant(
+      r.mode === 'review'
+        ? { job: 'review', event: r.event, fork: r.fork, pull_request }
+        : // A comment on a line of the diff: the API replies on its thread itself when it refuses the run.
+          { job: r.mode, pull_request, ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }) },
+    ),
   );
   if (!grant.run) {
     // The API's comment to post once: how to start a fork's review, or the list of commands for /help.
@@ -55,11 +60,6 @@ async function run(): Promise<void> {
         if (dryRun) core.info(`--- comment\n${grant.comment}`);
         else await commentOnce(gh, owner, repo, r.number, grant.comment, APP_BOT);
         done = true;
-      } else if (r.mode === 'task' && r.ask.thread) {
-        // A change asked for on a line of the diff, refused: the answer goes on that thread too, not only in the log.
-        await postInThread({ octokit: gh, owner, repo, number: r.number, ask: r.ask, dryRun, secrets: [grant.github_token] }, `${inlineRefusal(grant.reason)}\n\n${TASK_MARKER}`).catch(
-          (e: Error) => core.warning(`Couldn't reply on the review thread: ${e.message}`),
-        );
       }
     }
     const code = grant.code ?? grant.notice;

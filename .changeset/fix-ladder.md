@@ -6,6 +6,6 @@
 - **Bare `/fix` reuses the review**: the review's own suggested changes are applied with no model call, the other findings go to the model with the review's whole comment and only the files they name, and a fix that changes any other file isn't pushed.
 - **`/fix` with words** gets the last review's open findings too, so "fix those" works.
 - **Missing tools skip checks**: a check whose program isn't on the runner is skipped instead of failing, the fix is pushed, and the reply says which checks were skipped.
-- **Inline `/fix`**: when the API refuses a `/fix` on a line of the diff and sends a token, the reply goes on that thread with where to comment instead.
+- **Inline `/fix`**: a `/fix` on a line of the diff sends the comment's ID to the API, which replies on that thread when it refuses the run.
 - **No repeat inline comments**: a finding that moved a line or two since the last review isn't posted again.
 - **Failed Bash calls in the log**: each one gets a short line with the command and what it printed.

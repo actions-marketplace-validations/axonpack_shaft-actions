@@ -61267,10 +61267,6 @@ var TASK_FORMAT = {
     return ok ? r : undefined;
   }
 };
-function inlineRefusal(reason) {
-  const merge = /@refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_WORKFLOW_REF ?? "");
-  return merge && !reason.includes("Conversation tab") ? `${reason} Comment \`/fix\` on the pull request's Conversation tab to run it.` : reason;
-}
 var CREDENTIALS_IN_CHECKOUT = "The checkout's .git/config holds a GitHub credential, which the model could read, so nothing was changed. Set `persist-credentials: false` on the workflow's actions/checkout step.";
 function selfHosted() {
   if (process.env.RUNNER_ENVIRONMENT === "github-hosted")
@@ -61484,7 +61480,7 @@ async function run() {
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context2.repo;
   const pull_request = pullRequestOf(context2.payload);
-  const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork, pull_request } : { job: r.mode, pull_request }));
+  const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork, pull_request } : { job: r.mode, pull_request, ...context2.eventName === "pull_request_review_comment" && "ask" in r && { comment: { id: r.ask.id } } }));
   if (!grant.run) {
     if (typeof grant.github_token === "string") {
       const gh = getOctokit(grant.github_token);
@@ -61496,10 +61492,6 @@ ${grant.comment}`);
         else
           await commentOnce(gh, owner, repo, r.number, grant.comment, APP_BOT);
         done = true;
-      } else if (r.mode === "task" && r.ask.thread) {
-        await postInThread({ octokit: gh, owner, repo, number: r.number, ask: r.ask, dryRun, secrets: [grant.github_token] }, `${inlineRefusal(grant.reason)}
-
-${TASK_MARKER}`).catch((e) => warning(`Couldn't reply on the review thread: ${e.message}`));
       }
     }
     const code = grant.code ?? grant.notice;

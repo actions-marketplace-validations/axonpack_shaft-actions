@@ -22,7 +22,7 @@ import { triage, triagePrompt } from './triage.service';
 import { step } from './step.service';
 
 /** Ends everything a task posts. */
-export const TASK_MARKER = '<!-- shaft:task -->';
+const TASK_MARKER = '<!-- shaft:task -->';
 
 /** What the Task prompt asks the model for. */
 export type TaskReply = { answer: string; commit_message: string; checks: string[] };
@@ -52,15 +52,6 @@ export type TaskOptions = ReplyOptions & { bare: boolean; pushMode: string; repo
 export type TaskOutcome =
   | ReplyOutcome
   | { refused: string; code: 'push_failed' | 'nothing_to_fix' | 'self_hosted_unsupported' | 'credentials_in_checkout' | 'sandbox_unavailable' };
-
-/**
- * Why a change asked for on a line wasn't started. That comment's workflow comes from the pull
- * request's merge ref, which may never get a push token, so it says where a `/fix` does run.
- */
-export function inlineRefusal(reason: string): string {
-  const merge = /@refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_WORKFLOW_REF ?? '');
-  return merge && !reason.includes('Conversation tab') ? `${reason} Comment \`/fix\` on the pull request's Conversation tab to run it.` : reason;
-}
 
 /** Why a task refuses a checkout whose `.git/config` holds a credential. */
 export const CREDENTIALS_IN_CHECKOUT =
