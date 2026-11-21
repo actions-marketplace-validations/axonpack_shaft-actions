@@ -61243,6 +61243,10 @@ var TASK_FORMAT = {
     return ok ? r : undefined;
   }
 };
+function inlineRefusal(reason) {
+  const merge = /@refs\/pull\/\d+\/merge$/.test(process.env.GITHUB_WORKFLOW_REF ?? "");
+  return merge && !reason.includes("Conversation tab") ? `${reason} Comment \`/fix\` on the pull request's Conversation tab to run it.` : reason;
+}
 var CREDENTIALS_IN_CHECKOUT = "The checkout's .git/config holds a GitHub credential, which the model could read, so nothing was changed. Set `persist-credentials: false` on the workflow's actions/checkout step.";
 function selfHosted() {
   if (process.env.RUNNER_ENVIRONMENT === "github-hosted")
@@ -61468,6 +61472,10 @@ ${grant.comment}`);
         else
           await commentOnce(gh, owner, repo, r.number, grant.comment, APP_BOT);
         done = true;
+      } else if (r.mode === "task" && r.ask.thread) {
+        await postInThread({ octokit: gh, owner, repo, number: r.number, ask: r.ask, dryRun, secrets: [grant.github_token] }, `${inlineRefusal(grant.reason)}
+
+${TASK_MARKER}`).catch((e) => warning(`Couldn't reply on the review thread: ${e.message}`));
       }
     }
     const code = grant.code ?? grant.notice;

@@ -6,11 +6,11 @@ import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
 import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
-import { replyToComment } from './services/reply.service';
+import { postInThread, replyToComment } from './services/reply.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
-import { runTask } from './services/task.service';
+import { inlineRefusal, runTask, TASK_MARKER } from './services/task.service';
 import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util';
 import { redact, workflowEditUrl } from './utils/render.util';
 
@@ -55,6 +55,11 @@ async function run(): Promise<void> {
         if (dryRun) core.info(`--- comment\n${grant.comment}`);
         else await commentOnce(gh, owner, repo, r.number, grant.comment, APP_BOT);
         done = true;
+      } else if (r.mode === 'task' && r.ask.thread) {
+        // A change asked for on a line of the diff, refused: the answer goes on that thread too, not only in the log.
+        await postInThread({ octokit: gh, owner, repo, number: r.number, ask: r.ask, dryRun, secrets: [grant.github_token] }, `${inlineRefusal(grant.reason)}\n\n${TASK_MARKER}`).catch(
+          (e: Error) => core.warning(`Couldn't reply on the review thread: ${e.message}`),
+        );
       }
     }
     const code = grant.code ?? grant.notice;

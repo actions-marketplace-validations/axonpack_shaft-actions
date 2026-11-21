@@ -2,6 +2,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import comment from '../services/__tests__/fixtures/issue_comment.created.json';
 import fork from '../services/__tests__/fixtures/pull_request.fork.json';
 import opened from '../services/__tests__/fixtures/pull_request.opened.json';
+import onLine from '../services/__tests__/fixtures/pull_request_review_comment.created.json';
 
 const inputs: string[] = [];
 const failed: string[] = [];
@@ -61,6 +62,7 @@ vi.doMock('@actions/github', () => ({
     rest: {
       issues: { listComments: {}, createComment: async (p: unknown) => posted.push(p), updateComment: async (p: Record<string, unknown>) => closed.push(p) },
       checks: { update: async (p: Record<string, unknown>) => closed.push(p) },
+      pulls: { createReplyForReviewComment: async (p: unknown) => posted.push(p) },
       repos: { getCollaboratorPermissionLevel: async () => ({ data: { permission } }) },
       reactions: { createForIssueComment: react, deleteForIssueComment: unreact },
     },
@@ -85,7 +87,8 @@ vi.doMock('../services/review.service', () => ({
 let replied: Record<string, unknown> | undefined;
 let replyError: Error | undefined;
 const answer = { answer: 'It retries in `src/retry.ts:42`.', comment_url: 'https://github.com/acme/widgets/pull/12#issuecomment-9' };
-vi.doMock('../services/reply.service', () => ({
+vi.doMock('../services/reply.service', async (actual) => ({
+  ...(await actual<typeof import('../services/reply.service')>()),
   replyToComment: async (o: Record<string, unknown>) => {
     replied = o;
     if (replyError) throw replyError;
@@ -96,7 +99,8 @@ vi.doMock('../services/reply.service', () => ({
 let tasked: Record<string, unknown> | undefined;
 /** What the mocked task returns: a finished one, or one refused before its session. */
 let taskOut: Record<string, unknown> = { model: 'claude-opus-5-5', effort: 'high', tokens: {}, costUsd: 0.5, output: { answer: 'Fixed it.', comment_url: '' } };
-vi.doMock('../services/task.service', () => ({
+vi.doMock('../services/task.service', async (actual) => ({
+  ...(await actual<typeof import('../services/task.service')>()),
   runTask: async (o: Record<string, unknown>) => {
     tasked = o;
     return taskOut;
@@ -625,4 +629,31 @@ test('an unknown error fails the step with no card', async () => {
   await main();
   expect(failed).toEqual(['Not Found']);
   expect(jobSummary).toBe('');
+});
+
+test('a /fix on a line of the diff that the API refuses gets the reason on its review thread, with where to comment instead', async () => {
+  context.eventName = 'pull_request_review_comment';
+  context.payload = { ...onLine, comment: { ...onLine.comment, body: '/fix rename it' } };
+  process.env.GITHUB_WORKFLOW_REF = 'acme/widgets/.github/workflows/shaft.yml@refs/pull/12/merge';
+  const reason = "A change runs only from a workflow on the default branch, main, and this run's came from refs/pull/12/merge. Nothing was started.";
+  api(Response.json({ run: false, reason, github_token: 'ghs_reply' }));
+  await main();
+  expect(posted).toEqual([
+    {
+      owner: 'acme',
+      repo: 'widgets',
+      pull_number: 12,
+      comment_id: 601,
+      body: `${reason} Comment \`/fix\` on the pull request's Conversation tab to run it.\n\n<!-- shaft:task -->`,
+    },
+  ]);
+  expect(notices).toEqual([reason]);
+  // An API that sends no token for it: only the notice, as before.
+  posted.length = 0;
+  notices.length = 0;
+  api(Response.json({ run: false, reason }));
+  await main();
+  expect(posted).toEqual([]);
+  expect(notices).toEqual([reason]);
+  delete process.env.GITHUB_WORKFLOW_REF;
 });
