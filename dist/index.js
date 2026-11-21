@@ -61053,6 +61053,8 @@ function repoCommands(cwd) {
 var CHECK_TIMEOUT = 10 * 60000;
 function runCheck(cwd, command, env = []) {
   const [file, ...args] = command.split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ""));
+  if (!which2(file))
+    return { command, passed: true, output: "", skipped: file };
   try {
     inSandbox(cwd, file, args, { env: runnerEnv(env), encoding: "utf8", stdio: "pipe", timeout: CHECK_TIMEOUT });
     return { command, passed: true, output: "" };
@@ -61068,8 +61070,18 @@ function checkList(listed, commands, cwd) {
   const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith("git ") && !toolDenial("Bash", { command: c }, cwd, commands));
   return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
 }
-var checksTable = (checks) => checks.length ? ["| Check | Result |", "| --- | --- |", ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? "Passed" : "Failed"} |`)].join(`
+var checksTable = (checks) => checks.length ? ["| Check | Result |", "| --- | --- |", ...checks.map((c) => `| \`${c.command}\` | ${c.skipped ? "Skipped" : c.passed ? "Passed" : "Failed"} |`)].join(`
 `) : "No checks were run.";
+function skippedNote(checks) {
+  const tools = [...new Set(checks.flatMap((c) => c.skipped ?? []))];
+  if (!tools.length)
+    return;
+  const each = tools.map((t) => {
+    const n = checks.filter((c) => c.skipped === t).length;
+    return `\`${t.replace(/[`\r\n]/g, "")}\` isn't installed on the runner, so ${n === 1 ? "one check was" : `${n} checks were`} skipped`;
+  });
+  return `${each.join("; ")}. The repo's CI runs them on the push.`;
+}
 
 // src/services/fix.service.ts
 import { closeSync as closeSync2, constants as constants5, fstatSync, ftruncateSync, openSync as openSync2, readFileSync as readFileSync6, writeSync } from "node:fs";
@@ -61322,8 +61334,9 @@ ${TASK_MARKER}`);
         const sha = await step("Push the commit", () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
+      const skipped = skippedNote(checks);
       if (!outside.length)
-        lines.push(checksTable(checks));
+        lines.push(checksTable(checks), ...skipped ? [skipped] : []);
       for (const c of failed)
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>
 

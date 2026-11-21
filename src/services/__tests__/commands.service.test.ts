@@ -7,12 +7,13 @@ import { expect, test, vi } from 'vitest';
 // The sandbox runs only on Linux (sandbox.service.test.ts): here a check runs as it would inside it, with the files recorded.
 const sandboxed: string[] = [];
 vi.doMock('../sandbox.service', () => ({
+  which: (name: string) => (name === 'bun-missing' ? undefined : `/usr/bin/${name}`),
   inSandbox: (cwd: string, file: string, args: string[], o: cp.ExecFileSyncOptions) => {
     sandboxed.push(file);
     return cp.execFileSync(file, args, { ...o, cwd });
   },
 }));
-const { repoCommands, runCheck } = await import('../commands.service');
+const { repoCommands, runCheck, skippedNote } = await import('../commands.service');
 
 const repo = (files: Record<string, string>) => {
   const cwd = mkdtempSync(join(tmpdir(), 'shaft-commands-'));
@@ -46,4 +47,15 @@ test('a check runs with only the allowlisted environment, and a failure keeps th
   expect(out.output).not.toContain('ghs_env');
   expect(runCheck(cwd, 'node -e 0')).toEqual({ command: 'node -e 0', passed: true, output: '' });
   expect(sandboxed).toEqual(['node', 'node']);
+});
+
+test("a check whose program isn't on the PATH is skipped, never run, and the note says why", () => {
+  const before = sandboxed.length;
+  const out = runCheck(repo({}), 'bun-missing run test');
+  expect(out).toEqual({ command: 'bun-missing run test', passed: true, output: '', skipped: 'bun-missing' });
+  expect(sandboxed).toHaveLength(before);
+  expect(skippedNote([out, { ...out, command: 'bun-missing run lint' }, { command: 'node -e 0', passed: true, output: '' }])).toBe(
+    "`bun-missing` isn't installed on the runner, so 2 checks were skipped. The repo's CI runs them on the push.",
+  );
+  expect(skippedNote([{ command: 'node -e 0', passed: true, output: '' }])).toBeUndefined();
 });

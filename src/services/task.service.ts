@@ -8,7 +8,7 @@ import { footer, prose, redact } from '../utils/render.util';
 import { dataBlock } from '../utils/prompt.util';
 import { type ReplyFormat, runAgent } from './agent.service';
 import { fetchPushToken } from './api.service';
-import { checkList, checksTable, repoCommands, runCheck } from './commands.service';
+import { checkList, checksTable, repoCommands, runCheck, skippedNote } from './commands.service';
 import { savedCredentials } from './checkout.service';
 import { collectContext } from './context.service';
 import { applySuggestion, fixStart, openFindings, taskRequest } from './fix.service';
@@ -153,7 +153,8 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         const sha = await step('Push the commit', () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
-      if (!outside.length) lines.push(checksTable(checks));
+      const skipped = skippedNote(checks);
+      if (!outside.length) lines.push(checksTable(checks), ...(skipped ? [skipped] : []));
       for (const c of failed)
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>\n\n\`\`\`\`\n${prose(c.output).replace(/`{4,}/g, '```')}\n\`\`\`\`\n\n</details>`);
     }

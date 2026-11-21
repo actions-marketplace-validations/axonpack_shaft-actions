@@ -447,3 +447,16 @@ test('/axonshaft gets no findings', async () => {
   // A question needs no change, so the first rung's answer stands.
   expect(sessions).toHaveLength(1);
 });
+
+test("a check whose program isn't on the runner is skipped: the fix is pushed, and the reply says which and why", async () => {
+  fake = octokit();
+  missing = ['bun'];
+  session = edits('fix.txt');
+  const before = remote('pr');
+  await runTask(options());
+  expect(remote('pr')).not.toBe(before);
+  expect(fake.posted[0]).toContain('| `bun run test` | Skipped |');
+  expect(fake.posted[0]).toContain("`bun` isn't installed on the runner, so one check was skipped. The repo's CI runs them on the push.");
+  // Nothing checked the change, so the ladder started above Haiku.
+  expect(sessions[0]!.options).toMatchObject({ model: 'sonnet' });
+});
