@@ -58968,7 +58968,7 @@ async function openAdvisories(placed, o) {
       continue;
     }
     try {
-      const body = { fp: p.fp, title: cut(o.clean(p.title), 300), body: cut(o.clean(p.body), 5000), file: cut(p.file, 500), line: Math.max(1, p.line), pull: o.pull };
+      const body = { fp: p.fp, title: cut(o.clean(p.title), 300), body: cut(o.clean(p.body), 5000), file: cut(p.file, 500), line: Math.max(1, p.line), pull: o.pull, sha: o.sha };
       const draft = await callApi("/v1/advisories", body);
       if (typeof draft?.html_url !== "string")
         throw new Error("The Axon Shaft API sent an incomplete answer");
@@ -60511,7 +60511,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
-  const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, dryRun: o.dryRun, clean }) : undefined;
+  const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);

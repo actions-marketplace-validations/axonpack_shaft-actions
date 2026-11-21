@@ -378,7 +378,7 @@ async function postReview(
 
   const placed = place(review.findings, files, o.nits);
   // Before anything is posted, so a withheld finding's details never reach the PR.
-  const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, dryRun: o.dryRun, clean }) : undefined;
+  const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);

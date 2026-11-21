@@ -37,13 +37,13 @@ const finding = (fp: string, step = 'security', severity: Placed['severity'] = '
   suggestion: 'db.query("select * from t where id = $1", [id])',
   inline: true,
 });
-const options = { pull: 7, dryRun: false, clean: (s: string) => s.replace('OR 1=1', '***') };
+const options = { pull: 7, sha: 'a'.repeat(40), dryRun: false, clean: (s: string) => s.replace('OR 1=1', '***') };
 
 test('on a public repo each blocking security finding links to its draft, and its title, body and suggestion give way to the short note; the fingerprint stays', async () => {
   answer = draft(true);
   const placed = [finding('aaa111'), finding('bbb222', 'security', 'should-fix'), finding('ccc333', 'correctness')];
   expect(await openAdvisories(placed, options)).toBeUndefined();
-  expect(sent).toEqual([{ fp: 'aaa111', title: 'SQL built from the request', body: 'The `id` query goes into the SQL string: `?id=1 ***` reads every row.', file: 'src/db.ts', line: 4, pull: 7 }]);
+  expect(sent).toEqual([{ fp: 'aaa111', title: 'SQL built from the request', body: 'The `id` query goes into the SQL string: `?id=1 ***` reads every row.', file: 'src/db.ts', line: 4, pull: 7, sha: 'a'.repeat(40) }]);
   const url = 'https://github.com/o/r/security/advisories/GHSA-aaa111';
   expect(placed[0]).toEqual({ fp: 'aaa111', step: 'security', severity: 'blocking', file: 'src/db.ts', line: 4, inline: true, url, title: WITHHELD_TITLE, body: withheldBody(url) });
   expect(withheldBody(url)).toBe(

@@ -24,7 +24,7 @@ const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0,
  * request keeps the finding as it is and warns. Returns the summary's line about the failures, if any.
  * The finding's text is never logged: the job log is public on a public repo.
  */
-export async function openAdvisories(placed: Placed[], o: { pull: number; dryRun: boolean; clean: (s: string) => string }): Promise<string | undefined> {
+export async function openAdvisories(placed: Placed[], o: { pull: number; sha: string; dryRun: boolean; clean: (s: string) => string }): Promise<string | undefined> {
   const failed: string[] = [];
   for (const p of placed.filter((f) => f.step === 'security' && f.severity === 'blocking').slice(0, MAX_DRAFTS)) {
     if (o.dryRun) {
@@ -32,7 +32,7 @@ export async function openAdvisories(placed: Placed[], o: { pull: number; dryRun
       continue;
     }
     try {
-      const body = { fp: p.fp, title: cut(o.clean(p.title), 300), body: cut(o.clean(p.body), 5000), file: cut(p.file, 500), line: Math.max(1, p.line), pull: o.pull };
+      const body = { fp: p.fp, title: cut(o.clean(p.title), 300), body: cut(o.clean(p.body), 5000), file: cut(p.file, 500), line: Math.max(1, p.line), pull: o.pull, sha: o.sha };
       const draft = (await callApi('/v1/advisories', body)) as Draft | undefined;
       if (typeof draft?.html_url !== 'string') throw new Error('The Axon Shaft API sent an incomplete answer');
       p.url = draft.html_url;
