@@ -292,8 +292,13 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
  * reply that doesn't match the schema is retried once, then the run fails. Every failure comes out
  * as a `ShaftFailure` with a `review_*` code, whatever the job.
  */
+/** The sessions running now, so a cancelled run can stop them. */
+const running = new Set<AbortController>();
+export const stopAgents = () => running.forEach((c) => c.abort());
+
 export async function runAgent<T>(prompt: string, o: AgentOptions, format: ReplyFormat<T>): Promise<AgentResult<T>> {
   const controller = new AbortController();
+  running.add(controller);
   const timer = setTimeout(() => controller.abort(), o.timeoutMinutes * 60_000);
   try {
     for (let attempt = 1; ; attempt++) {
@@ -321,5 +326,6 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
     throw new ShaftFailure('review_failed', `The ${format.name} failed: ${why}. Rerun the job; the job log has the details.`);
   } finally {
     clearTimeout(timer);
+    running.delete(controller);
   }
 }

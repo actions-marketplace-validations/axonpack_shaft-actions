@@ -24,6 +24,7 @@ import {
   REVIEW_CHECK,
   type ReviewStep,
 } from './check-runs.service';
+import { trackComment } from './finalize.service';
 import { step } from './step.service';
 import {
   type CheckItem,
@@ -261,13 +262,15 @@ async function postReview(
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
 
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
-  const writeSummary = async (body: string) => {
+  const writeSummary = async (body: string, reviewing = false) => {
     if (o.dryRun) return;
     const req = { owner: ctx.owner, repo: ctx.repo, body: clean(body) };
     const { data } = summary
       ? await octokit.rest.issues.updateComment({ ...req, comment_id: summary.id })
       : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
+    // A run that ends while it says "Reviewing" swaps it for its failure or cancelled card.
+    trackComment(data.id, reviewing, prior);
   };
   const postChecks = async (states: CheckItem[], placed: Placed[]) => {
     if (!o.dryRun) return canCheck ? postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean) : undefined;
@@ -330,7 +333,7 @@ async function postReview(
     const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
 
     // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
-    if (summary) await writeSummary(startSummary(sha, prior));
+    if (summary) await writeSummary(startSummary(sha, prior), true);
     // An alias reads as a name (`sonnet` as Sonnet); a full model ID stays as written.
     const model = /^[a-z]+$/.test(choice.model) ? choice.model[0]!.toUpperCase() + choice.model.slice(1) : choice.model;
     await progress('Review', `Reviewing with ${model}, effort ${choice.effort}`);

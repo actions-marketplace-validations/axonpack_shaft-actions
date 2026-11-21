@@ -9,6 +9,7 @@ vi.doMock('@actions/core', () => ({
   info: (s: string) => logs.push(s),
   warning: (s: string) => warnings.push(s),
   getIDToken: async () => 'oidc',
+  saveState: () => {},
   group: (name: string, fn: () => Promise<unknown>) => {
     logs.push(`::group::${name}`);
     return fn();

@@ -19676,6 +19676,13 @@ function group(name, fn) {
     return result;
   });
 }
+function saveState(name, value) {
+  const filePath = process.env["GITHUB_STATE"] || "";
+  if (filePath) {
+    return issueFileCommand("STATE", prepareKeyValueMessage(name, value));
+  }
+  issueCommand("save-state", { name }, toCommandValue(value));
+}
 function getIDToken(aud) {
   return __awaiter5(this, undefined, undefined, function* () {
     return yield OidcClient.getIDToken(aud);
@@ -23764,7 +23771,7 @@ var package_default = {
   license: "MIT",
   type: "module",
   scripts: {
-    build: "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js",
+    build: "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js && bun build src/post.ts --target node --outfile dist/post.js",
     lint: "oxlint src",
     typecheck: "tsc --noEmit",
     test: "vitest run",
@@ -23796,549 +23803,6 @@ var DASHBOARD_URL = "https://shaft.axonpack.dev";
 var CODES_URL = "https://shaft.axonpack.dev/docs/reference/codes";
 var ERROR_CARDS_URL = "https://shaft.axonpack.dev/errors";
 var STATUS_CARDS_URL = "https://shaft.axonpack.dev/status";
-
-// src/utils/failure.util.ts
-class ShaftFailure extends Error {
-  code;
-  url;
-  constructor(code, message, url) {
-    super(message);
-    this.code = code;
-    this.url = url;
-  }
-}
-var codeUrl = (code) => `${CODES_URL}#${encodeURIComponent(code)}`;
-var noticeText = (reason, code) => code ? `${reason} See ${codeUrl(code)}` : reason;
-function failureMarkdown(f) {
-  const alt = f.message.replace(/[[\]\r\n]+/g, " ");
-  const card = `[![${alt}](${ERROR_CARDS_URL}/${encodeURIComponent(f.code)}.svg)](${codeUrl(f.code)})`;
-  return [card, f.message, f.url && `<${f.url}>`].filter(Boolean).join(`
-
-`);
-}
-
-// src/services/api.service.ts
-async function post(path, body) {
-  if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
-    throw new ShaftFailure("missing_id_token", "Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.");
-  }
-  const oidc = await getIDToken(API_AUDIENCE);
-  try {
-    return await fetch(`${API_URL}${path}`, {
-      method: "POST",
-      headers: { authorization: `Bearer ${oidc}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000)
-    });
-  } catch (e) {
-    throw new ShaftFailure("api_unreachable", `Couldn't reach the Axon Shaft API at ${API_URL} (${e.message}). Rerun the job in a few minutes.`);
-  }
-}
-async function answer(res) {
-  const body = await res.json().catch(() => {
-    return;
-  });
-  if (res.ok)
-    return body;
-  if (typeof body?.error === "string" && typeof body.message === "string") {
-    throw new ShaftFailure(body.error, body.message, typeof body.url === "string" ? body.url : undefined);
-  }
-  throw new ShaftFailure("api_error", `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
-}
-async function callApi(path, body) {
-  return answer(await post(path, body));
-}
-async function fetchGrant(request) {
-  const grant = await answer(await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }));
-  if (grant?.run === false) {
-    if (typeof grant.github_token === "string")
-      setSecret(grant.github_token);
-    return grant;
-  }
-  if (typeof grant?.github_token !== "string" || typeof grant.claude_token?.value !== "string" || typeof grant.job?.prompt?.template !== "string" || !Array.isArray(grant.job.prompt.passes)) {
-    throw new ShaftFailure("api_error", "The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.");
-  }
-  setSecret(grant.github_token);
-  setSecret(grant.claude_token.value);
-  return grant;
-}
-async function fetchPushToken() {
-  const grant = await answer(await post("/v1/push-token", {}));
-  if (typeof grant?.push_token !== "string" || typeof grant.branch !== "string") {
-    throw new ShaftFailure("api_error", "The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.");
-  }
-  setSecret(grant.push_token);
-  return grant;
-}
-async function reportRun(summary) {
-  try {
-    const res = await post("/v1/runs", summary);
-    if (!res.ok)
-      throw new Error(`the API answered ${res.status}`);
-  } catch (e) {
-    warning(`Couldn't record the run on the Axon Shaft API: ${e.message}`);
-  }
-}
-
-// src/services/checkout.service.ts
-import { execFileSync } from "node:child_process";
-import { globSync, lstatSync, readFileSync as readFileSync2, realpathSync } from "node:fs";
-import { join, sep as sep2 } from "node:path";
-function checkoutHead(cwd, number, token) {
-  const git = (...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
-  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-  setSecret(basic);
-  const depth = git("rev-parse", "--is-shallow-repository") === "true" ? ["--depth=1"] : [];
-  git("-c", `http.extraheader=AUTHORIZATION: basic ${basic}`, "fetch", "--no-tags", ...depth, "origin", `refs/pull/${number}/head`);
-  git("checkout", "--quiet", "--detach", "FETCH_HEAD");
-}
-var READ_MAX = 1e6;
-function checkoutFiles(cwd) {
-  const root = realpathSync(cwd) + sep2;
-  return {
-    find: (globs) => globSync(globs, { cwd, exclude: (p) => /(^|\/)(node_modules|\.git)$/.test(p) }),
-    read: (path, max = READ_MAX) => {
-      try {
-        const full = join(cwd, path);
-        const stat = lstatSync(full);
-        return stat.isFile() && stat.size <= max && realpathSync(full).startsWith(root) ? readFileSync2(full, "utf8") : undefined;
-      } catch {
-        return;
-      }
-    }
-  };
-}
-function savedCredentials(cwd) {
-  try {
-    return /extraheader|credential|:\/\/[^\s/@]*:[^\s/@]+@/i.test(readFileSync2(join(cwd, ".git", "config"), "utf8"));
-  } catch {
-    return false;
-  }
-}
-
-// src/services/reaction.service.ts
-function triggerComment(eventName, payload) {
-  const id = payload.comment?.id;
-  if (typeof id !== "number" || eventName !== "issue_comment" && eventName !== "pull_request_review_comment")
-    return;
-  return { id, review: eventName === "pull_request_review_comment" };
-}
-var warn = (what) => (e) => {
-  warning(`Couldn't ${what} on the comment that started the run: ${e.message}`);
-  return;
-};
-async function add(r, content) {
-  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, content };
-  const { data } = await (r.comment.review ? r.octokit.rest.reactions.createForPullRequestReviewComment(req) : r.octokit.rest.reactions.createForIssueComment(req));
-  return data.id;
-}
-async function reactStart(octokit, event, dryRun) {
-  const comment = triggerComment(event.eventName, event.payload);
-  if (!comment)
-    return;
-  const r = { octokit, owner: event.repo.owner, repo: event.repo.repo, comment, dryRun };
-  if (dryRun) {
-    info("Would react \uD83D\uDC40 to the comment that started the run");
-    return r;
-  }
-  const id = await add(r, "eyes").catch(warn("add \uD83D\uDC40"));
-  return id === undefined ? undefined : { ...r, id };
-}
-async function reactEnd(r, done) {
-  const [content, emoji] = done ? ["rocket", "\uD83D\uDE80"] : ["confused", "\uD83D\uDE15"];
-  if (r.dryRun)
-    return info(`Would swap \uD83D\uDC40 for ${emoji} on the comment that started the run`);
-  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, reaction_id: r.id };
-  await (r.comment.review ? r.octokit.rest.reactions.deleteForPullRequestComment(req) : r.octokit.rest.reactions.deleteForIssueComment(req)).catch(warn("remove \uD83D\uDC40"));
-  await add(r, content).catch(warn(`add ${emoji}`));
-}
-
-// src/utils/auto-pick.util.ts
-import { matchesGlob } from "node:path";
-var DEFAULT_MAX_TURNS = 30;
-var TURNS_BY_LINES = [
-  [100, 12],
-  [500, 20]
-];
-var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
-var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
-var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
-var CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
-var COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
-var matches = (file, globs) => globs.some((g) => matchesGlob(file, g));
-function isSensitive(f) {
-  if (/(^|\/)package\.json$/.test(f.filename))
-    return f.patch === undefined || /ependencies"/.test(f.patch);
-  return SENSITIVE.test(f.filename);
-}
-function onlyComments(patch) {
-  if (!patch)
-    return false;
-  return patch.split(`
-`).filter((l) => /^[+-]/.test(l)).every((l) => {
-    const code = l.slice(1).trim();
-    return code === "" || COMMENT.test(code);
-  });
-}
-var isLight = (f) => DOCS.test(f.filename) || LOCKFILE.test(f.filename) || CONFIG.test(f.filename) || onlyComments(f.patch);
-function pick(input) {
-  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
-  const lines = files.reduce((n, f) => n + f.additions + f.deletions, 0);
-  const size = `${lines} lines`;
-  let row;
-  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
-  if (input.mode === "task")
-    row = { model: "opus", effort: "high", reason: "task" };
-  else if (input.mode === "reply")
-    row = { model: "sonnet", effort: "medium", reason: "question" };
-  else if (hot)
-    row = { model: "opus", effort: "high", reason: `${size}, touches ${hot.filename}` };
-  else if (input.depth === "deep")
-    row = { model: "opus", effort: "high", reason: `${size}, deep` };
-  else if (lines > 1000 || files.length > 30)
-    row = { model: "opus", effort: "medium", reason: `${size}, ${files.length} files` };
-  else if (files.length > 0 && files.every(isLight))
-    row = { model: "haiku", effort: "low", reason: `${size}, docs and config only` };
-  else
-    row = { model: "sonnet", effort: "medium", reason: size };
-  const autoModel = !input.model || input.model === "auto";
-  const model = autoModel ? row.model : input.model;
-  const sized = input.mode === "review" && input.depth !== "deep" && TURNS_BY_LINES.find(([below]) => lines < below)?.[1];
-  const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
-  return {
-    ...row,
-    reason: input.maxTurns === undefined && sized ? `${row.reason}, up to ${sized} turns` : row.reason,
-    maxTurns,
-    model,
-    effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
-    subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
-    autoModel
-  };
-}
-
-// src/utils/prompt.util.ts
-var MAX_DIFF = 200000;
-function diffText(files, focus) {
-  const diff = files.map((f) => `diff --git a/${f.filename} b/${f.filename} (${f.status}${matches(f.filename, focus) ? ", focus" : ""})
-${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
-`);
-  return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}
-(the diff is cut here; read the remaining files from the checkout)` : diff;
-}
-var trustedComments = (comments) => comments.filter((c) => c.trusted).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
-`);
-function fillSlots(template, slots) {
-  return template.replace(/\{\{(\w+)\}\}/g, (slot, name) => {
-    if (!Object.hasOwn(slots, name))
-      return slot;
-    const value = String(slots[name]);
-    return value.trim() ? value : "None.";
-  });
-}
-
-// src/utils/render.util.ts
-import { createHash } from "node:crypto";
-
-// src/utils/tokens.util.ts
-var CACHE_WEIGHT = { read: 0.1, write: 1.25 };
-var billedTokens = (t) => Math.round(t.input + t.output + CACHE_WEIGHT.write * t.cache_write + CACHE_WEIGHT.read * t.cache_read);
-
-// src/utils/render.util.ts
-var SUMMARY_MARKER = "<!-- shaft:summary -->";
-var VERDICTS = ["blocking", "needs-changes", "looks-good"];
-var SEVERITIES = ["blocking", "should-fix", "nit"];
-var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security", "rules"];
-var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
-var WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
-var GATE_STATUSES = ["met", "not_met", "not_applicable"];
-var GATES_MAX = 10;
-function diffLines(patch, addedOnly = false) {
-  const lines = new Map;
-  let right = 0;
-  for (const l of patch?.split(`
-`) ?? []) {
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
-    if (hunk)
-      right = Number(hunk[1]);
-    else if (l.startsWith("+") || l.startsWith(" ")) {
-      if (!addedOnly || l.startsWith("+"))
-        lines.set(right, l.slice(1));
-      right++;
-    }
-  }
-  return lines;
-}
-function oldLines(patch) {
-  const lines = new Map;
-  for (const m of patch?.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)/gm) ?? []) {
-    const start = Number(m[1]);
-    for (let n = start;n < start + Number(m[2] ?? 1); n++)
-      lines.set(n, Number(m[3]));
-  }
-  return lines;
-}
-var removedLines = (patch) => (patch ?? "").split(`
-`).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
-function fingerprint(f, code = "") {
-  return createHash("sha256").update(`${f.file}
-${f.title.trim().toLowerCase()}
-${code.replace(/\s+/g, " ").trim()}`).digest("hex").slice(0, 6);
-}
-function place(findings, files, nits) {
-  const byFile = new Map(files.map((f) => [f.filename, diffLines(f.patch)]));
-  return findings.filter((f) => nits !== "off" || f.severity !== "nit").map((f) => {
-    const lines = byFile.get(f.file);
-    const end = Math.max(f.end_line ?? f.line, f.line);
-    let inDiff = !!lines;
-    for (let n = f.line;inDiff && n <= end; n++)
-      inDiff = lines.has(n);
-    return { ...f, fp: fingerprint(f, lines?.get(f.line)), inline: inDiff && (f.severity !== "nit" || nits === "inline") };
-  });
-}
-var SEVERITY_LABEL = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
-var SEVERITY_DOT = { blocking: "\uD83D\uDD34", "should-fix": "\uD83D\uDFE1", nit: "⚪" };
-var VERDICT_LABEL = { blocking: "Blocking", "needs-changes": "Needs changes", "looks-good": "Looks good" };
-var VERDICT_ALERT = { blocking: "CAUTION", "needs-changes": "WARNING", "looks-good": "TIP" };
-var statusCard = (status, label) => `![${label}](${STATUS_CARDS_URL}/${status}.svg)`;
-var CHECK_LABEL = {
-  correctness: "Correctness",
-  breakage: "Breakage",
-  standards: "Standards",
-  tests: "Tests",
-  docs: "Docs",
-  security: "Security",
-  rules: "\uD83D\uDCCC Your checks"
-};
-var loc = (f) => `${f.file}:${f.line}${f.end_line && f.end_line > f.line ? `-${f.end_line}` : ""}`;
-var where = (f) => `\`${loc(f)}\``;
-var fence = (s, lang = "") => `\`\`\`${lang}
-${s.replace(/\n$/, "")}
-\`\`\``;
-var cell = (s) => s.replace(/\|/g, "\\|").replace(/\s*[\r\n]+\s*/g, " ");
-var html = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-var prose = (s) => s.replace(/<!--/g, "&lt;!--").replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, "").replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, "");
-var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-function inlineBody(f) {
-  const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
-  if (f.suggestion)
-    parts.push(fence(f.suggestion, "suggestion"));
-  return `${parts.join(`
-
-`)}
-
-<!-- shaft:finding ${f.fp} -->`;
-}
-function stateLine(state) {
-  return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
-}
-function parseState(body) {
-  const m = body && /(?:^|\n)<!-- shaft:state ([^\n]*) -->\s*$/.exec(body);
-  if (!m)
-    return;
-  try {
-    return JSON.parse(m[1]);
-  } catch {
-    return;
-  }
-}
-function workflowEditUrl(workflowRef, defaultBranch) {
-  const m = /^([^/]+\/[^/]+)\/(.+)@(.+)$/.exec(workflowRef ?? "");
-  const branch = m?.[3].startsWith("refs/heads/") ? m[3].slice("refs/heads/".length) : defaultBranch;
-  return m && branch ? `https://github.com/${m[1]}/edit/${encodeURI(`${branch}/${m[2]}`)}` : undefined;
-}
-var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
-function modelName(id) {
-  const m = /^claude-(opus|sonnet|haiku)-(\d+(?:-\d)?)(?:-\d{8})?$/.exec(id);
-  return m ? `Claude ${m[1].charAt(0).toUpperCase()}${m[1].slice(1)} ${m[2].replace("-", ".")}` : id;
-}
-var modelCell = (id) => modelName(id) === id ? `\`${id}\`` : `${modelName(id)} (\`${id}\`)`;
-function footer(f) {
-  const t = f.tokens;
-  const total = t && t.input + t.output + t.cache_read + t.cache_write;
-  const cost = f.costUsd === undefined ? "" : `$${f.costUsd.toFixed(2)}`;
-  const head = f.models ? `${modelName(f.models.main)}${f.effort ? `, ${f.effort} effort` : ""}` : "no model call";
-  const tail = [t && [`${formatTokens(total)} tokens`, cost].filter(Boolean).join(" · "), f.lines !== undefined && plural(f.lines, "line")].filter(Boolean).join(", ");
-  const ran = f.checklists?.filter((c) => !c.skip).map((c) => c.name) ?? [];
-  const notRun = f.checklists?.filter((c) => c.skip).map((c) => `${c.name} (${c.skip})`) ?? [];
-  const ref = process.env.GITHUB_ACTION_REF;
-  const rows = [
-    ["Axon Shaft", f.dashboardRunUrl ? `[Run page](${f.dashboardRunUrl})` : `[Dashboard](${DASHBOARD_URL})`],
-    ["Logs", f.runUrl && `[Actions run](${f.runUrl})`],
-    ["Action", `v${ACTION_VERSION}${ref ? ` at \`${ref}\`` : ""}`],
-    ["Model", f.models ? modelCell(f.models.main) : "No model call"],
-    ["Fallback", f.models?.fellBackFrom && `The plan can't use \`${f.models.fellBackFrom}\`, so the run used the model above`],
-    ["Subagents", f.models?.subagents.map(modelCell).join(", ")],
-    ["Effort", f.effort],
-    ["Why this model", f.reason],
-    ["Turn limit", f.maxTurns],
-    ["Changed lines", f.lines],
-    ["Changed files", f.files],
-    ["Skipped by `skip`", f.skipped && plural(f.skipped, "file")],
-    ["Checklists run", ran.join(", ")],
-    ["Checklists not run", notRun.join(", ")],
-    ["Missing permissions", f.missingPermissions?.map((p) => `\`${p.name}\` (${p.wanted}${p.granted ? `, approved ${p.granted}` : ""})`).join(", ")],
-    ["Input", t && formatTokens(t.input)],
-    ["Output", t && formatTokens(t.output)],
-    ["Cache read", t && formatTokens(t.cache_read)],
-    ["Cache write", t && formatTokens(t.cache_write)],
-    ["Total", t && formatTokens(total)],
-    ["Billed, cache-weighted", t && `≈${formatTokens(billedTokens(t))}`],
-    ["Cost", cost],
-    ["Reviewed commit", `[\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`]
-  ];
-  const table = ["| | |", "|---|---|", ...rows.filter(([, v]) => v !== undefined && v !== "" && v !== 0).map(([k, v]) => `| ${k} | ${cell(String(v))} |`)];
-  const note = t ? ["", `Billed counts a cache read as ${CACHE_WEIGHT.read} of an input token and a cache write as ${CACHE_WEIGHT.write}, so it can be higher than the total when a run writes a lot of cache.`] : [];
-  return details(`<sub>${[head, tail].filter(Boolean).join(" · ")}</sub>`, [...table, ...note].join(`
-`));
-}
-var chip = (text) => `<kbd>${text}</kbd>`;
-var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
-var stateChip = (c) => chip(`${CHECK_MARK[c.state]} ${c.label}`);
-function checkStates(review, placed, checks, checklists) {
-  if (checklists) {
-    return checklists.map(({ key, name, skip }) => {
-      const found = placed.filter((p) => p.step === key);
-      const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : !skip && review.checked.includes(key) ? "passed" : "not_checked";
-      return { key, label: name, state, ...skip && { reason: skip } };
-    });
-  }
-  return STEPS.flatMap((key) => {
-    const found = placed.filter((p) => p.step === key);
-    if (key === "rules" && !found.length)
-      return [];
-    const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : checks && !checks.includes(key) ? "off" : review.checked.includes(key) ? "passed" : "not_checked";
-    return [{ key, label: CHECK_LABEL[key], state }];
-  });
-}
-function card(review, placed, fixed, f) {
-  const n = (s) => placed.filter((p) => p.severity === s).length;
-  const countChips = [
-    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
-    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
-    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
-    !placed.length && chip("✅ No findings"),
-    fixed && chip(`✅ ${fixed} fixed`)
-  ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
-  const headline = html(review.headline).split(/\r?\n/);
-  const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
-  const alert = VERDICT_ALERT[review.verdict];
-  return [
-    `> [!${alert}]`,
-    `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
-    ...headline.map((l) => `> ${l}`),
-    ">",
-    `> **Findings** &nbsp; ${countChips.join(" ")}`,
-    ">",
-    `> **Checks** &nbsp; ${checkChips.join(" ")}`,
-    ">",
-    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
-  ].join(`
-`);
-}
-function table(rows, f) {
-  const link = (p) => {
-    const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : "";
-    return `[${where(p)}](https://github.com/${f.repo}/blob/${f.sha}/${encodeURI(p.file)}#L${p.line}${end})`;
-  };
-  return [
-    "| Severity | Where | Finding | Details |",
-    "|---|---|---|---|",
-    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.url ? `[${p.title}](${p.url})` : p.title)} | ${p.inline ? "inline" : cell(p.body)} |`)
-  ].join(`
-`);
-}
-var findingsTable = (found, f) => table(found.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) })), f);
-var details = (summary, body) => `<details><summary>${summary}</summary>
-
-${body}
-
-</details>`;
-var GATE_MARK = { met: "✓", not_met: "✗", not_applicable: "–" };
-function gatesTable(gates) {
-  const rows = gates.map((g) => `| ${GATE_MARK[g.status]} | ${cell(prose(g.gate))} | ${cell(prose(g.reason))} |`);
-  return ["| | Gate | Why |", "|---|---|---|", ...rows].join(`
-`);
-}
-function walkthrough(w) {
-  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ""))}\``).join("<br>")} | ${cell(prose(a.summary))} |`);
-  const diagram = w.diagram ? ["", fence(prose(w.diagram), "mermaid")] : [];
-  return details("Walkthrough", ["| Area | Files | What changed |", "|---|---|---|", ...rows, ...diagram].join(`
-`));
-}
-function startSummary(sha, prior) {
-  return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
-`);
-}
-function idleSummary(states, prior, f) {
-  return [
-    SUMMARY_MARKER,
-    `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
-    "",
-    states.map(stateChip).join(" "),
-    "",
-    footer(f),
-    ...prior ? [stateLine(prior)] : []
-  ].join(`
-`);
-}
-function failedSummary(failure, prior) {
-  return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ""].filter(Boolean).join(`
-`);
-}
-function renderSummary(raw, placed, prior, f) {
-  const { headline, claim, impact, scope, not_checked } = raw;
-  const review = { ...raw, headline: prose(headline), claim: prose(claim), impact: prose(impact), scope: prose(scope), not_checked: prose(not_checked) };
-  const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
-  const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
-  const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
-  if (f.latestAction) {
-    const { version, url } = f.latestAction;
-    const links = [f.workflowEditUrl && `[Update the workflow](${f.workflowEditUrl})`, `[Update from the dashboard](${f.dashboardRunUrl ?? DASHBOARD_URL})`];
-    out.push("", "> [!NOTE]", `> Axon Shaft [v${version}](${url}) is out. This run used v${ACTION_VERSION}.`, `> ${links.filter(Boolean).join(" · ")}`);
-  }
-  if (raw.gates?.length) {
-    const met = raw.gates.filter((g) => g.status !== "not_met").length;
-    out.push("", `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, "", gatesTable(raw.gates));
-  }
-  const main = shown.filter((p) => p.severity !== "nit");
-  const nits = shown.filter((p) => p.severity === "nit");
-  if (main.length)
-    out.push("", table(main, f));
-  for (const p of placed.filter((p) => !p.inline && p.suggestion)) {
-    out.push("", details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion)));
-  }
-  if (nits.length)
-    out.push("", details(plural(nits.length, "nit"), table(nits, f)));
-  if (f.advisories)
-    out.push("", `**Draft advisories:** ${f.advisories}`);
-  if (fixed.length)
-    out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
-  if (f.skipped)
-    out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
-  if (raw.walkthrough?.areas.length)
-    out.push("", walkthrough(raw.walkthrough));
-  if (review.claim) {
-    out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
-
-`)));
-  }
-  out.push("", footer(f));
-  const state = {
-    sha: f.sha,
-    findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title }))
-  };
-  return `${out.join(`
-`).slice(0, 60000)}
-${stateLine(state)}`;
-}
-function redact(text, secrets) {
-  return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join("***"), text);
-}
-function unposted(placed, reviewComments, bot) {
-  const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
-  return placed.filter((p) => p.inline && !posted.has(p.fp));
-}
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as DQ } from "node:module";
@@ -58353,6 +57817,330 @@ Yh();
 qe();
 qe();
 
+// src/utils/failure.util.ts
+class ShaftFailure extends Error {
+  code;
+  url;
+  constructor(code, message, url) {
+    super(message);
+    this.code = code;
+    this.url = url;
+  }
+}
+var codeUrl = (code) => `${CODES_URL}#${encodeURIComponent(code)}`;
+var noticeText = (reason, code) => code ? `${reason} See ${codeUrl(code)}` : reason;
+function failureMarkdown(f) {
+  const alt = f.message.replace(/[[\]\r\n]+/g, " ");
+  const card = `[![${alt}](${ERROR_CARDS_URL}/${encodeURIComponent(f.code)}.svg)](${codeUrl(f.code)})`;
+  return [card, f.message, f.url && `<${f.url}>`].filter(Boolean).join(`
+
+`);
+}
+
+// src/utils/render.util.ts
+import { createHash } from "node:crypto";
+
+// src/utils/tokens.util.ts
+var CACHE_WEIGHT = { read: 0.1, write: 1.25 };
+var billedTokens = (t) => Math.round(t.input + t.output + CACHE_WEIGHT.write * t.cache_write + CACHE_WEIGHT.read * t.cache_read);
+
+// src/utils/render.util.ts
+var SUMMARY_MARKER = "<!-- shaft:summary -->";
+var VERDICTS = ["blocking", "needs-changes", "looks-good"];
+var SEVERITIES = ["blocking", "should-fix", "nit"];
+var STEPS = ["correctness", "breakage", "standards", "tests", "docs", "security", "rules"];
+var TYPES = ["bug-fix", "feature", "refactor", "docs", "chore", "mixed"];
+var WALKTHROUGH_MAX = { areas: 8, files: 20, diagram: 3000 };
+var GATE_STATUSES = ["met", "not_met", "not_applicable"];
+var GATES_MAX = 10;
+function diffLines(patch, addedOnly = false) {
+  const lines = new Map;
+  let right = 0;
+  for (const l of patch?.split(`
+`) ?? []) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(l);
+    if (hunk)
+      right = Number(hunk[1]);
+    else if (l.startsWith("+") || l.startsWith(" ")) {
+      if (!addedOnly || l.startsWith("+"))
+        lines.set(right, l.slice(1));
+      right++;
+    }
+  }
+  return lines;
+}
+function oldLines(patch) {
+  const lines = new Map;
+  for (const m of patch?.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)/gm) ?? []) {
+    const start = Number(m[1]);
+    for (let n = start;n < start + Number(m[2] ?? 1); n++)
+      lines.set(n, Number(m[3]));
+  }
+  return lines;
+}
+var removedLines = (patch) => (patch ?? "").split(`
+`).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
+function fingerprint(f, code = "") {
+  return createHash("sha256").update(`${f.file}
+${f.title.trim().toLowerCase()}
+${code.replace(/\s+/g, " ").trim()}`).digest("hex").slice(0, 6);
+}
+function place(findings, files, nits) {
+  const byFile = new Map(files.map((f) => [f.filename, diffLines(f.patch)]));
+  return findings.filter((f) => nits !== "off" || f.severity !== "nit").map((f) => {
+    const lines = byFile.get(f.file);
+    const end = Math.max(f.end_line ?? f.line, f.line);
+    let inDiff = !!lines;
+    for (let n = f.line;inDiff && n <= end; n++)
+      inDiff = lines.has(n);
+    return { ...f, fp: fingerprint(f, lines?.get(f.line)), inline: inDiff && (f.severity !== "nit" || nits === "inline") };
+  });
+}
+var SEVERITY_LABEL = { blocking: "Blocking", "should-fix": "Should fix", nit: "Nit" };
+var SEVERITY_DOT = { blocking: "\uD83D\uDD34", "should-fix": "\uD83D\uDFE1", nit: "⚪" };
+var VERDICT_LABEL = { blocking: "Blocking", "needs-changes": "Needs changes", "looks-good": "Looks good" };
+var VERDICT_ALERT = { blocking: "CAUTION", "needs-changes": "WARNING", "looks-good": "TIP" };
+var statusCard = (status, label) => `![${label}](${STATUS_CARDS_URL}/${status}.svg)`;
+var CHECK_LABEL = {
+  correctness: "Correctness",
+  breakage: "Breakage",
+  standards: "Standards",
+  tests: "Tests",
+  docs: "Docs",
+  security: "Security",
+  rules: "\uD83D\uDCCC Your checks"
+};
+var loc = (f) => `${f.file}:${f.line}${f.end_line && f.end_line > f.line ? `-${f.end_line}` : ""}`;
+var where = (f) => `\`${loc(f)}\``;
+var fence = (s, lang = "") => `\`\`\`${lang}
+${s.replace(/\n$/, "")}
+\`\`\``;
+var cell = (s) => s.replace(/\|/g, "\\|").replace(/\s*[\r\n]+\s*/g, " ");
+var html = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+var prose = (s) => s.replace(/<!--/g, "&lt;!--").replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, "").replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, "");
+var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+function inlineBody(f) {
+  const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
+  if (f.suggestion)
+    parts.push(fence(f.suggestion, "suggestion"));
+  return `${parts.join(`
+
+`)}
+
+<!-- shaft:finding ${f.fp} -->`;
+}
+function stateLine(state) {
+  return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
+}
+function parseState(body) {
+  const m = body && /(?:^|\n)<!-- shaft:state ([^\n]*) -->\s*$/.exec(body);
+  if (!m)
+    return;
+  try {
+    return JSON.parse(m[1]);
+  } catch {
+    return;
+  }
+}
+function workflowEditUrl(workflowRef, defaultBranch) {
+  const m = /^([^/]+\/[^/]+)\/(.+)@(.+)$/.exec(workflowRef ?? "");
+  const branch = m?.[3].startsWith("refs/heads/") ? m[3].slice("refs/heads/".length) : defaultBranch;
+  return m && branch ? `https://github.com/${m[1]}/edit/${encodeURI(`${branch}/${m[2]}`)}` : undefined;
+}
+var formatTokens = (n) => n < 1000 ? String(n) : n < 1e6 ? `${Math.round(n / 1000)}k` : `${+(n / 1e6).toFixed(1)}M`;
+function modelName(id) {
+  const m = /^claude-(opus|sonnet|haiku)-(\d+(?:-\d)?)(?:-\d{8})?$/.exec(id);
+  return m ? `Claude ${m[1].charAt(0).toUpperCase()}${m[1].slice(1)} ${m[2].replace("-", ".")}` : id;
+}
+var modelCell = (id) => modelName(id) === id ? `\`${id}\`` : `${modelName(id)} (\`${id}\`)`;
+function footer(f) {
+  const t = f.tokens;
+  const total = t && t.input + t.output + t.cache_read + t.cache_write;
+  const cost = f.costUsd === undefined ? "" : `$${f.costUsd.toFixed(2)}`;
+  const head = f.models ? `${modelName(f.models.main)}${f.effort ? `, ${f.effort} effort` : ""}` : "no model call";
+  const tail = [t && [`${formatTokens(total)} tokens`, cost].filter(Boolean).join(" · "), f.lines !== undefined && plural(f.lines, "line")].filter(Boolean).join(", ");
+  const ran = f.checklists?.filter((c) => !c.skip).map((c) => c.name) ?? [];
+  const notRun = f.checklists?.filter((c) => c.skip).map((c) => `${c.name} (${c.skip})`) ?? [];
+  const ref = process.env.GITHUB_ACTION_REF;
+  const rows = [
+    ["Axon Shaft", f.dashboardRunUrl ? `[Run page](${f.dashboardRunUrl})` : `[Dashboard](${DASHBOARD_URL})`],
+    ["Logs", f.runUrl && `[Actions run](${f.runUrl})`],
+    ["Action", `v${ACTION_VERSION}${ref ? ` at \`${ref}\`` : ""}`],
+    ["Model", f.models ? modelCell(f.models.main) : "No model call"],
+    ["Fallback", f.models?.fellBackFrom && `The plan can't use \`${f.models.fellBackFrom}\`, so the run used the model above`],
+    ["Subagents", f.models?.subagents.map(modelCell).join(", ")],
+    ["Effort", f.effort],
+    ["Why this model", f.reason],
+    ["Turn limit", f.maxTurns],
+    ["Changed lines", f.lines],
+    ["Changed files", f.files],
+    ["Skipped by `skip`", f.skipped && plural(f.skipped, "file")],
+    ["Checklists run", ran.join(", ")],
+    ["Checklists not run", notRun.join(", ")],
+    ["Missing permissions", f.missingPermissions?.map((p) => `\`${p.name}\` (${p.wanted}${p.granted ? `, approved ${p.granted}` : ""})`).join(", ")],
+    ["Input", t && formatTokens(t.input)],
+    ["Output", t && formatTokens(t.output)],
+    ["Cache read", t && formatTokens(t.cache_read)],
+    ["Cache write", t && formatTokens(t.cache_write)],
+    ["Total", t && formatTokens(total)],
+    ["Billed, cache-weighted", t && `≈${formatTokens(billedTokens(t))}`],
+    ["Cost", cost],
+    ["Reviewed commit", `[\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`]
+  ];
+  const table = ["| | |", "|---|---|", ...rows.filter(([, v]) => v !== undefined && v !== "" && v !== 0).map(([k, v]) => `| ${k} | ${cell(String(v))} |`)];
+  const note = t ? ["", `Billed counts a cache read as ${CACHE_WEIGHT.read} of an input token and a cache write as ${CACHE_WEIGHT.write}, so it can be higher than the total when a run writes a lot of cache.`] : [];
+  return details(`<sub>${[head, tail].filter(Boolean).join(" · ")}</sub>`, [...table, ...note].join(`
+`));
+}
+var chip = (text) => `<kbd>${text}</kbd>`;
+var CHECK_MARK = { failed: "❌", warned: "⚠️", passed: "✅", not_checked: "⬜", off: "➖" };
+var stateChip = (c) => chip(`${CHECK_MARK[c.state]} ${c.label}`);
+function checkStates(review, placed, checks, checklists) {
+  if (checklists) {
+    return checklists.map(({ key, name, skip }) => {
+      const found = placed.filter((p) => p.step === key);
+      const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : !skip && review.checked.includes(key) ? "passed" : "not_checked";
+      return { key, label: name, state, ...skip && { reason: skip } };
+    });
+  }
+  return STEPS.flatMap((key) => {
+    const found = placed.filter((p) => p.step === key);
+    if (key === "rules" && !found.length)
+      return [];
+    const state = found.some((p) => p.severity === "blocking") ? "failed" : found.length ? "warned" : checks && !checks.includes(key) ? "off" : review.checked.includes(key) ? "passed" : "not_checked";
+    return [{ key, label: CHECK_LABEL[key], state }];
+  });
+}
+function card(review, placed, fixed, f) {
+  const n = (s) => placed.filter((p) => p.severity === s).length;
+  const countChips = [
+    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
+    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
+    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
+    !placed.length && chip("✅ No findings"),
+    fixed && chip(`✅ ${fixed} fixed`)
+  ].filter(Boolean);
+  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
+  const headline = html(review.headline).split(/\r?\n/);
+  const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
+  const alert = VERDICT_ALERT[review.verdict];
+  return [
+    `> [!${alert}]`,
+    `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
+    ...headline.map((l) => `> ${l}`),
+    ">",
+    `> **Findings** &nbsp; ${countChips.join(" ")}`,
+    ">",
+    `> **Checks** &nbsp; ${checkChips.join(" ")}`,
+    ">",
+    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
+  ].join(`
+`);
+}
+function table(rows, f) {
+  const link = (p) => {
+    const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : "";
+    return `[${where(p)}](https://github.com/${f.repo}/blob/${f.sha}/${encodeURI(p.file)}#L${p.line}${end})`;
+  };
+  return [
+    "| Severity | Where | Finding | Details |",
+    "|---|---|---|---|",
+    ...rows.map((p) => `| ${SEVERITY_DOT[p.severity]} ${SEVERITY_LABEL[p.severity]} | ${cell(link(p))} | ${cell(p.url ? `[${p.title}](${p.url})` : p.title)} | ${p.inline ? "inline" : cell(p.body)} |`)
+  ].join(`
+`);
+}
+var findingsTable = (found, f) => table(found.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) })), f);
+var details = (summary, body) => `<details><summary>${summary}</summary>
+
+${body}
+
+</details>`;
+var GATE_MARK = { met: "✓", not_met: "✗", not_applicable: "–" };
+function gatesTable(gates) {
+  const rows = gates.map((g) => `| ${GATE_MARK[g.status]} | ${cell(prose(g.gate))} | ${cell(prose(g.reason))} |`);
+  return ["| | Gate | Why |", "|---|---|---|", ...rows].join(`
+`);
+}
+function walkthrough(w) {
+  const rows = w.areas.map((a) => `| ${cell(prose(a.name))} | ${a.files.map((f) => `\`${cell(f.replace(/`/g, ""))}\``).join("<br>")} | ${cell(prose(a.summary))} |`);
+  const diagram = w.diagram ? ["", fence(prose(w.diagram), "mermaid")] : [];
+  return details("Walkthrough", ["| Area | Files | What changed |", "|---|---|---|", ...rows, ...diagram].join(`
+`));
+}
+function startSummary(sha, prior) {
+  return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
+`);
+}
+function idleSummary(states, prior, f) {
+  return [
+    SUMMARY_MARKER,
+    `No checklist ran on \`${f.sha.slice(0, 7)}\`, so no model was called. Each checklist's check run says why.`,
+    "",
+    states.map(stateChip).join(" "),
+    "",
+    footer(f),
+    ...prior ? [stateLine(prior)] : []
+  ].join(`
+`);
+}
+function failedSummary(failure, prior) {
+  return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ""].filter(Boolean).join(`
+`);
+}
+function renderSummary(raw, placed, prior, f) {
+  const { headline, claim, impact, scope, not_checked } = raw;
+  const review = { ...raw, headline: prose(headline), claim: prose(claim), impact: prose(impact), scope: prose(scope), not_checked: prose(not_checked) };
+  const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
+  const fixed = prior?.findings.filter((p) => review.resolved.includes(p.fp)) ?? [];
+  const out = [SUMMARY_MARKER, card(review, shown, fixed.length, f)];
+  if (f.latestAction) {
+    const { version, url } = f.latestAction;
+    const links = [f.workflowEditUrl && `[Update the workflow](${f.workflowEditUrl})`, `[Update from the dashboard](${f.dashboardRunUrl ?? DASHBOARD_URL})`];
+    out.push("", "> [!NOTE]", `> Axon Shaft [v${version}](${url}) is out. This run used v${ACTION_VERSION}.`, `> ${links.filter(Boolean).join(" · ")}`);
+  }
+  if (raw.gates?.length) {
+    const met = raw.gates.filter((g) => g.status !== "not_met").length;
+    out.push("", `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, "", gatesTable(raw.gates));
+  }
+  const main = shown.filter((p) => p.severity !== "nit");
+  const nits = shown.filter((p) => p.severity === "nit");
+  if (main.length)
+    out.push("", table(main, f));
+  for (const p of placed.filter((p) => !p.inline && p.suggestion)) {
+    out.push("", details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion)));
+  }
+  if (nits.length)
+    out.push("", details(plural(nits.length, "nit"), table(nits, f)));
+  if (f.advisories)
+    out.push("", `**Draft advisories:** ${f.advisories}`);
+  if (fixed.length)
+    out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
+  if (f.skipped)
+    out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
+  if (raw.walkthrough?.areas.length)
+    out.push("", walkthrough(raw.walkthrough));
+  if (review.claim) {
+    out.push("", details("What this PR does", [`**Claim:** ${review.claim}`, `**Impact:** ${review.impact}`, `**Scope:** ${review.scope}`, `**Not checked:** ${review.not_checked}`].join(`
+
+`)));
+  }
+  out.push("", footer(f));
+  const state = {
+    sha: f.sha,
+    findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title }))
+  };
+  return `${out.join(`
+`).slice(0, 60000)}
+${stateLine(state)}`;
+}
+function redact(text, secrets) {
+  return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join("***"), text);
+}
+function unposted(placed, reviewComments, bot) {
+  const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
+  return placed.filter((p) => p.inline && !posted.has(p.fp));
+}
+
 // src/consts/env.const.ts
 var ENV_ALLOW = [
   "PATH",
@@ -58380,21 +58168,21 @@ function runnerEnv(names = []) {
 }
 
 // src/utils/tool-guard.util.ts
-import { realpathSync as realpathSync3 } from "node:fs";
+import { realpathSync as realpathSync2 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep as sep4 } from "node:path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join as join2, relative, resolve as resolve2, sep as sep3 } from "node:path";
 function real(path) {
   try {
-    return realpathSync3(path);
+    return realpathSync2(path);
   } catch {
     const up = dirname2(path);
-    return up === path ? path : join3(real(up), basename(path));
+    return up === path ? path : join2(real(up), basename(path));
   }
 }
 var DENIED = ["/proc", "/sys", process.env.RUNNER_TEMP, process.env.RUNNER_TOOL_CACHE].filter((d) => !!d);
 var under = (path, dir) => {
   const rel = relative(dir, path);
-  return rel === "" || rel.split(sep4)[0] !== ".." && !isAbsolute2(rel);
+  return rel === "" || rel.split(sep3)[0] !== ".." && !isAbsolute2(rel);
 };
 function insideCheckout(path, cwd) {
   const root = real(resolve2(cwd));
@@ -58446,17 +58234,17 @@ function toolDenial(tool, input, cwd, commands) {
 }
 
 // src/services/sandbox.service.ts
-import { execFileSync as execFileSync2 } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { accessSync, constants as constants4, existsSync as existsSync4, statSync as statSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { isAbsolute as isAbsolute3, join as join4, relative as relative2 } from "node:path";
+import { isAbsolute as isAbsolute3, join as join3, relative as relative2 } from "node:path";
 var BWRAP_MIN = [0, 6];
 var under2 = (path, dir) => !relative2(dir, path).startsWith("..") && !isAbsolute3(relative2(dir, path));
 var bin = { bwrap: "bwrap", env: "env", pkill: "pkill" };
 function which2(name) {
   for (const dir of (process.env.PATH ?? "").split(":").filter((d) => isAbsolute3(d))) {
     try {
-      const file = join4(dir, name);
+      const file = join3(dir, name);
       accessSync(file, constants4.X_OK);
       if (statSync2(file).isFile())
         return file;
@@ -58503,17 +58291,17 @@ function sandboxArgs(cwd) {
     "/tmp"
   ];
 }
-var inSandbox = (cwd, file, args, o) => execFileSync2(bin.bwrap, [...sandboxArgs(cwd), "--", file, ...args], { ...o, cwd });
+var inSandbox = (cwd, file, args, o) => execFileSync(bin.bwrap, [...sandboxArgs(cwd), "--", file, ...args], { ...o, cwd });
 var sandboxPrefix = (cwd) => [bin.env, "-u", "ANTHROPIC_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", bin.bwrap, ...sandboxArgs(cwd), "--"].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
 function endSandboxes() {
   try {
-    execFileSync2(bin.pkill, ["-KILL", "-u", String(process.getuid?.()), "-x", "bwrap"], { stdio: "ignore" });
+    execFileSync(bin.pkill, ["-KILL", "-u", String(process.getuid?.()), "-x", "bwrap"], { stdio: "ignore" });
   } catch {}
 }
 function prepareSandbox(cwd) {
   if (process.platform !== "linux")
     return `A change needs a Linux runner, for its sandbox. This one runs ${process.platform}.`;
-  const run = (file, args) => execFileSync2(file, args, { encoding: "utf8", stdio: "pipe", timeout: 5 * 60000 });
+  const run = (file, args) => execFileSync(file, args, { encoding: "utf8", stdio: "pipe", timeout: 5 * 60000 });
   try {
     if (!which2("bwrap")) {
       info("Installing bubblewrap, for the sandbox the change runs in");
@@ -58538,12 +58326,12 @@ function prepareSandbox(cwd) {
 }
 
 // src/services/claude-binary.service.ts
-import { execFileSync as execFileSync3 } from "node:child_process";
+import { execFileSync as execFileSync2 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, rmSync as rmSync2 } from "node:fs";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync3, rmSync as rmSync2 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { tmpdir } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join4 } from "node:path";
 
 // src/consts/claude-binary.const.ts
 var CLAUDE_BINARIES = {
@@ -58569,17 +58357,17 @@ function claudeBinary() {
   const integrity = CLAUDE_BINARIES[spec];
   if (!integrity)
     throw new ShaftFailure("claude_binary_unverified", `This release records no sha512 for ${spec}, so Claude Code can't be installed on this runner's platform.`);
-  const dir = join5(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
+  const dir = join4(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
   rmSync2(dir, { recursive: true, force: true });
   mkdirSync2(dir, { recursive: true });
   info(`Installing ${spec}`);
-  const [{ filename }] = JSON.parse(execFileSync3("npm", ["pack", "--json", "--pack-destination", dir, spec], { encoding: "utf8" }));
-  const tarball = join5(dir, filename);
-  if (`sha512-${createHash2("sha512").update(readFileSync4(tarball)).digest("base64")}` !== integrity) {
+  const [{ filename }] = JSON.parse(execFileSync2("npm", ["pack", "--json", "--pack-destination", dir, spec], { encoding: "utf8" }));
+  const tarball = join4(dir, filename);
+  if (`sha512-${createHash2("sha512").update(readFileSync3(tarball)).digest("base64")}` !== integrity) {
     throw new ShaftFailure("claude_binary_unverified", `The ${spec} tarball npm downloaded doesn't match the sha512 this release records, so it wasn't unpacked or run. Check the runner's npm registry.`);
   }
-  execFileSync3("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, tarball], { stdio: "inherit" });
-  return join5(dir, "node_modules", file);
+  execFileSync2("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, tarball], { stdio: "inherit" });
+  return join4(dir, "node_modules", file);
 }
 
 // src/services/agent.service.ts
@@ -58778,8 +58566,11 @@ async function once(prompt, o, schema, controller) {
   }
   return result;
 }
+var running = new Set;
+var stopAgents = () => running.forEach((c) => c.abort());
 async function runAgent(prompt, o, format) {
   const controller = new AbortController;
+  running.add(controller);
   const timer = setTimeout(() => controller.abort(), o.timeoutMinutes * 60000);
   try {
     for (let attempt = 1;; attempt++) {
@@ -58808,7 +58599,283 @@ async function runAgent(prompt, o, format) {
     throw new ShaftFailure("review_failed", `The ${format.name} failed: ${why}. Rerun the job; the job log has the details.`);
   } finally {
     clearTimeout(timer);
+    running.delete(controller);
   }
+}
+
+// src/services/api.service.ts
+async function post(path, body) {
+  if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
+    throw new ShaftFailure("missing_id_token", "Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.");
+  }
+  const oidc = await getIDToken(API_AUDIENCE);
+  try {
+    return await fetch(`${API_URL}${path}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${oidc}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000)
+    });
+  } catch (e) {
+    throw new ShaftFailure("api_unreachable", `Couldn't reach the Axon Shaft API at ${API_URL} (${e.message}). Rerun the job in a few minutes.`);
+  }
+}
+async function answer(res) {
+  const body = await res.json().catch(() => {
+    return;
+  });
+  if (res.ok)
+    return body;
+  if (typeof body?.error === "string" && typeof body.message === "string") {
+    throw new ShaftFailure(body.error, body.message, typeof body.url === "string" ? body.url : undefined);
+  }
+  throw new ShaftFailure("api_error", `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
+}
+async function callApi(path, body) {
+  return answer(await post(path, body));
+}
+async function fetchGrant(request) {
+  const grant = await answer(await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }));
+  if (grant?.run === false) {
+    if (typeof grant.github_token === "string")
+      setSecret(grant.github_token);
+    return grant;
+  }
+  if (typeof grant?.github_token !== "string" || typeof grant.claude_token?.value !== "string" || typeof grant.job?.prompt?.template !== "string" || !Array.isArray(grant.job.prompt.passes)) {
+    throw new ShaftFailure("api_error", "The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.");
+  }
+  setSecret(grant.github_token);
+  setSecret(grant.claude_token.value);
+  return grant;
+}
+async function fetchPushToken() {
+  const grant = await answer(await post("/v1/push-token", {}));
+  if (typeof grant?.push_token !== "string" || typeof grant.branch !== "string") {
+    throw new ShaftFailure("api_error", "The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.");
+  }
+  setSecret(grant.push_token);
+  return grant;
+}
+async function reportRun(summary) {
+  try {
+    const res = await post("/v1/runs", summary);
+    if (!res.ok)
+      throw new Error(`the API answered ${res.status}`);
+  } catch (e) {
+    warning(`Couldn't record the run on the Axon Shaft API: ${e.message}`);
+  }
+}
+
+// src/services/checkout.service.ts
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { globSync, lstatSync as lstatSync2, readFileSync as readFileSync4, realpathSync as realpathSync3 } from "node:fs";
+import { join as join5, sep as sep4 } from "node:path";
+function checkoutHead(cwd, number, token) {
+  const git = (...args) => execFileSync3("git", args, { cwd, encoding: "utf8" }).trim();
+  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+  setSecret(basic);
+  const depth = git("rev-parse", "--is-shallow-repository") === "true" ? ["--depth=1"] : [];
+  git("-c", `http.extraheader=AUTHORIZATION: basic ${basic}`, "fetch", "--no-tags", ...depth, "origin", `refs/pull/${number}/head`);
+  git("checkout", "--quiet", "--detach", "FETCH_HEAD");
+}
+var READ_MAX = 1e6;
+function checkoutFiles(cwd) {
+  const root = realpathSync3(cwd) + sep4;
+  return {
+    find: (globs) => globSync(globs, { cwd, exclude: (p) => /(^|\/)(node_modules|\.git)$/.test(p) }),
+    read: (path, max = READ_MAX) => {
+      try {
+        const full = join5(cwd, path);
+        const stat = lstatSync2(full);
+        return stat.isFile() && stat.size <= max && realpathSync3(full).startsWith(root) ? readFileSync4(full, "utf8") : undefined;
+      } catch {
+        return;
+      }
+    }
+  };
+}
+function savedCredentials(cwd) {
+  try {
+    return /extraheader|credential|:\/\/[^\s/@]*:[^\s/@]+@/i.test(readFileSync4(join5(cwd, ".git", "config"), "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+// src/services/finalize.service.ts
+var STATE = "shaft";
+var open2 = { checks: {} };
+var secrets = [];
+var closing;
+var save = () => saveState(STATE, JSON.stringify(open2));
+function trackRun(o) {
+  const { secrets: s, ...rest } = o;
+  secrets = s;
+  Object.assign(open2, rest);
+  save();
+}
+function trackCheck(id, name) {
+  if (name)
+    open2.checks[id] = name;
+  else
+    delete open2.checks[id];
+  save();
+}
+function trackComment(id, reviewing, prior) {
+  open2.comment = reviewing ? { id, prior } : undefined;
+  save();
+}
+function finalize(e) {
+  return closing ??= close(e).catch((err) => warning(`Couldn't close what the run left open: ${err.message}`));
+}
+async function close(e) {
+  const { token, owner, repo, runUrl, started, comment } = open2;
+  const report = e.kind === "cancelled" && started !== undefined && !open2.finalized;
+  open2.finalized = true;
+  save();
+  const failure = e.kind === "cancelled" ? new ShaftFailure("cancelled", e.message, runUrl) : e.kind === "failed" && e.error instanceof ShaftFailure ? e.error : new ShaftFailure("review_failed", e.kind === "failed" ? String(e.error instanceof Error ? e.error.message : e.error) : "The review ended without posting its result. Rerun the job.", runUrl);
+  const end = e.kind === "cancelled" ? { conclusion: "cancelled", title: "Cancelled", summary: e.message } : e.kind === "failed" ? { conclusion: "failure", title: "The review failed", summary: failureMarkdown(failure) } : { conclusion: "neutral", title: "Finished without a result", summary: "Axon Shaft finished without a result for this check." };
+  const clean = (s) => redact(s, secrets);
+  const jobs = [];
+  if (token && owner && repo && (comment || Object.keys(open2.checks).length)) {
+    const gh = getOctokit(token);
+    for (const [id, name] of Object.entries(open2.checks)) {
+      if (e.kind === "finished")
+        warning(`The ${name} check was still in progress when the run finished, so it's closed as neutral.`);
+      const output = { title: end.title, summary: clean(end.summary) };
+      jobs.push(gh.rest.checks.update({ owner, repo, check_run_id: Number(id), status: "completed", conclusion: end.conclusion, output }).then(() => trackCheck(Number(id))));
+    }
+    if (comment) {
+      const body = clean(failedSummary(failure, comment.prior));
+      jobs.push(gh.rest.issues.updateComment({ owner, repo, comment_id: comment.id, body }).then(() => trackComment(comment.id, false)));
+    }
+  }
+  if (report)
+    jobs.push(reportRun({ error: { code: "cancelled", message: clean(failure.message) }, duration_ms: Date.now() - started }));
+  for (const r of await Promise.allSettled(jobs)) {
+    if (r.status === "rejected")
+      warning(`Couldn't close what the run left open: ${r.reason.message}`);
+  }
+}
+
+// src/services/reaction.service.ts
+function triggerComment(eventName, payload) {
+  const id = payload.comment?.id;
+  if (typeof id !== "number" || eventName !== "issue_comment" && eventName !== "pull_request_review_comment")
+    return;
+  return { id, review: eventName === "pull_request_review_comment" };
+}
+var warn = (what) => (e) => {
+  warning(`Couldn't ${what} on the comment that started the run: ${e.message}`);
+  return;
+};
+async function add(r, content) {
+  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, content };
+  const { data } = await (r.comment.review ? r.octokit.rest.reactions.createForPullRequestReviewComment(req) : r.octokit.rest.reactions.createForIssueComment(req));
+  return data.id;
+}
+async function reactStart(octokit, event, dryRun) {
+  const comment = triggerComment(event.eventName, event.payload);
+  if (!comment)
+    return;
+  const r = { octokit, owner: event.repo.owner, repo: event.repo.repo, comment, dryRun };
+  if (dryRun) {
+    info("Would react \uD83D\uDC40 to the comment that started the run");
+    return r;
+  }
+  const id = await add(r, "eyes").catch(warn("add \uD83D\uDC40"));
+  return id === undefined ? undefined : { ...r, id };
+}
+async function reactEnd(r, done) {
+  const [content, emoji] = done ? ["rocket", "\uD83D\uDE80"] : ["confused", "\uD83D\uDE15"];
+  if (r.dryRun)
+    return info(`Would swap \uD83D\uDC40 for ${emoji} on the comment that started the run`);
+  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, reaction_id: r.id };
+  await (r.comment.review ? r.octokit.rest.reactions.deleteForPullRequestComment(req) : r.octokit.rest.reactions.deleteForIssueComment(req)).catch(warn("remove \uD83D\uDC40"));
+  await add(r, content).catch(warn(`add ${emoji}`));
+}
+
+// src/utils/auto-pick.util.ts
+import { matchesGlob } from "node:path";
+var DEFAULT_MAX_TURNS = 30;
+var TURNS_BY_LINES = [
+  [100, 12],
+  [500, 20]
+];
+var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
+var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
+var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
+var CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
+var COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
+var matches = (file, globs) => globs.some((g) => matchesGlob(file, g));
+function isSensitive(f) {
+  if (/(^|\/)package\.json$/.test(f.filename))
+    return f.patch === undefined || /ependencies"/.test(f.patch);
+  return SENSITIVE.test(f.filename);
+}
+function onlyComments(patch) {
+  if (!patch)
+    return false;
+  return patch.split(`
+`).filter((l) => /^[+-]/.test(l)).every((l) => {
+    const code = l.slice(1).trim();
+    return code === "" || COMMENT.test(code);
+  });
+}
+var isLight = (f) => DOCS.test(f.filename) || LOCKFILE.test(f.filename) || CONFIG.test(f.filename) || onlyComments(f.patch);
+function pick(input) {
+  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
+  const lines = files.reduce((n, f) => n + f.additions + f.deletions, 0);
+  const size = `${lines} lines`;
+  let row;
+  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
+  if (input.mode === "task")
+    row = { model: "opus", effort: "high", reason: "task" };
+  else if (input.mode === "reply")
+    row = { model: "sonnet", effort: "medium", reason: "question" };
+  else if (hot)
+    row = { model: "opus", effort: "high", reason: `${size}, touches ${hot.filename}` };
+  else if (input.depth === "deep")
+    row = { model: "opus", effort: "high", reason: `${size}, deep` };
+  else if (lines > 1000 || files.length > 30)
+    row = { model: "opus", effort: "medium", reason: `${size}, ${files.length} files` };
+  else if (files.length > 0 && files.every(isLight))
+    row = { model: "haiku", effort: "low", reason: `${size}, docs and config only` };
+  else
+    row = { model: "sonnet", effort: "medium", reason: size };
+  const autoModel = !input.model || input.model === "auto";
+  const model = autoModel ? row.model : input.model;
+  const sized = input.mode === "review" && input.depth !== "deep" && TURNS_BY_LINES.find(([below]) => lines < below)?.[1];
+  const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
+  return {
+    ...row,
+    reason: input.maxTurns === undefined && sized ? `${row.reason}, up to ${sized} turns` : row.reason,
+    maxTurns,
+    model,
+    effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
+    subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
+    autoModel
+  };
+}
+
+// src/utils/prompt.util.ts
+var MAX_DIFF = 200000;
+function diffText(files, focus) {
+  const diff = files.map((f) => `diff --git a/${f.filename} b/${f.filename} (${f.status}${matches(f.filename, focus) ? ", focus" : ""})
+${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
+`);
+  return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}
+(the diff is cut here; read the remaining files from the checkout)` : diff;
+}
+var trustedComments = (comments) => comments.filter((c) => c.trusted).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
+`);
+function fillSlots(template, slots) {
+  return template.replace(/\{\{(\w+)\}\}/g, (slot, name) => {
+    if (!Object.hasOwn(slots, name))
+      return slot;
+    const value = String(slots[name]);
+    return value.trim() ? value : "None.";
+  });
 }
 
 // src/consts/settings.const.ts
@@ -59454,7 +59521,7 @@ var KINDS = [
   ["an npm token", /\bnpm_[A-Za-z0-9]{36}\b/]
 ];
 var PLACEHOLDER = /(.)\1{5}|example/i;
-var secrets = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => KINDS.filter(([, format]) => {
+var secrets2 = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => KINDS.filter(([, format]) => {
   const m = format.exec(text);
   return m && !PLACEHOLDER.test(m[0]);
 }).map(([kind]) => ({
@@ -60177,7 +60244,7 @@ var nativeChanges = async ({ files, checkout, base }) => {
 };
 
 // src/services/prestep/prestep.service.ts
-var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, "code-quality": codeQuality };
+var SCRIPTS = { secrets: secrets2, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, "code-quality": codeQuality };
 var FACTS = {
   "deps-diff": depsDiffFacts,
   changeset,
@@ -60256,7 +60323,10 @@ async function postCheck(octokit, owner, repo, sha, c, clean) {
     ...c.detailsUrl ? { details_url: c.detailsUrl } : {},
     output: { title: c.title, summary: clean(c.summary) }
   };
-  return (c.id ? octokit.rest.checks.update({ ...run, check_run_id: c.id }) : octokit.rest.checks.create({ ...run, head_sha: sha })).then(({ data }) => data.id, (e) => {
+  return (c.id ? octokit.rest.checks.update({ ...run, check_run_id: c.id }) : octokit.rest.checks.create({ ...run, head_sha: sha })).then(({ data }) => {
+    trackCheck(data.id, c.conclusion ? undefined : c.name);
+    return data.id;
+  }, (e) => {
     warning(`Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`);
     return;
   });
@@ -60435,12 +60505,13 @@ async function postReview(ctx, o, canCheck, progress) {
   const { passes } = o.prompt;
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
-  const writeSummary = async (body) => {
+  const writeSummary = async (body, reviewing = false) => {
     if (o.dryRun)
       return;
     const req = { owner: ctx.owner, repo: ctx.repo, body: clean(body) };
     const { data } = summary ? await octokit.rest.issues.updateComment({ ...req, comment_id: summary.id }) : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
+    trackComment(data.id, reviewing, prior);
   };
   const postChecks = async (states, placed) => {
     if (!o.dryRun)
@@ -60502,7 +60573,7 @@ ${clean(body)}`);
     const prompt = modelled ? `${pack}
 ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
     if (summary)
-      await writeSummary(startSummary(sha, prior));
+      await writeSummary(startSummary(sha, prior), true);
     const model = /^[a-z]+$/.test(choice.model) ? choice.model[0].toUpperCase() + choice.model.slice(1) : choice.model;
     await progress("Review", `Reviewing with ${model}, effort ${choice.effort}`);
     try {
@@ -61110,6 +61181,8 @@ ${grant.comment}`);
     error: { code: e instanceof ShaftFailure ? e.code : "review_failed", message: redact(e instanceof Error ? e.message : String(e), secrets) },
     duration_ms: Date.now() - started
   });
+  const runUrl = `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`;
+  trackRun({ token: grant.github_token, owner, repo, runUrl, started, secrets });
   if (context2.eventName !== "pull_request")
     await step("Check out the pull request", async () => checkoutHead(cwd, r.number, grant.github_token));
   const { settings, job } = grant;
@@ -61129,7 +61202,7 @@ ${grant.comment}`);
     env: globs(settings.env),
     bot: APP_BOT,
     dryRun,
-    runUrl: `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`,
+    runUrl,
     dashboardRunUrl: grant.run_url,
     cwd
   };
@@ -61188,4 +61261,17 @@ async function fail(e) {
 function writeSummary(markdown) {
   return summary.addRaw(markdown).write().catch((w) => warning(`Couldn't write the job summary: ${w.message}`));
 }
-run().catch(fail).finally(() => reaction && reactEnd(reaction, done));
+var ending = { kind: "finished" };
+run().catch((e) => {
+  ending = { kind: "failed", error: e };
+  return fail(e);
+}).finally(() => Promise.all([finalize(ending), reaction && reactEnd(reaction, done)]));
+function cancel() {
+  const cleanup = Promise.all([finalize({ kind: "cancelled", message: "The workflow was cancelled before the review finished." }), reaction && reactEnd(reaction, false)]);
+  Promise.race([cleanup, new Promise((r) => setTimeout(r, 5000))]).finally(() => {
+    stopAgents();
+    process.exit(1);
+  });
+}
+process.once("SIGINT", cancel);
+process.once("SIGTERM", cancel);

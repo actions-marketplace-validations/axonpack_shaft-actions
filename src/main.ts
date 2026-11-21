@@ -1,9 +1,10 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
 import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
-import type { Tokens } from './services/agent.service';
+import { stopAgents, type Tokens } from './services/agent.service';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
+import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
 import { reviewPullRequest } from './services/review.service';
@@ -87,6 +88,8 @@ async function run(): Promise<void> {
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
       duration_ms: Date.now() - started,
     });
+  const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+  trackRun({ token: grant.github_token, owner, repo, runUrl, started, secrets });
   // On pull_request the checkout is the PR merged into its base; anywhere else it's the base branch.
   if (context.eventName !== 'pull_request') await step('Check out the pull request', async () => checkoutHead(cwd, r.number, grant.github_token));
 
@@ -109,7 +112,7 @@ async function run(): Promise<void> {
     env: globs(settings.env),
     bot: APP_BOT,
     dryRun,
-    runUrl: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+    runUrl,
     dashboardRunUrl: grant.run_url,
     cwd,
   };
@@ -176,6 +179,25 @@ function writeSummary(markdown: string): Promise<unknown> {
     .catch((w: Error) => core.warning(`Couldn't write the job summary: ${w.message}`));
 }
 
+let ending: Ending = { kind: 'finished' };
 run()
-  .catch(fail)
-  .finally(() => reaction && reactEnd(reaction, done));
+  .catch((e) => {
+    ending = { kind: 'failed', error: e };
+    return fail(e);
+  })
+  .finally(() => Promise.all([finalize(ending), reaction && reactEnd(reaction, done)]));
+
+/**
+ * A cancel (or the job's time limit) sends SIGINT, then SIGTERM 7.5 s later, then kills the process
+ * 2.5 s after that. The cleanup gets 5 s, then the session stops and the step exits; anything still
+ * open by then, the post step closes.
+ */
+function cancel(): void {
+  const cleanup = Promise.all([finalize({ kind: 'cancelled', message: 'The workflow was cancelled before the review finished.' }), reaction && reactEnd(reaction, false)]);
+  Promise.race([cleanup, new Promise((r) => setTimeout(r, 5000))]).finally(() => {
+    stopAgents();
+    process.exit(1);
+  });
+}
+process.once('SIGINT', cancel);
+process.once('SIGTERM', cancel);

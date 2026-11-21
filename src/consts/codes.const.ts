@@ -22,6 +22,10 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     kind: 'both',
     message: "A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out, the change touched `.github/`, or GitHub refused the push.",
   },
+  cancelled: {
+    kind: 'notice',
+    message: 'The workflow was cancelled before the review finished. Its check runs end as cancelled, and the summary comment shows this card in place of "Reviewing".',
+  },
   nothing_to_fix: { kind: 'notice', message: "A bare `/fix` had nothing to fix: the last review has no open findings, or there's no review yet." },
   self_hosted_unsupported: { kind: 'notice', message: 'A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran.' },
   credentials_in_checkout: {

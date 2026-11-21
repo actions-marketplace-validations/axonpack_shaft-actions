@@ -5,7 +5,7 @@ const warnings: string[] = [];
 beforeEach(() => {
   warnings.length = 0;
 });
-vi.doMock('@actions/core', () => ({ warning: (s: string) => warnings.push(s) }));
+vi.doMock('@actions/core', () => ({ warning: (s: string) => warnings.push(s), saveState: () => {} }));
 const { gateResults, gatesConclusion, postCategoryChecks, postCheck, postGatesCheck, progressSummary } = await import('../check-runs.service');
 
 const met: Gate = { gate: 'A migration has a rollback', status: 'met', reason: 'It has one.' };
