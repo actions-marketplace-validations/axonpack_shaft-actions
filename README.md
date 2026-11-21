@@ -233,20 +233,22 @@ What counts as a command:
 
 Everything else is set on the dashboard:
 
-| Setting | What it does |
-|---|---|
-| Model | The model the review runs on, or `auto`. |
-| Effort | The effort, or `auto`. |
-| Depth | A deep review adds subagents for the correctness, breakage and security checks. |
-| Nits | How nits are shown, including whether they get inline comments. |
-| Turn limit | The most turns the model may take. Left unset, the action picks it from the diff's size. See [the turn limit by size](#the-turn-limit-by-size). |
-| Time limit | How long the review may run. |
-| Review rules | The repo's own rules for the review. |
-| `skip` globs | Files to leave out of the review. |
-| `focus` globs | Files that get a closer look. |
-| Environment variables | Extra runner variables the model's environment gets, by name. See [what the review can do](#what-the-review-can-do). |
-| Merge gates | Up to 10 requirements every pull request must meet, in plain words. See [the merge gates check](#the-merge-gates-check). |
-| Private draft advisories | Open a private draft security advisory for each blocking security finding: off, or on public repos. See [private draft advisories](#private-draft-advisories). |
+| Setting | Default | What it does |
+|---|---|---|
+| Model | `auto` | The model the review runs on, or `auto`. |
+| Effort | `auto` | The effort, or `auto`. |
+| Depth | Standard | A deep review adds subagents for the correctness, breakage and security checks. |
+| Nits | In the summary | How nits are shown, including whether they get inline comments. |
+| Turn limit | 30, or less for a small diff | The most turns the model may take. Left unset, the action picks it from the diff's size. See [the turn limit by size](#the-turn-limit-by-size). |
+| Time limit | 15 minutes | How long the review may run. |
+| Review rules | None | The repo's own rules for the review. |
+| `skip` globs | `**/*.lock`, `**/package-lock.json`, `**/pnpm-lock.yaml`, `**/dist/**`, `**/*.min.js`, `**/*.snap` | Files to leave out of the review. |
+| `focus` globs | None | Files that get a closer look. |
+| Environment variables | None | Extra runner variables the model's environment gets, by name. See [what the review can do](#what-the-review-can-do). |
+| Merge gates | None | Up to 10 requirements every pull request must meet, in plain words. See [the merge gates check](#the-merge-gates-check). |
+| Push mode | Restricted | Where `/fix` and `/axonshaft` may push: Disabled, Restricted (only the pull request's own branch) or Enabled (any branch but the default one). See [what a change is allowed to do](#what-a-change-is-allowed-to-do). |
+| Monthly spending cap | No cap | The most a project or account spends in a month, in US dollars. At the cap nothing runs until the 1st (UTC), and the run ends with a `spending_cap` notice. |
+| Private draft advisories | On public repos | Open a private draft security advisory for each blocking security finding: off, or on public repos. See [private draft advisories](#private-draft-advisories). |
 
 ### Model and effort on auto
 
@@ -354,7 +356,7 @@ The action also posts one check run per review check on the reviewed commit, nam
 
 - `Axon Shaft / rules` is posted only when the repo's own checks found something, as the card's chip is.
 - Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
-- The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run once its matching update ships. Until then it asks only when the project has merge gates, so on a project without gates the job log warns once and the review posts as usual.
+- The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run. Until an admin approves Checks (write) on the installation, the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.
 
 When the job has [checklists](#checklists), each checklist gets its own check run instead, named after its key in the job's order, such as `Axon Shaft / access-control`, or `Axon Shaft / own-1` for the project's own checklists. A checklist that didn't run is `skipped`, and its title says why: "No matching files changed", or, for a script checklist, that this version of the action doesn't have its script yet.
