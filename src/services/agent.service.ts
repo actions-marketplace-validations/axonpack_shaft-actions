@@ -247,12 +247,27 @@ export function toolTarget(input: Record<string, unknown>): string {
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
+/**
+ * One short log line for a Bash call that failed: the command, and the first and last lines of what
+ * it printed ("Exit code 127", "bwrap: execvp socat: No such file or directory"), so what a reply
+ * claims about the runner can be checked. The runner masks every secret the run registered.
+ */
+export function bashFailure(command: string, content: unknown): string {
+  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((c) => (typeof c?.text === 'string' ? c.text : '')).join('\n') : '';
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const said = lines.length > 1 ? `${lines[0]}, ${lines.at(-1)}` : (lines[0] ?? 'no output');
+  const line = `Bash failed: ${command}: ${said}`;
+  return line.length > 300 ? `${line.slice(0, 299)}…` : line;
+}
+
 async function once(prompt: string, o: AgentOptions, schema: Record<string, unknown>, controller: AbortController): Promise<SDKResultMessage | undefined> {
   const deep = !!o.subagentModel && !!o.passes?.length;
   const edit = !!o.commands;
   let result: SDKResultMessage | undefined;
   // A deep pass's own tool calls name the pass, by the call that started it.
   const passes = new Map<string, string>();
+  // Each Bash call's command, by its ID, for the log line when it fails.
+  const bash = new Map<string, string>();
   for await (const m of query({
     prompt,
     options: {
@@ -279,11 +294,15 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
     },
   })) {
     if (m.type === 'result') result = m;
+    if (m.type === 'user' && Array.isArray(m.message.content)) {
+      for (const b of m.message.content) if (b.type === 'tool_result' && b.is_error && bash.has(b.tool_use_id)) core.info(bashFailure(bash.get(b.tool_use_id)!, b.content));
+    }
     if (m.type !== 'assistant') continue;
     for (const b of m.message.content) {
       if (b.type !== 'tool_use') continue;
       const input = (b.input ?? {}) as Record<string, unknown>;
       if (typeof input.subagent_type === 'string') passes.set(b.id, input.subagent_type);
+      if (b.name === 'Bash') bash.set(b.id, toolTarget(input));
       const who = m.parent_tool_use_id ? `[${passes.get(m.parent_tool_use_id) ?? 'pass'}] ` : '';
       core.info(`${who}${b.name} ${toolTarget(input)}`);
     }

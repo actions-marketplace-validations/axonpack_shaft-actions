@@ -58533,11 +58533,21 @@ function toolTarget(input) {
   const line = String(v).replace(/\s+/g, " ").trim();
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
+function bashFailure(command, content) {
+  const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((c) => typeof c?.text === "string" ? c.text : "").join(`
+`) : "";
+  const lines = text.split(`
+`).map((l) => l.trim()).filter(Boolean);
+  const said = lines.length > 1 ? `${lines[0]}, ${lines.at(-1)}` : lines[0] ?? "no output";
+  const line = `Bash failed: ${command}: ${said}`;
+  return line.length > 300 ? `${line.slice(0, 299)}…` : line;
+}
 async function once(prompt, o, schema, controller) {
   const deep = !!o.subagentModel && !!o.passes?.length;
   const edit = !!o.commands;
   let result;
   const passes = new Map;
+  const bash = new Map;
   for await (const m of nrt({
     prompt,
     options: {
@@ -58562,6 +58572,11 @@ async function once(prompt, o, schema, controller) {
   })) {
     if (m.type === "result")
       result = m;
+    if (m.type === "user" && Array.isArray(m.message.content)) {
+      for (const b of m.message.content)
+        if (b.type === "tool_result" && b.is_error && bash.has(b.tool_use_id))
+          info(bashFailure(bash.get(b.tool_use_id), b.content));
+    }
     if (m.type !== "assistant")
       continue;
     for (const b of m.message.content) {
@@ -58570,6 +58585,8 @@ async function once(prompt, o, schema, controller) {
       const input = b.input ?? {};
       if (typeof input.subagent_type === "string")
         passes.set(b.id, input.subagent_type);
+      if (b.name === "Bash")
+        bash.set(b.id, toolTarget(input));
       const who = m.parent_tool_use_id ? `[${passes.get(m.parent_tool_use_id) ?? "pass"}] ` : "";
       info(`${who}${b.name} ${toolTarget(input)}`);
     }
