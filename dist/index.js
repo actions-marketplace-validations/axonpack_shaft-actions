@@ -24064,6 +24064,15 @@ function diffLines(patch, addedOnly = false) {
   }
   return lines;
 }
+function oldLines(patch) {
+  const lines = new Map;
+  for (const m of patch?.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)/gm) ?? []) {
+    const start = Number(m[1]);
+    for (let n = start;n < start + Number(m[2] ?? 1); n++)
+      lines.set(n, Number(m[3]));
+  }
+  return lines;
+}
 var removedLines = (patch) => (patch ?? "").split(`
 `).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
 function fingerprint(f, code = "") {
@@ -59517,6 +59526,32 @@ var changeset = async ({ files, checkout }) => {
   return factsText(lines, "");
 };
 
+// src/services/prestep/code-quality.service.ts
+var codeQuality = async ({ files, pr }) => {
+  if (pr.base !== pr.defaultBranch)
+    throw new Error(`GitHub Code Quality's findings are the default branch's (${pr.defaultBranch}), and this pull request goes into ${pr.base}`);
+  const found = await callApi("/v1/code-quality", {});
+  if (!Array.isArray(found))
+    throw new Error("The Axon Shaft API sent an incomplete answer");
+  const hunks = new Map(files.map((f) => [f.filename, oldLines(f.patch)]));
+  return found.flatMap((c) => {
+    const line = hunks.get(c.path)?.get(c.start_line);
+    if (line === undefined)
+      return [];
+    return [
+      {
+        severity: c.severity === "error" ? "should-fix" : "nit",
+        file: c.path,
+        line,
+        title: c.title,
+        body: `${c.message_markdown}
+
+Finding #${c.number} on the default branch, under the repo's Security and quality tab, Code quality.`
+      }
+    ];
+  });
+};
+
 // src/services/prestep/diff-stats.service.ts
 import { basename as basename2 } from "node:path";
 var area = (path) => {
@@ -60115,7 +60150,7 @@ var nativeChanges = async ({ files, checkout, base }) => {
 };
 
 // src/services/prestep/prestep.service.ts
-var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
+var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, "code-quality": codeQuality };
 var FACTS = {
   "deps-diff": depsDiffFacts,
   changeset,

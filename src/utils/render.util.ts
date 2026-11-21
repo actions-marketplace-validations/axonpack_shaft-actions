@@ -80,6 +80,16 @@ export function diffLines(patch: string | undefined, addedOnly = false): Map<num
   return lines;
 }
 
+/** Each left-side line number a patch's hunks cover, mapped to that hunk's first right-side line. */
+export function oldLines(patch: string | undefined): Map<number, number> {
+  const lines = new Map<number, number>();
+  for (const m of patch?.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)/gm) ?? []) {
+    const start = Number(m[1]);
+    for (let n = start; n < start + Number(m[2] ?? 1); n++) lines.set(n, Number(m[3]));
+  }
+  return lines;
+}
+
 /** A patch's removed lines, without their `-`. */
 export const removedLines = (patch: string | undefined) =>
   (patch ?? '')

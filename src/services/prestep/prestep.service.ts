@@ -10,6 +10,7 @@ import { prMeta } from './pr-meta.service';
 import { schemaPairs } from './schema-pairs.service';
 import { secrets } from './secrets.service';
 import { changeset } from './changeset.service';
+import { codeQuality } from './code-quality.service';
 import { diffStats } from './diff-stats.service';
 import { docsTouched } from './docs-touched.service';
 import { flags } from './flags.service';
@@ -27,7 +28,7 @@ import { rawValues } from './raw-values.service';
 import { nativeChanges } from './native-changes.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
-export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv };
+export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv, 'code-quality': codeQuality };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */
 export const FACTS: Record<string, Facts> = {

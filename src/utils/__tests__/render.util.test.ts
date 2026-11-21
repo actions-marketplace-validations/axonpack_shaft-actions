@@ -11,6 +11,7 @@ import {
   idleSummary,
   inlineBody,
   modelName,
+  oldLines,
   parseState,
   place,
   redact,
@@ -54,6 +55,15 @@ const review: Review = {
   checked: ['correctness', 'breakage', 'standards', 'tests', 'docs', 'security'],
   not_checked: 'no tests or builds were run.',
 };
+
+test("oldLines maps each line a hunk's old side covers to the hunk's first new line", () => {
+  expect([...oldLines('@@ -3,2 +3,3 @@\n a\n+b\n c\n@@ -20 +21,0 @@\n-d\n@@ -30,0 +30 @@\n+e')]).toEqual([
+    [3, 3],
+    [4, 3],
+    [20, 21],
+  ]);
+  expect(oldLines(undefined).size).toBe(0);
+});
 
 test('diffLines maps new-side line numbers to their text', () => {
   expect([...diffLines(patch).keys()]).toEqual([40, 41, 42, 43, 44]);
