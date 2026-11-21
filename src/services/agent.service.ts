@@ -330,13 +330,12 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
       } else if (result && result.subtype !== 'error_max_structured_output_retries') {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join('; ')}`);
       }
-      const raw = result?.subtype === 'success' ? (result.structured_output ?? result.result) : result?.errors;
-      core.warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}):\n${JSON.stringify(raw, null, 2)}`);
+      // Only the reply's field names: the job log is public on a public repo, and a finding's text mustn't reach it.
+      const out = result?.subtype === 'success' ? result.structured_output : undefined;
+      const what = result?.subtype === 'success' ? `its fields: ${Object.keys(out && typeof out === 'object' ? out : {}).join(', ') || 'none'}` : (result?.errors.join('; ') ?? 'no result');
+      core.warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}), ${what}`);
       if (attempt === 2) {
-        throw new ShaftFailure(
-          'review_invalid_reply',
-          `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job; both replies are in the job log.`,
-        );
+        throw new ShaftFailure('review_invalid_reply', `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job.`);
       }
     }
   } catch (e) {

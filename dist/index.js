@@ -58755,11 +58755,11 @@ async function runAgent(prompt, o, format) {
       } else if (result && result.subtype !== "error_max_structured_output_retries") {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join("; ")}`);
       }
-      const raw = result?.subtype === "success" ? result.structured_output ?? result.result : result?.errors;
-      warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}):
-${JSON.stringify(raw, null, 2)}`);
+      const out = result?.subtype === "success" ? result.structured_output : undefined;
+      const what = result?.subtype === "success" ? `its fields: ${Object.keys(out && typeof out === "object" ? out : {}).join(", ") || "none"}` : result?.errors.join("; ") ?? "no result";
+      warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}), ${what}`);
       if (attempt === 2) {
-        throw new ShaftFailure("review_invalid_reply", `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job; both replies are in the job log.`);
+        throw new ShaftFailure("review_invalid_reply", `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job.`);
       }
     }
   } catch (e) {

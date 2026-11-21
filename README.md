@@ -377,6 +377,8 @@ With "Private draft advisories" on for the repo, a blocking finding from the sec
 - Publishing the advisory, requesting a CVE and setting its severity are up to the repo's maintainers on GitHub. Every draft starts at high severity.
 - A dry run logs `Would open a draft advisory for <fingerprint>` and opens none.
 
+Outside a dry run, the job log never shows a finding's text, since anyone can read it on a public repo. Its tool lines name only paths and patterns, and a reply that doesn't match the format is logged by its field names.
+
 ### The job log
 
 The job log folds each step into its own group, with how long it took:
@@ -445,7 +447,7 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `missing_id_token` | The workflow has no `permissions: id-token: write`, so the action can't sign in to the API. |
 | `api_unreachable` | The action couldn't reach the API, or the API took over 30 seconds to answer. |
 | `review_timed_out` | The review, reply or task ran past the time limit set on the dashboard. The link opens the dashboard. |
-| `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
+| `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. The job log names each reply's fields, without their text, and the link opens the run. |
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
 | `self_hosted_unsupported` | A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran. |

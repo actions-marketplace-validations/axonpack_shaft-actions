@@ -1,7 +1,8 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
 const infos: string[] = [];
-vi.doMock('@actions/core', () => ({ info: (s: string) => infos.push(s), warning: () => {} }));
+const warnings: string[] = [];
+vi.doMock('@actions/core', () => ({ info: (s: string) => infos.push(s), warning: (s: string) => warnings.push(s) }));
 /** What the mocked Agent SDK does on each `query`: yield these messages, throw, or wait for the abort. */
 let reply: 'hang' | Error | object[] = [];
 const asked: { options: { agents?: unknown; abortController: AbortController; outputFormat: { schema: any } } }[] = [];
@@ -140,10 +141,13 @@ test('a run past the time limit is review_timed_out, linking the dashboard', asy
   });
 });
 
-test('a reply that misses the schema twice is review_invalid_reply', async () => {
-  reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'maybe' }, result: '', modelUsage: {}, total_cost_usd: 0 }];
+test("a reply that misses the schema twice is review_invalid_reply, and the log names its fields without the finding's text", async () => {
+  const findings = [{ title: 'Token sent in the URL', body: 'The session token goes in the query string.' }];
+  reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'maybe', findings }, result: '', modelUsage: {}, total_cost_usd: 0 }];
+  warnings.length = 0;
   expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toMatchObject({ code: 'review_invalid_reply', url: undefined });
   expect(asked).toHaveLength(2);
+  expect(warnings).toEqual([1, 2].map((n) => `The reply didn't match the review schema (attempt ${n}), its fields: verdict, findings`));
 });
 
 test('an SDK error, or anything else that breaks the run, is review_failed', async () => {
