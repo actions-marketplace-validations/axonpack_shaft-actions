@@ -58,3 +58,6 @@ const RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lo
 
 /** The `paths` a reviewer should read before merging, because they change what runs. */
 export const runsCode = (paths: string[]): string[] => paths.filter((p) => RUNS_CODE.test(p));
+
+/** The same files with the same contents: the session changed nothing past the applied suggestions. */
+export const sameChanges = (a: Change[], b: Change[]) => a.length === b.length && a.every((c, i) => c.path === b[i]!.path && Buffer.compare(c.content ?? Buffer.alloc(0), b[i]!.content ?? Buffer.alloc(0)) === 0);

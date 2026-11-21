@@ -14,6 +14,9 @@ export type Comment = {
   html_url: string;
   path?: string;
   line?: number | null;
+  /** A review comment's first line, when it spans several, and the commit its lines are on. */
+  start_line?: number | null;
+  commit_id?: string;
 };
 
 export type Context = {
@@ -40,6 +43,8 @@ const toComment = (c: any, trusted: boolean): Comment => ({
   html_url: c.html_url,
   path: c.path,
   line: c.line,
+  start_line: c.start_line,
+  commit_id: c.commit_id,
 });
 
 /** Associations that put an author inside the repo without asking GitHub. */

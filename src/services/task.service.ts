@@ -1,22 +1,22 @@
 import * as core from '@actions/core';
 import { DASHBOARD_URL } from '../consts/api.const';
-import { FIX_HAIKU_MAX, TRIAGE_START } from '../consts/ladder.const';
+import { TRIAGE_START } from '../consts/ladder.const';
 import { ladder, matches } from '../utils/auto-pick.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
-import { pushDenial, type PushTarget, runsCode } from '../utils/push.util';
-import { parseState, prose, redact, type StateFinding } from '../utils/render.util';
+import { pushDenial, type PushTarget, runsCode, sameChanges } from '../utils/push.util';
+import { footer, prose, redact } from '../utils/render.util';
 import { dataBlock } from '../utils/prompt.util';
-import { toolDenial } from '../utils/tool-guard.util';
 import { type ReplyFormat, runAgent } from './agent.service';
 import { fetchPushToken } from './api.service';
-import { type CheckResult, repoCommands, runCheck } from './commands.service';
+import { checkList, checksTable, repoCommands, runCheck } from './commands.service';
 import { savedCredentials } from './checkout.service';
 import { collectContext } from './context.service';
+import { applySuggestion, fixStart, openFindings, taskRequest } from './fix.service';
 import { climb, NotWorked, NO_SPEND, withSpent } from './ladder.service';
 import { assertHead, head, pushChanges, readChanges, resetTo } from './push.service';
 import { ANSWER_MAX, answerFooter, buildReplyPrompt, postInThread, type ReplyOptions, type ReplyOutcome } from './reply.service';
 import { FALLBACK } from './review.service';
-import { type Ask, commandIn } from './route.service';
+import { commandIn } from './route.service';
 import { endSandboxes, prepareSandbox, which } from './sandbox.service';
 import { triage, triagePrompt } from './triage.service';
 import { step } from './step.service';
@@ -67,37 +67,6 @@ export function selfHosted(): string | undefined {
   return 'Axon Shaft makes changes only on GitHub-hosted runners, and this job runs on a self-hosted one, so nothing was changed. Run the Axon Shaft job on `runs-on: ubuntu-latest`.';
 }
 
-/** The request: the comment, or for a bare `/fix` the open findings the last review's summary keeps. */
-export function taskRequest(ask: Ask, findings: StateFinding[]): string {
-  if (!findings.length) return ask.text;
-  return `Fix these open findings from the last review (severity, place, title):\n\n${findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}`).join('\n')}`;
-}
-
-/**
- * Where a bare `/fix` starts, with no model call: Sonnet for a blocking finding or more than a few,
- * else Haiku (the ladder still skips Haiku when the checks can't run).
- */
-export function fixStart(findings: StateFinding[]): { level: 'simple' | 'normal'; reason: string } {
-  const blocking = findings.some((f) => f.severity === 'blocking');
-  const n = `${findings.length} finding${findings.length === 1 ? '' : 's'}`;
-  if (blocking || findings.length > FIX_HAIKU_MAX) return { level: 'normal', reason: `bare /fix of ${n}${blocking ? ', one or more blocking' : ''}` };
-  return { level: 'simple', reason: `bare /fix of ${n}, none blocking` };
-}
-
-/**
- * The checks our code runs after the session: the ones the model ran that the guard allows (no git
- * command), in its order, or when it ran none, the repo's install, test and lint.
- */
-export function checkList(listed: string[], commands: string[], cwd: string): string[] {
-  const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith('git ') && !toolDenial('Bash', { command: c }, cwd, commands));
-  return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
-}
-
-const checksTable = (checks: CheckResult[]) =>
-  checks.length
-    ? ['| Check | Result |', '| --- | --- |', ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? 'Passed' : 'Failed'} |`)].join('\n')
-    : 'No checks were run.';
-
 /**
  * Make the change asked for, then commit it as the app's bot and push it to the pull request's
  * branch, and reply where it was asked with what changed, the commit and the checks. The model's
@@ -116,7 +85,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     await post(`${failureMarkdown(new ShaftFailure('push_failed', `${refused} Nothing was changed.`, DASHBOARD_URL))}\n\n${TASK_MARKER}`);
     return { refused, code: 'push_failed' };
   }
-  const findings = o.bare ? (parseState(ctx.summary?.body)?.findings ?? []) : [];
+  const findings = o.bare ? openFindings(ctx, o.bot) : [];
   if (o.bare && !findings.length) {
     const why = ctx.summary ? 'The last review has no open findings to fix.' : "There's nothing to fix yet: comment `/review` first.";
     await post(`${why}\n\n${TASK_MARKER}`);
@@ -140,21 +109,90 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   const base = head(o.cwd);
 
   const commands = repoCommands(o.cwd);
-  const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
-  // A `/fix` asks for a change; `/axonshaft` may only ask a question.
-  const needsChange = commandIn(o.ask.text) === 'fix';
-  const request = taskRequest(o.ask, findings);
-  const input = { mode: 'task' as const, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: findings.length || undefined };
-  // Without the checks' tools on the runner, nothing would catch a wrong fix from the smallest model.
-  const checked = commands.some((c) => which(c.split(/\s+/)[0]!));
-  // With `auto`, a bare `/fix` starts where its findings put it, and anything else where Haiku rates the request.
-  const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(findings) : await step('Triage', () => triage(triagePrompt(o.ask.text, [], files, o.focus), o));
-  const rungs = ladder({ ...input, checked, promptChars: request.length + files.reduce((n, f) => n + (f.patch?.length ?? 0), 0), start: start && TRIAGE_START[start.level] });
-  core.info(`Making the change with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(', then ')}. The repo's commands: ${commands.join(', ') || 'none'}`);
+  // A bare `/fix` applies the review's own suggested changes first, with no model; the model gets only the rest.
+  const applySuggestions = () => findings.filter((f) => o.bare && applySuggestion(o.cwd, base, f));
+  const applied = applySuggestions();
+  const left = findings.filter((f) => !applied.includes(f));
+  const prepared = applied.length ? readChanges(o.cwd, base) : [];
+  // A fix of the review's findings may change only the files they name.
+  const scope = o.bare ? new Set(findings.map((f) => f.file)) : undefined;
+  /** What changed, read before the checks so that what they write isn't pushed, and the checks' results. */
+  const settle = async (listed: string[]) => {
+    const changes = readChanges(o.cwd, base);
+    const outside = scope ? changes.map((c) => c.path).filter((p) => !scope.has(p)) : [];
+    const checks = changes.length && !outside.length ? await step('Run the checks', async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
+    return { changes, outside, checks, failed: checks.filter((r) => !r.passed) };
+  };
   try {
+    const ran = o.bare && !left.length ? { ...(await settle([])), result: undefined } : await withModel();
+    const { changes, outside, checks, failed, result } = ran;
+    const name = (f: string) => `\`${f.replace(/[`\r\n]/g, '')}\``;
+    const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? '' : 's'}, with no model call.`];
+    if (applied.length) lines.push(`**Suggestions applied:** ${applied.map((f) => `${name(`${f.file}:${f.line}`)} ${prose(f.title)}`).join('; ')}`);
+    if (changes.length) {
+      const paths = changes.map((c) => c.path);
+      lines.push(`**Changed:** ${paths.map(name).join(', ')}`);
+      const runs = runsCode(paths);
+      if (runs.length) lines.push(`**Read before merging:** ${runs.map(name).join(', ')} decide${runs.length === 1 ? 's' : ''} what runs on install and in CI.`);
+      if (outside.length) {
+        core.warning(`Nothing was pushed: ${outside.join(', ')} isn't named by any finding.`);
+        lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(', ')}.`);
+      } else if (failed.length) {
+        core.warning(`Nothing was pushed: ${failed.map((c) => c.command).join(', ')} failed.`);
+        lines.push(`Nothing was pushed, because ${failed.length === 1 ? 'a check' : 'some checks'} failed.`);
+      } else if (o.dryRun) lines.push('Nothing was pushed: this was a dry run.');
+      else {
+        assertHead(o.cwd, base);
+        const { data: bot } = await o.octokit.rest.users.getByUsername({ username: o.bot });
+        const message = (result && redact(result.reply.commit_message.split('\n')[0]!.trim(), o.secrets).slice(0, 100)) || (result ? 'Make the change asked for with /fix' : "Apply the review's suggested changes");
+        const author = { name: o.bot, email: `${bot.id}+${o.bot}@users.noreply.github.com` };
+        // The push token exists only from here on: asked for after the checks, and revoked by the push.
+        const grant = await step('Get the push token', fetchPushToken);
+        const sha = await step('Push the commit', () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
+        lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
+      }
+      if (!outside.length) lines.push(checksTable(checks));
+      for (const c of failed)
+        lines.push(`<details><summary>Output of <code>${c.command}</code></summary>\n\n\`\`\`\`\n${prose(c.output).replace(/`{4,}/g, '```')}\n\`\`\`\`\n\n</details>`);
+    }
+    const answer = redact(lines.join('\n\n'), o.secrets).slice(0, ANSWER_MAX);
+    if (!ran.result) {
+      const sub = footer({ sha: ctx.pr.headSha, repo: `${o.owner}/${o.repo}`, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
+      const commentUrl = await post(`${answer}\n\n${sub}\n\n${TASK_MARKER}`);
+      return { model: 'none', effort: 'none', tokens: NO_SPEND.tokens, costUsd: 0, output: { answer, comment_url: commentUrl } };
+    }
+    const { sub, model } = answerFooter(o, ctx.pr.headSha, ran.choice, ran.result, ran.tried, ran.triaged);
+    const commentUrl = await post(`${answer}\n\n${sub}\n\n${TASK_MARKER}`);
+    return { model, effort: ran.choice.effort, tokens: ran.result.tokens, costUsd: ran.result.costUsd, output: { answer, comment_url: commentUrl } };
+  } catch (e) {
+    // The person who asked sees the same card as the job summary, where they asked.
+    if (e instanceof ShaftFailure) {
+      e.url ??= o.runUrl;
+      await post(`${failureMarkdown(e)}\n\n${TASK_MARKER}`);
+    }
+    throw e;
+  }
+  /** The model's part: the ladder's rungs in turn, each from a clean checkout with the suggestions applied again, until one works. */
+  async function withModel() {
+    // A bare `/fix` shows the model only the files its findings name, not the whole diff.
+    const named = new Set(left.map((f) => f.file));
+    const files = ctx.files.filter((f) => !matches(f.filename, o.skip) && (!o.bare || named.has(f.filename)));
+    // A `/fix` asks for a change; `/axonshaft` may only ask a question.
+    const needsChange = commandIn(o.ask.text) === 'fix';
+    const request = taskRequest(o.ask, left);
+    const input = { mode: 'task' as const, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: left.length || undefined };
+    // Without the checks' tools on the runner, nothing would catch a wrong fix from the smallest model.
+    const checked = commands.some((c) => which(c.split(/\s+/)[0]!));
+    // With `auto`, a bare `/fix` starts where its findings put it, and anything else where Haiku rates the request.
+    const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(left) : await step('Triage', () => triage(triagePrompt(o.ask.text, [], files, o.focus), o));
+    const rungs = ladder({ ...input, checked, promptChars: request.length + files.reduce((n, f) => n + (f.patch?.length ?? 0), 0), start: start && TRIAGE_START[start.level] });
+    core.info(`Making the change with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(', then ')}. The repo's commands: ${commands.join(', ') || 'none'}`);
     const climbed = await climb(rungs, async (c, last, earlier) => {
       // Each rung starts again from the pull request's head, told why the one before didn't work.
-      if (earlier) resetTo(o.cwd, base);
+      if (earlier) {
+        resetTo(o.cwd, base);
+        applySuggestions();
+      }
       const retold = earlier
         ? `${request}\n\nAn attempt with a smaller model didn't work, and the checkout is back at the pull request's head. What went wrong, as data:\n\n${dataBlock('earlier-attempt', earlier)}`
         : request;
@@ -181,59 +219,26 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
           TASK_FORMAT,
         ).finally(endSandboxes),
       );
-      const changes = readChanges(o.cwd, base);
-      const checks = changes.length ? await step('Run the checks', async () => checkList(result.reply.checks, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
-      const failed = checks.filter((r) => !r.passed);
-      const didnt =
-        last || (changes.length ? !failed.length : !needsChange)
-          ? undefined
-          : changes.length
+      const settled = await settle(result.reply.checks);
+      const { changes, outside, failed } = settled;
+      const untouched = sameChanges(changes, prepared);
+      const didnt = last
+        ? undefined
+        : outside.length
+          ? new NotWorked(`it changed ${outside.join(', ')}, which no finding names`, `It changed ${outside.join(', ')}, and a fix of these findings may change only the files they name.`)
+          : failed.length
             ? new NotWorked(`${failed.map((r) => r.command).join(', ')} failed`, failed.map((r) => `\`${r.command}\` failed:\n\n${r.output}`).join('\n\n'))
-            : new NotWorked('it changed nothing', 'It ended without changing any file, and the request needs a change.');
+            : needsChange && untouched
+              ? new NotWorked('it changed nothing', 'It ended without changing any file, and the request needs a change.')
+              : undefined;
       if (didnt) {
         didnt.spent = result;
         throw didnt;
       }
-      return { result, changes, checks, failed };
+      return { ...settled, result };
     });
-    const choice = climbed.choice;
-    const { changes, checks, failed } = climbed.out;
-    const result = withSpent(withSpent(climbed.out.result, climbed.spent), (start && 'spent' in start && start.spent) || NO_SPEND);
-    const lines = [prose(result.reply.answer)];
-    if (changes.length) {
-      const paths = changes.map((c) => c.path);
-      const name = (f: string) => `\`${f.replace(/[`\r\n]/g, '')}\``;
-      lines.push(`**Changed:** ${paths.map(name).join(', ')}`);
-      const runs = runsCode(paths);
-      if (runs.length) lines.push(`**Read before merging:** ${runs.map(name).join(', ')} decide${runs.length === 1 ? 's' : ''} what runs on install and in CI.`);
-      if (failed.length) {
-        core.warning(`Nothing was pushed: ${failed.map((c) => c.command).join(', ')} failed.`);
-        lines.push(`Nothing was pushed, because ${failed.length === 1 ? 'a check' : 'some checks'} failed.`);
-      } else if (o.dryRun) lines.push('Nothing was pushed: this was a dry run.');
-      else {
-        assertHead(o.cwd, base);
-        const { data: bot } = await o.octokit.rest.users.getByUsername({ username: o.bot });
-        const message = redact(result.reply.commit_message.split('\n')[0]!.trim(), o.secrets).slice(0, 100) || 'Make the change asked for with /fix';
-        const author = { name: o.bot, email: `${bot.id}+${o.bot}@users.noreply.github.com` };
-        // The push token exists only from here on: asked for after the checks, and revoked by the push.
-        const grant = await step('Get the push token', fetchPushToken);
-        const sha = await step('Push the commit', () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
-        lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
-      }
-      lines.push(checksTable(checks));
-      for (const c of failed)
-        lines.push(`<details><summary>Output of <code>${c.command}</code></summary>\n\n\`\`\`\`\n${prose(c.output).replace(/`{4,}/g, '```')}\n\`\`\`\`\n\n</details>`);
-    }
-    const answer = redact(lines.join('\n\n'), o.secrets).slice(0, ANSWER_MAX);
-    const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result, climbed.tried, start && `${start.level}: ${start.reason}`);
-    const commentUrl = await post(`${answer}\n\n${sub}\n\n${TASK_MARKER}`);
-    return { model, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
-  } catch (e) {
-    // The person who asked sees the same card as the job summary, where they asked.
-    if (e instanceof ShaftFailure) {
-      e.url ??= o.runUrl;
-      await post(`${failureMarkdown(e)}\n\n${TASK_MARKER}`);
-    }
-    throw e;
+    const triaged = start && `${start.level}: ${start.reason}`;
+    const spentOnTriage = (start && 'spent' in start && start.spent) || NO_SPEND;
+    return { ...climbed.out, result: withSpent(withSpent(climbed.out.result, climbed.spent), spentOnTriage), choice: climbed.choice, tried: climbed.tried, triaged };
   }
 }

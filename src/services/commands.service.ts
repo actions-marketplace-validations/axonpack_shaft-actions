@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runnerEnv } from '../utils/env.util';
+import { toolDenial } from '../utils/tool-guard.util';
 import { inSandbox } from './sandbox.service';
 
 /** The script and target names a task may run: tests, lint, type checks, builds and formatting. */
@@ -60,3 +61,17 @@ export function runCheck(cwd: string, command: string, env: string[] = []): Chec
     return { command, passed: false, output: output.split('\n').slice(-40).join('\n') };
   }
 }
+
+/**
+ * The checks our code runs after the session: the ones the model ran that the guard allows (no git
+ * command), in its order, or when it ran none, the repo's install, test and lint.
+ */
+export function checkList(listed: string[], commands: string[], cwd: string): string[] {
+  const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith('git ') && !toolDenial('Bash', { command: c }, cwd, commands));
+  return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
+}
+
+export const checksTable = (checks: CheckResult[]) =>
+  checks.length
+    ? ['| Check | Result |', '| --- | --- |', ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? 'Passed' : 'Failed'} |`)].join('\n')
+    : 'No checks were run.';

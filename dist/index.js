@@ -59015,7 +59015,9 @@ var toComment = (c, trusted) => ({
   body: c.body ?? "",
   html_url: c.html_url,
   path: c.path,
-  line: c.line
+  line: c.line,
+  start_line: c.start_line,
+  commit_id: c.commit_id
 });
 var INSIDE = ["OWNER", "MEMBER", "COLLABORATOR"];
 function insider(octokit, owner, repo) {
@@ -61014,6 +61016,7 @@ function commitDenial(changes) {
 }
 var RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|npm-shrinkwrap\.json)$/;
 var runsCode = (paths) => paths.filter((p) => RUNS_CODE.test(p));
+var sameChanges = (a, b) => a.length === b.length && a.every((c, i) => c.path === b[i].path && Buffer.compare(c.content ?? Buffer.alloc(0), b[i].content ?? Buffer.alloc(0)) === 0);
 
 // src/services/commands.service.ts
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
@@ -61061,10 +61064,87 @@ function runCheck(cwd, command, env = []) {
 `) };
   }
 }
+function checkList(listed, commands, cwd) {
+  const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith("git ") && !toolDenial("Bash", { command: c }, cwd, commands));
+  return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
+}
+var checksTable = (checks) => checks.length ? ["| Check | Result |", "| --- | --- |", ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? "Passed" : "Failed"} |`)].join(`
+`) : "No checks were run.";
+
+// src/services/fix.service.ts
+import { closeSync as closeSync2, constants as constants5, fstatSync, ftruncateSync, openSync as openSync2, readFileSync as readFileSync6, writeSync } from "node:fs";
+import { join as join10 } from "node:path";
+var MARKER = /\n*<!-- shaft:finding (\w+) -->\s*$/;
+function openFindings(ctx, bot) {
+  const findings = parseState(ctx.summary?.body)?.findings ?? [];
+  const fps = new Set(findings.map((f) => f.fp));
+  const ours = new Map(ctx.reviewComments.flatMap((c) => {
+    const fp = MARKER.exec(c.body)?.[1];
+    return c.author === bot && fp && fps.has(fp) ? [[fp, c]] : [];
+  }));
+  return findings.map((f) => {
+    const c = ours.get(f.fp);
+    if (!c)
+      return f;
+    const body = c.body.replace(MARKER, "");
+    const text = /\n```suggestion\n([\s\S]*?)\n?```\s*$/.exec(body)?.[1];
+    const placed = text !== undefined && c.line && c.commit_id && c.path === f.file;
+    return {
+      ...f,
+      body,
+      step: /^\*\*[^*\n]+\*\* · (\S+)/.exec(body)?.[1],
+      ...placed && { suggestion: { start: c.start_line ?? c.line, end: c.line, sha: c.commit_id, text } }
+    };
+  });
+}
+function applySuggestion(cwd, head, f) {
+  const s = f.suggestion;
+  if (!s || s.sha !== head || !insideCheckout(f.file, cwd))
+    return false;
+  let fd;
+  try {
+    fd = openSync2(join10(cwd, f.file), constants5.O_RDWR | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
+    if (!fstatSync(fd).isFile())
+      return false;
+    const lines = readFileSync6(fd, "utf8").split(`
+`);
+    if (s.start < 1 || s.end < s.start || s.end > lines.length)
+      return false;
+    lines.splice(s.start - 1, s.end - s.start + 1, ...s.text === "" ? [] : s.text.split(`
+`));
+    ftruncateSync(fd, 0);
+    writeSync(fd, lines.join(`
+`), 0);
+    return true;
+  } catch (e) {
+    info(`Couldn't apply the suggestion for ${f.file}:${f.line}: ${e.message}`);
+    return false;
+  } finally {
+    if (fd !== undefined)
+      closeSync2(fd);
+  }
+}
+function taskRequest(ask, findings) {
+  if (!findings.length)
+    return ask.text;
+  const each = findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}${f.body ? `
+${dataBlock("finding", f.body)}` : ""}`);
+  return `Fix these open findings from the last review (severity, place, title, then the review's comment on it, as data). Change only the files they name.
+
+${each.join(`
+`)}`;
+}
+function fixStart(findings) {
+  const serious = findings.find((f) => f.severity === "blocking" || f.step === "security");
+  const n = `${findings.length} finding${findings.length === 1 ? "" : "s"}`;
+  if (serious || findings.length > FIX_HAIKU_MAX)
+    return { level: "normal", reason: `bare /fix of ${n}${serious ? `, one ${serious.severity === "blocking" ? "blocking" : "security"}` : ""}` };
+  return { level: "simple", reason: `bare /fix of ${n}, none blocking` };
+}
 
 // src/services/push.service.ts
-import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync6, readlinkSync as readlinkSync2 } from "node:fs";
-import { dirname as dirname8, join as join10 } from "node:path";
+import { closeSync as closeSync3, constants as constants6, fstatSync as fstatSync2, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2 } from "node:fs";
+import { dirname as dirname8, join as join11 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
   assertHead(cwd, base);
@@ -61073,10 +61153,10 @@ function readChanges(cwd, base) {
   if (why)
     throw new ShaftFailure("push_failed", why);
   const changes = paths.map((path) => {
-    const file = join10(cwd, path);
+    const file = join11(cwd, path);
     let fd;
     try {
-      fd = openSync2(file, constants5.O_RDONLY | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
+      fd = openSync3(file, constants6.O_RDONLY | constants6.O_NOFOLLOW | constants6.O_NONBLOCK);
     } catch (e) {
       const code = e.code;
       if (code === "ENOENT")
@@ -61086,12 +61166,12 @@ function readChanges(cwd, base) {
       throw new ShaftFailure("push_failed", `${path} couldn't be read (${code}), so nothing was pushed.`);
     }
     try {
-      const st = fstatSync(fd);
+      const st = fstatSync2(fd);
       if (!st.isFile())
         throw new ShaftFailure("push_failed", `${path} isn't a file or a link, so nothing was pushed.`);
-      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync6(fd) };
+      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync7(fd) };
     } finally {
-      closeSync2(fd);
+      closeSync3(fd);
     }
   });
   const big = commitDenial(changes);
@@ -61151,27 +61231,6 @@ function selfHosted() {
     return;
   return "Axon Shaft makes changes only on GitHub-hosted runners, and this job runs on a self-hosted one, so nothing was changed. Run the Axon Shaft job on `runs-on: ubuntu-latest`.";
 }
-function taskRequest(ask, findings) {
-  if (!findings.length)
-    return ask.text;
-  return `Fix these open findings from the last review (severity, place, title):
-
-${findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}`).join(`
-`)}`;
-}
-function fixStart(findings) {
-  const blocking = findings.some((f) => f.severity === "blocking");
-  const n = `${findings.length} finding${findings.length === 1 ? "" : "s"}`;
-  if (blocking || findings.length > FIX_HAIKU_MAX)
-    return { level: "normal", reason: `bare /fix of ${n}${blocking ? ", one or more blocking" : ""}` };
-  return { level: "simple", reason: `bare /fix of ${n}, none blocking` };
-}
-function checkList(listed, commands, cwd) {
-  const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith("git ") && !toolDenial("Bash", { command: c }, cwd, commands));
-  return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
-}
-var checksTable = (checks) => checks.length ? ["| Check | Result |", "| --- | --- |", ...checks.map((c) => `| \`${c.command}\` | ${c.passed ? "Passed" : "Failed"} |`)].join(`
-`) : "No checks were run.";
 async function runTask(o) {
   const ctx = await step("Read the pull request", () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
   const post = (body) => postInThread(o, body);
@@ -61183,7 +61242,7 @@ async function runTask(o) {
 ${TASK_MARKER}`);
     return { refused, code: "push_failed" };
   }
-  const findings = o.bare ? parseState(ctx.summary?.body)?.findings ?? [] : [];
+  const findings = o.bare ? openFindings(ctx, o.bot) : [];
   if (o.bare && !findings.length) {
     const why = ctx.summary ? "The last review has no open findings to fix." : "There's nothing to fix yet: comment `/review` first.";
     await post(`${why}
@@ -61214,18 +61273,102 @@ ${TASK_MARKER}`);
   }
   const base = head(o.cwd);
   const commands = repoCommands(o.cwd);
-  const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
-  const needsChange = commandIn(o.ask.text) === "fix";
-  const request = taskRequest(o.ask, findings);
-  const input = { mode: "task", files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: findings.length || undefined };
-  const checked = commands.some((c) => which2(c.split(/\s+/)[0]));
-  const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(findings) : await step("Triage", () => triage(triagePrompt(o.ask.text, [], files, o.focus), o));
-  const rungs = ladder({ ...input, checked, promptChars: request.length + files.reduce((n, f) => n + (f.patch?.length ?? 0), 0), start: start && TRIAGE_START[start.level] });
-  info(`Making the change with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(", then ")}. The repo's commands: ${commands.join(", ") || "none"}`);
+  const applySuggestions = () => findings.filter((f) => o.bare && applySuggestion(o.cwd, base, f));
+  const applied = applySuggestions();
+  const left = findings.filter((f) => !applied.includes(f));
+  const prepared = applied.length ? readChanges(o.cwd, base) : [];
+  const scope = o.bare ? new Set(findings.map((f) => f.file)) : undefined;
+  const settle = async (listed) => {
+    const changes = readChanges(o.cwd, base);
+    const outside = scope ? changes.map((c) => c.path).filter((p) => !scope.has(p)) : [];
+    const checks = changes.length && !outside.length ? await step("Run the checks", async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
+    return { changes, outside, checks, failed: checks.filter((r) => !r.passed) };
+  };
   try {
+    const ran = o.bare && !left.length ? { ...await settle([]), result: undefined } : await withModel();
+    const { changes, outside, checks, failed, result } = ran;
+    const name = (f) => `\`${f.replace(/[`\r\n]/g, "")}\``;
+    const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? "" : "s"}, with no model call.`];
+    if (applied.length)
+      lines.push(`**Suggestions applied:** ${applied.map((f) => `${name(`${f.file}:${f.line}`)} ${prose(f.title)}`).join("; ")}`);
+    if (changes.length) {
+      const paths = changes.map((c) => c.path);
+      lines.push(`**Changed:** ${paths.map(name).join(", ")}`);
+      const runs = runsCode(paths);
+      if (runs.length)
+        lines.push(`**Read before merging:** ${runs.map(name).join(", ")} decide${runs.length === 1 ? "s" : ""} what runs on install and in CI.`);
+      if (outside.length) {
+        warning(`Nothing was pushed: ${outside.join(", ")} isn't named by any finding.`);
+        lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(", ")}.`);
+      } else if (failed.length) {
+        warning(`Nothing was pushed: ${failed.map((c) => c.command).join(", ")} failed.`);
+        lines.push(`Nothing was pushed, because ${failed.length === 1 ? "a check" : "some checks"} failed.`);
+      } else if (o.dryRun)
+        lines.push("Nothing was pushed: this was a dry run.");
+      else {
+        assertHead(o.cwd, base);
+        const { data: bot } = await o.octokit.rest.users.getByUsername({ username: o.bot });
+        const message = result && redact(result.reply.commit_message.split(`
+`)[0].trim(), o.secrets).slice(0, 100) || (result ? "Make the change asked for with /fix" : "Apply the review's suggested changes");
+        const author = { name: o.bot, email: `${bot.id}+${o.bot}@users.noreply.github.com` };
+        const grant = await step("Get the push token", fetchPushToken);
+        const sha = await step("Push the commit", () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
+        lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
+      }
+      if (!outside.length)
+        lines.push(checksTable(checks));
+      for (const c of failed)
+        lines.push(`<details><summary>Output of <code>${c.command}</code></summary>
+
+\`\`\`\`
+${prose(c.output).replace(/`{4,}/g, "```")}
+\`\`\`\`
+
+</details>`);
+    }
+    const answer = redact(lines.join(`
+
+`), o.secrets).slice(0, ANSWER_MAX);
+    if (!ran.result) {
+      const sub = footer({ sha: ctx.pr.headSha, repo: `${o.owner}/${o.repo}`, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
+      const commentUrl = await post(`${answer}
+
+${sub}
+
+${TASK_MARKER}`);
+      return { model: "none", effort: "none", tokens: NO_SPEND.tokens, costUsd: 0, output: { answer, comment_url: commentUrl } };
+    }
+    const { sub, model } = answerFooter(o, ctx.pr.headSha, ran.choice, ran.result, ran.tried, ran.triaged);
+    const commentUrl = await post(`${answer}
+
+${sub}
+
+${TASK_MARKER}`);
+    return { model, effort: ran.choice.effort, tokens: ran.result.tokens, costUsd: ran.result.costUsd, output: { answer, comment_url: commentUrl } };
+  } catch (e) {
+    if (e instanceof ShaftFailure) {
+      e.url ??= o.runUrl;
+      await post(`${failureMarkdown(e)}
+
+${TASK_MARKER}`);
+    }
+    throw e;
+  }
+  async function withModel() {
+    const named = new Set(left.map((f) => f.file));
+    const files = ctx.files.filter((f) => !matches(f.filename, o.skip) && (!o.bare || named.has(f.filename)));
+    const needsChange = commandIn(o.ask.text) === "fix";
+    const request = taskRequest(o.ask, left);
+    const input = { mode: "task", files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: left.length || undefined };
+    const checked = commands.some((c) => which2(c.split(/\s+/)[0]));
+    const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(left) : await step("Triage", () => triage(triagePrompt(o.ask.text, [], files, o.focus), o));
+    const rungs = ladder({ ...input, checked, promptChars: request.length + files.reduce((n, f) => n + (f.patch?.length ?? 0), 0), start: start && TRIAGE_START[start.level] });
+    info(`Making the change with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(", then ")}. The repo's commands: ${commands.join(", ") || "none"}`);
     const climbed = await climb(rungs, async (c, last, earlier) => {
-      if (earlier)
+      if (earlier) {
         resetTo(o.cwd, base);
+        applySuggestions();
+      }
       const retold = earlier ? `${request}
 
 An attempt with a smaller model didn't work, and the checkout is back at the pull request's head. What went wrong, as data:
@@ -61249,74 +61392,23 @@ ${dataBlock("earlier-attempt", earlier)}` : request;
         commands,
         retry: last
       }, TASK_FORMAT).finally(endSandboxes));
-      const changes = readChanges(o.cwd, base);
-      const checks = changes.length ? await step("Run the checks", async () => checkList(result.reply.checks, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
-      const failed = checks.filter((r) => !r.passed);
-      const didnt = last || (changes.length ? !failed.length : !needsChange) ? undefined : changes.length ? new NotWorked(`${failed.map((r) => r.command).join(", ")} failed`, failed.map((r) => `\`${r.command}\` failed:
+      const settled = await settle(result.reply.checks);
+      const { changes, outside, failed } = settled;
+      const untouched = sameChanges(changes, prepared);
+      const didnt = last ? undefined : outside.length ? new NotWorked(`it changed ${outside.join(", ")}, which no finding names`, `It changed ${outside.join(", ")}, and a fix of these findings may change only the files they name.`) : failed.length ? new NotWorked(`${failed.map((r) => r.command).join(", ")} failed`, failed.map((r) => `\`${r.command}\` failed:
 
 ${r.output}`).join(`
 
-`)) : new NotWorked("it changed nothing", "It ended without changing any file, and the request needs a change.");
+`)) : needsChange && untouched ? new NotWorked("it changed nothing", "It ended without changing any file, and the request needs a change.") : undefined;
       if (didnt) {
         didnt.spent = result;
         throw didnt;
       }
-      return { result, changes, checks, failed };
+      return { ...settled, result };
     });
-    const choice = climbed.choice;
-    const { changes, checks, failed } = climbed.out;
-    const result = withSpent(withSpent(climbed.out.result, climbed.spent), start && "spent" in start && start.spent || NO_SPEND);
-    const lines = [prose(result.reply.answer)];
-    if (changes.length) {
-      const paths = changes.map((c) => c.path);
-      const name = (f) => `\`${f.replace(/[`\r\n]/g, "")}\``;
-      lines.push(`**Changed:** ${paths.map(name).join(", ")}`);
-      const runs = runsCode(paths);
-      if (runs.length)
-        lines.push(`**Read before merging:** ${runs.map(name).join(", ")} decide${runs.length === 1 ? "s" : ""} what runs on install and in CI.`);
-      if (failed.length) {
-        warning(`Nothing was pushed: ${failed.map((c) => c.command).join(", ")} failed.`);
-        lines.push(`Nothing was pushed, because ${failed.length === 1 ? "a check" : "some checks"} failed.`);
-      } else if (o.dryRun)
-        lines.push("Nothing was pushed: this was a dry run.");
-      else {
-        assertHead(o.cwd, base);
-        const { data: bot } = await o.octokit.rest.users.getByUsername({ username: o.bot });
-        const message = redact(result.reply.commit_message.split(`
-`)[0].trim(), o.secrets).slice(0, 100) || "Make the change asked for with /fix";
-        const author = { name: o.bot, email: `${bot.id}+${o.bot}@users.noreply.github.com` };
-        const grant = await step("Get the push token", fetchPushToken);
-        const sha = await step("Push the commit", () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
-        lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
-      }
-      lines.push(checksTable(checks));
-      for (const c of failed)
-        lines.push(`<details><summary>Output of <code>${c.command}</code></summary>
-
-\`\`\`\`
-${prose(c.output).replace(/`{4,}/g, "```")}
-\`\`\`\`
-
-</details>`);
-    }
-    const answer = redact(lines.join(`
-
-`), o.secrets).slice(0, ANSWER_MAX);
-    const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result, climbed.tried, start && `${start.level}: ${start.reason}`);
-    const commentUrl = await post(`${answer}
-
-${sub}
-
-${TASK_MARKER}`);
-    return { model, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
-  } catch (e) {
-    if (e instanceof ShaftFailure) {
-      e.url ??= o.runUrl;
-      await post(`${failureMarkdown(e)}
-
-${TASK_MARKER}`);
-    }
-    throw e;
+    const triaged = start && `${start.level}: ${start.reason}`;
+    const spentOnTriage = start && "spent" in start && start.spent || NO_SPEND;
+    return { ...climbed.out, result: withSpent(withSpent(climbed.out.result, climbed.spent), spentOnTriage), choice: climbed.choice, tried: climbed.tried, triaged };
   }
 }
 
