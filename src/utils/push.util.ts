@@ -1,4 +1,4 @@
-import { basename } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { BUILD_INPUTS, MANIFEST } from '../consts/build-inputs.const';
 
 /** Where the project lets Axon Shaft push: nowhere, only the pull request's own branch, or any branch. */
@@ -77,21 +77,26 @@ const differ = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(
 
 /**
  * The build and CI inputs (`BUILD_INPUTS`, a manifest's scripts or dependencies) that `changes` touch
- * and `request` doesn't ask for, each as the file and what about it changed. `before` is a file's
- * text at the pull request's head, undefined when the change adds it.
+ * and `request` doesn't ask for, each as the file and what about it changed. A lockfile is exempt
+ * only when a manifest in its folder or below changed its dependencies and the request asked for
+ * that. `before` is a file's text at the pull request's head, undefined when the change adds it.
  */
 export function unaskedBuildInputs(changes: Change[], before: (path: string) => string | undefined, request: string): string[] {
   const asked = (path: string, words: RegExp) => request.toLowerCase().includes(basename(path).toLowerCase()) || words.test(request);
-  const manifestChanged = changes.some((c) => MANIFEST.pattern.test(c.path));
-  return changes.flatMap((c) => {
-    if (MANIFEST.pattern.test(c.path)) {
+  const manifests = changes
+    .filter((c) => MANIFEST.pattern.test(c.path))
+    .map((c) => {
       const [was, now] = [json(before(c.path)), json(c.content?.toString('utf8'))];
-      return [
-        ...(differ(was.scripts, now.scripts) && !asked(c.path, MANIFEST.scripts) ? [`${c.path} (its scripts)`] : []),
-        ...(MANIFEST.depFields.some((k) => differ(was[k], now[k])) && !asked(c.path, MANIFEST.deps) ? [`${c.path} (its dependencies)`] : []),
-      ];
-    }
+      const scripts = differ(was.scripts, now.scripts);
+      const deps = MANIFEST.depFields.some((k) => differ(was[k], now[k]));
+      return { path: c.path, scripts, deps, scriptsAsked: asked(c.path, MANIFEST.scripts), depsAsked: asked(c.path, MANIFEST.deps) };
+    });
+  // A lockfile follows only a dependency change someone asked for, in its own package or one below it.
+  const followsAskedDeps = (lock: string) => manifests.some((m) => m.deps && m.depsAsked && `${dirname(m.path)}/`.startsWith(dirname(lock) === '.' ? '' : `${dirname(lock)}/`));
+  return changes.flatMap((c) => {
+    const m = manifests.find((x) => x.path === c.path);
+    if (m) return [...(m.scripts && !m.scriptsAsked ? [`${c.path} (its scripts)`] : []), ...(m.deps && !m.depsAsked ? [`${c.path} (its dependencies)`] : [])];
     const input = BUILD_INPUTS.find((b) => b.pattern.test(c.path));
-    return input && !(input.lockfile && manifestChanged) && !asked(c.path, input.words) ? [c.path] : [];
+    return input && !(input.lockfile && followsAskedDeps(c.path)) && !asked(c.path, input.words) ? [c.path] : [];
   });
 }

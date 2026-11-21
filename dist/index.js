@@ -61029,7 +61029,7 @@ ${REPLY_MARKER}`);
 }
 
 // src/utils/push.util.ts
-import { basename as basename6 } from "node:path";
+import { basename as basename6, dirname as dirname8 } from "node:path";
 
 // src/consts/build-inputs.const.ts
 var BUILD_INPUTS = [
@@ -61042,7 +61042,7 @@ var BUILD_INPUTS = [
   { pattern: /(^|\/)\.git-hooks\//, words: /\bgit hooks?\b/i },
   {
     pattern: /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum)$/,
-    words: /\bdep(s|endenc(y|ies))\b|\block ?file\b/i,
+    words: /\block ?files?\b/i,
     lockfile: true
   }
 ];
@@ -61099,17 +61099,19 @@ var json = (text) => {
 var differ = (a, b) => JSON.stringify(a) !== JSON.stringify(b);
 function unaskedBuildInputs(changes, before, request) {
   const asked = (path, words) => request.toLowerCase().includes(basename6(path).toLowerCase()) || words.test(request);
-  const manifestChanged = changes.some((c) => MANIFEST.pattern.test(c.path));
+  const manifests = changes.filter((c) => MANIFEST.pattern.test(c.path)).map((c) => {
+    const [was, now] = [json(before(c.path)), json(c.content?.toString("utf8"))];
+    const scripts = differ(was.scripts, now.scripts);
+    const deps = MANIFEST.depFields.some((k) => differ(was[k], now[k]));
+    return { path: c.path, scripts, deps, scriptsAsked: asked(c.path, MANIFEST.scripts), depsAsked: asked(c.path, MANIFEST.deps) };
+  });
+  const followsAskedDeps = (lock) => manifests.some((m) => m.deps && m.depsAsked && `${dirname8(m.path)}/`.startsWith(dirname8(lock) === "." ? "" : `${dirname8(lock)}/`));
   return changes.flatMap((c) => {
-    if (MANIFEST.pattern.test(c.path)) {
-      const [was, now] = [json(before(c.path)), json(c.content?.toString("utf8"))];
-      return [
-        ...differ(was.scripts, now.scripts) && !asked(c.path, MANIFEST.scripts) ? [`${c.path} (its scripts)`] : [],
-        ...MANIFEST.depFields.some((k) => differ(was[k], now[k])) && !asked(c.path, MANIFEST.deps) ? [`${c.path} (its dependencies)`] : []
-      ];
-    }
+    const m = manifests.find((x) => x.path === c.path);
+    if (m)
+      return [...m.scripts && !m.scriptsAsked ? [`${c.path} (its scripts)`] : [], ...m.deps && !m.depsAsked ? [`${c.path} (its dependencies)`] : []];
     const input = BUILD_INPUTS.find((b) => b.pattern.test(c.path));
-    return input && !(input.lockfile && manifestChanged) && !asked(c.path, input.words) ? [c.path] : [];
+    return input && !(input.lockfile && followsAskedDeps(c.path)) && !asked(c.path, input.words) ? [c.path] : [];
   });
 }
 
@@ -61287,12 +61289,12 @@ function fixStart(findings) {
 
 // src/services/push.service.ts
 import { closeSync as closeSync3, constants as constants6, fstatSync as fstatSync2, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2 } from "node:fs";
-import { dirname as dirname8, join as join11 } from "node:path";
+import { dirname as dirname9, join as join11 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
   assertHead(cwd, base);
   const paths = git(cwd, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]).split("\x00").filter(Boolean).map((l) => l.slice(3));
-  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname8(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
+  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname9(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
   if (why)
     throw new ShaftFailure("push_failed", why);
   const changes = paths.map((path) => {

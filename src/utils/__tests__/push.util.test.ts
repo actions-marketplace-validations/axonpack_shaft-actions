@@ -64,7 +64,7 @@ test('a change to what runs on install or in CI counts only when the request ask
   expect(check([scripts], '/fix the retry')).toEqual(['package.json (its scripts)']);
   expect(check([scripts], '/fix add a lint script')).toEqual([]);
   const deps = change('package.json', pkg({ scripts: { test: 'vitest' }, dependencies: { a: '1', b: '2' } }));
-  expect(check([deps, change('bun.lock')], '/fix the retry')).toEqual(['package.json (its dependencies)']);
+  expect(check([deps, change('bun.lock')], '/fix the retry')).toEqual(['package.json (its dependencies)', 'bun.lock']);
   expect(check([deps, change('bun.lock')], '/fix add the b dependency')).toEqual([]);
   expect(check([change('package.json', '{ not json')], '/fix the retry')).toEqual(['package.json (its scripts)', 'package.json (its dependencies)']);
   // A lockfile alone, the configs, hooks, Makefile and Dockerfile.
@@ -76,4 +76,20 @@ test('a change to what runs on install or in CI counts only when the request ask
     'docker/Dockerfile.ci',
   ]);
   expect(check([change('Makefile'), change('.npmrc')], '/fix the test target in the Makefile and the registry in .npmrc')).toEqual([]);
+});
+
+test('a lockfile follows only a dependency change the request asked for, in its own package or one below it', () => {
+  const change = (path: string, text = 'x') => ({ path, mode: '100644' as const, content: Buffer.from(text) });
+  const pkg = (o: object) => JSON.stringify({ name: 'a', version: '1.0.0', dependencies: { a: '1' }, ...o });
+  const before = (path: string) => (path.endsWith('package.json') ? pkg({}) : undefined);
+  const check = (changes: ReturnType<typeof change>[], request: string) => unaskedBuildInputs(changes, before, request);
+  // A version bump doesn't let a lockfile through.
+  expect(check([change('package.json', pkg({ version: '1.0.1' })), change('bun.lock')], '/fix bump the version')).toEqual(['bun.lock']);
+  // A dependency change asked for takes its lockfile with it, from the package or the root above it.
+  const deps = pkg({ dependencies: { a: '1', b: '2' } });
+  expect(check([change('package.json', deps), change('bun.lock')], '/fix add the b dependency')).toEqual([]);
+  expect(check([change('packages/x/package.json', deps), change('bun.lock')], '/fix add the b dependency')).toEqual([]);
+  // A dependency change not asked for doesn't, and neither does another package's.
+  expect(check([change('package.json', deps), change('bun.lock')], '/fix the retry')).toEqual(['package.json (its dependencies)', 'bun.lock']);
+  expect(check([change('package.json', deps), change('packages/y/bun.lock')], '/fix add the b dependency')).toEqual(['packages/y/bun.lock']);
 });
