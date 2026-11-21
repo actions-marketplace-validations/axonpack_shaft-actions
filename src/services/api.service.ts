@@ -71,7 +71,12 @@ export type Grant =
       run_url?: string;
       /** Only when this run is pinned to an older v1 release than the newest. Older APIs don't send it. */
       latest_action?: LatestAction;
+      /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
+      missing_permissions?: MissingPermission[];
     };
+
+/** A permission the AxonShaft app wants at `wanted` that the installation approved only at `granted`, or not at all. */
+export type MissingPermission = { name: string; wanted: string; granted: string | null; warning: string };
 
 /** What the dashboard shows of a finished review: the card, as the PR comment has it. */
 export type RunOutput = {

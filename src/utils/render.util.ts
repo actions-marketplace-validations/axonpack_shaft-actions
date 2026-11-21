@@ -196,6 +196,8 @@ export type Footer = {
   latestAction?: { version: string; url: string };
   /** GitHub's web editor for the workflow file (`workflowEditUrl()`), linked under the newer release. */
   workflowEditUrl?: string;
+  /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
+  missingPermissions?: { name: string; wanted: string; granted: string | null }[];
 };
 
 /**
@@ -249,6 +251,7 @@ export function footer(f: Footer): string {
     ['Skipped by `skip`', f.skipped && plural(f.skipped, 'file')],
     ['Checklists run', ran.join(', ')],
     ['Checklists not run', notRun.join(', ')],
+    ['Missing permissions', f.missingPermissions?.map((p) => `\`${p.name}\` (${p.wanted}${p.granted ? `, approved ${p.granted}` : ''})`).join(', ')],
     ['Input', t && formatTokens(t.input)],
     ['Output', t && formatTokens(t.output)],
     ['Cache read', t && formatTokens(t.cache_read)],

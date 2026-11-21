@@ -416,6 +416,16 @@ test('the footer table breaks the tokens down on a subscription, with the cost o
   );
 });
 
+test("the footer table names the permissions the installation hasn't approved, with the level it has; none adds no row", () => {
+  const body = (f: Partial<Footer>) => renderSummary(review, place(review.findings, files, 'summary'), undefined, { ...info, ...f });
+  const missingPermissions = [
+    { name: 'code_quality', wanted: 'read', granted: null },
+    { name: 'checks', wanted: 'write', granted: 'read' },
+  ];
+  expect(body({ missingPermissions })).toContain('| Missing permissions | `code_quality` (read), `checks` (write, approved read) |');
+  expect(body({ missingPermissions: [] })).not.toContain('Missing permissions');
+});
+
 test('modelName: the family and version read as a name; any other ID stays as written', () => {
   expect(modelName('claude-sonnet-5-5')).toBe('Claude Sonnet 5.5');
   expect(modelName('claude-opus-5-5')).toBe('Claude Opus 5.5');

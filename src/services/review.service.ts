@@ -5,7 +5,7 @@ import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
 import type { Octokit } from '../types/octokit.type';
 import type { ScriptInput } from '../types/prestep.type';
-import type { ClaudeToken, GrantJob, RunOutput } from './api.service';
+import type { ClaudeToken, GrantJob, MissingPermission, RunOutput } from './api.service';
 import { type AgentResult, REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
 import { checkoutFiles } from './checkout.service';
 import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
@@ -74,6 +74,8 @@ export type ReviewOptions = {
   latestAction?: { version: string; url: string };
   /** GitHub's web editor for the workflow file, linked with that line. */
   workflowEditUrl?: string;
+  /** Permissions the installation hasn't approved, for the footer's table. */
+  missingPermissions?: MissingPermission[];
   cwd: string;
   /** The project's own variables the agent's commands get, by name. */
   env?: string[];
@@ -249,6 +251,7 @@ async function postReview(
     lines: files.reduce((n, f) => n + f.additions + f.deletions, 0),
     files: files.length,
     skipped,
+    missingPermissions: o.missingPermissions,
   };
   const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;

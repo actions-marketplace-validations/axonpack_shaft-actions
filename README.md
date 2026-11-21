@@ -295,7 +295,7 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
    It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
 7. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
 8. A footer, one small line that opens into a table. The line gives the model by name, the effort, the tokens and the changed lines, such as `Claude Sonnet 5.5, medium effort · 62k tokens, 219 lines`. On an API key the cost follows the tokens (`62k tokens · $0.38, 219 lines`). With no token counts the tokens are left out, and a run with no model call reads `no model call · 219 lines`.
-   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
+   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the permissions the app's installation hasn't approved yet, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
    Billed is cache-weighted: a cache read counts as 0.1 of an input token and a cache write as 1.25, so it can come out above the total when a run writes a lot of cache. A note under the table says so.
    The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
@@ -378,6 +378,8 @@ The job log folds each step into its own group, with how long it took:
 
 The Review group lists each tool call the model made, such as `Read src/pay.ts` or `Grep retry\(`.
 A deep pass's calls carry its name first, such as `[security] Grep exec\(`. The run's page on the dashboard shows this log once the job ends.
+
+When the AxonShaft app's installation hasn't approved a permission the run wants, the Axon Shaft API mints the token without it and the log warns once for each, saying what to approve. The run carries on without whatever needs that permission, and the summary's footer table lists it under "Missing permissions".
 
 ## What the review can do
 

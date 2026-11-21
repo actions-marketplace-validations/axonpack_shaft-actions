@@ -24160,6 +24160,7 @@ function footer(f) {
     ["Skipped by `skip`", f.skipped && plural(f.skipped, "file")],
     ["Checklists run", ran.join(", ")],
     ["Checklists not run", notRun.join(", ")],
+    ["Missing permissions", f.missingPermissions?.map((p) => `\`${p.name}\` (${p.wanted}${p.granted ? `, approved ${p.granted}` : ""})`).join(", ")],
     ["Input", t && formatTokens(t.input)],
     ["Output", t && formatTokens(t.output)],
     ["Cache read", t && formatTokens(t.cache_read)],
@@ -60328,7 +60329,8 @@ async function postReview(ctx, o, canCheck, progress) {
     dashboardRunUrl: o.dashboardRunUrl,
     lines: files.reduce((n, f) => n + f.additions + f.deletions, 0),
     files: files.length,
-    skipped
+    skipped,
+    missingPermissions: o.missingPermissions
   };
   const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
@@ -60986,6 +60988,9 @@ ${grant.comment}`);
     return notice(grant.reason);
   }
   const octokit = getOctokit(grant.github_token);
+  const missing = Array.isArray(grant.missing_permissions) ? grant.missing_permissions : [];
+  for (const w of new Set(missing.map((p) => p.warning)))
+    warning(w);
   if (r.mode === "help")
     return notice("The Axon Shaft API sent a run for /help, which runs nothing.");
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
@@ -61060,6 +61065,7 @@ ${grant.comment}`);
     checks: job.checks,
     checklists: job.checklists,
     latestAction: grant.latest_action,
+    missingPermissions: missing,
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch)
   });
   setOutput("verdict", out.verdict);

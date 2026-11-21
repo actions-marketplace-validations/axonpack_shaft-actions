@@ -198,6 +198,22 @@ test('a newer action release from the grant reaches the review, for the line und
   expect(reviewed).toMatchObject({ latestAction: latest_action });
 });
 
+test("each missing permission's warning is logged once, and the review gets the list for its footer", async () => {
+  const warning = 'The AxonShaft app needs Code quality (read). Approve it on GitHub.';
+  const missing_permissions = [
+    { name: 'code_quality', wanted: 'read', granted: null, warning },
+    { name: 'code_quality', wanted: 'read', granted: null, warning },
+    { name: 'checks', wanted: 'write', granted: 'read', warning: 'Checks (write) is approved only as read.' },
+  ];
+  api(Response.json({ ...grant, missing_permissions }));
+  await main();
+  expect(warnings).toEqual([warning, 'Checks (write) is approved only as read.']);
+  expect(reviewed).toMatchObject({ missingPermissions: missing_permissions });
+  api(Response.json(grant));
+  await main();
+  expect(reviewed?.missingPermissions).toEqual([]);
+});
+
 test('a maxTurns the dashboard left unset reaches the review unset, so it picks one by size', async () => {
   api(Response.json({ ...grant, settings: { ...grant.settings, maxTurns: null } }));
   await main();

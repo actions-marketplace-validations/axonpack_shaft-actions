@@ -59,6 +59,9 @@ async function run(): Promise<void> {
     return core.notice(grant.reason);
   }
   const octokit = getOctokit(grant.github_token);
+  // What the installation hasn't approved yet: each warning once, and the review's footer names them.
+  const missing = Array.isArray(grant.missing_permissions) ? grant.missing_permissions : [];
+  for (const w of new Set(missing.map((p) => p.warning))) core.warning(w);
 
   if (r.mode === 'help') return core.notice('The Axon Shaft API sent a run for /help, which runs nothing.');
   if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
@@ -145,6 +148,7 @@ async function run(): Promise<void> {
     checks: job.checks,
     checklists: job.checklists,
     latestAction: grant.latest_action,
+    missingPermissions: missing,
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
   });
   core.setOutput('verdict', out.verdict);
