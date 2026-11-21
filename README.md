@@ -335,6 +335,14 @@ The action shows that a review is running without anything that emails people:
 
 The check run needs Checks (write) on the run's token. Without it the review still posts, the job log warns once, and the action skips the other check runs. If GitHub refuses a step's update, the job log warns once and the check gets no more step updates. The review carries on, and the check still gets its result at the end. A dry run logs the check, each step's title and the reaction, and posts none of them.
 
+### When a run is cancelled or stops early
+
+No check run stays in progress after the run ends, and the summary comment never stays on "Reviewing":
+
+- When the workflow is cancelled (a newer push with `cancel-in-progress: true`, someone pressing Cancel, or the job's `timeout-minutes`), GitHub stops the step. The action then closes each check run it left in progress as cancelled, with the summary "The workflow was cancelled before the review finished." The summary comment shows the `cancelled` card in place of "Reviewing", the 👀 on a `/review` comment becomes 😕, and the run is recorded on the dashboard with the `cancelled` code. This takes at most 5 seconds, then the Claude session stops.
+- If the review fails, a check run still in progress fails with the failure's card and message, and the summary comment shows the same card.
+- The action also has a post step that GitHub runs at the end of the job, after a cancel too. If the step was killed before it could clean up, the post step closes what's left the same way. After a normal run it does nothing.
+
 ### The merge gates check
 
 When the project has merge gates, the action also posts a check run named `Axon Shaft / gates` on the reviewed commit, with the gates' table as its summary.
@@ -551,7 +559,7 @@ bun install
 bun run lint
 bun run typecheck
 bun run test
-bun run build   # writes dist/index.js, which is committed
+bun run build   # writes dist/index.js and dist/post.js, which are committed
 ```
 
 Before the bundle, the build writes `src/consts/claude-binary.const.ts`: the sha512 `bun.lock` records for each platform's Claude Code binary package, which the action checks its download against. It also writes `dist/meta.json`, which is committed too: the action's version, inputs and outputs, the codes it reports with what each means, its pre-step script keys, the guide files it reads and their size caps, and the lockfiles it parses. The Axon Shaft docs are generated from a copy of it.
@@ -572,7 +580,7 @@ How the code is laid out and how files are named: [CONVENTIONS.md](CONVENTIONS.m
 Versions are kept with [Changesets](https://github.com/changesets/changesets), and the action ships from git tags.
 
 1. A PR that changes something users would notice adds a changeset. Run `bun run changeset`, pick the bump, and describe the change in a line or two.
-2. Each push to `main` with changesets pending opens or refreshes the Version Packages PR. It raises the version in `package.json`, adds the changes to `CHANGELOG.md` and rebuilds `dist/index.js`.
+2. Each push to `main` with changesets pending opens or refreshes the Version Packages PR. It raises the version in `package.json`, adds the changes to `CHANGELOG.md` and rebuilds `dist/index.js` and `dist/post.js`.
 3. Merging that PR releases the version, for example `2.1.3`. The release workflow tags the merge commit `v2.1.3`, moves the `v2` tag to the same commit, and creates a GitHub Release with that version's changelog.
 
 Workflows that use `axonpack/shaft-actions@v1` get every 1.x release. To stay on one version, use `@v1.1.0`. A run on a pinned version that's older than the newest v1 release gets a line about it under the summary card, and the project's overview on the dashboard shows the same to admins.
