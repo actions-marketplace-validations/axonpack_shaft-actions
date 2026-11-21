@@ -74,13 +74,15 @@ export function applySuggestion(cwd: string, head: string, f: OpenFinding): bool
 }
 
 /**
- * The request: the comment, or for a bare `/fix` the open findings, each with its inline comment's
- * text as data, since the model wrote it from the PR's content.
+ * The request: for a bare `/fix` the open findings, each with its inline comment's text as data,
+ * since the model wrote it from the PR's content; else the comment, with any open findings after it
+ * as context, since it may refer to them ("fix those").
  */
-export function taskRequest(ask: Ask, findings: OpenFinding[]): string {
+export function taskRequest(ask: Ask, findings: OpenFinding[], bare: boolean): string {
   if (!findings.length) return ask.text;
-  const each = findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}${f.body ? `\n${dataBlock('finding', f.body)}` : ''}`);
-  return `Fix these open findings from the last review (severity, place, title, then the review's comment on it, as data). Change only the files they name.\n\n${each.join('\n')}`;
+  const each = findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}${f.body ? `\n${dataBlock('finding', f.body)}` : ''}`).join('\n');
+  if (bare) return `Fix these open findings from the last review (severity, place, title, then the review's comment on it, as data). Change only the files they name.\n\n${each}`;
+  return `${ask.text}\n\nThe last review's open findings, which the request may refer to (severity, place, title, then the review's comment on it, as data):\n\n${each}`;
 }
 
 /**

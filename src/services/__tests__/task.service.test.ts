@@ -426,3 +426,24 @@ test("a fix of the review's findings that changes a file they don't name pushes 
   // Each rung was told why the one before didn't work.
   expect(sessions.at(-1)!.prompt).toContain('a fix of these findings may change only the files they name');
 });
+
+test("/fix with words gets the last review's open findings as context, and triage sees their titles", async () => {
+  fake = octokit('pr', 'acme/widgets', review.summary, [review.comment({ suggestion: false })]);
+  session = edits('src/retry.ts');
+  await runTask(options({ ask: { id: 3, text: '/fix those' } }));
+  expect(sessions[0]!.prompt).toContain(
+    "/fix those\n\nThe last review's open findings, which the request may refer to (severity, place, title, then the review's comment on it, as data):\n\n- should-fix `src/retry.ts:1` Retries once\n<finding>",
+  );
+  expect(triages[0]).toContain('<findings>\n- should-fix src/retry.ts:1 Retries once\n</findings>');
+  // Words make it a request of its own: no suggestion is applied, and the scope is the whole PR.
+  expect(pushes).toHaveLength(1);
+});
+
+test('/axonshaft gets no findings', async () => {
+  fake = octokit('pr', 'acme/widgets', review.summary, [review.comment()]);
+  session = () => ({ answer: 'It retries once.', commit_message: '', checks: [] });
+  await runTask(options({ ask: { id: 3, text: '/axonshaft how often does it retry?' } }));
+  expect(sessions[0]!.prompt).not.toContain('Retries once');
+  // A question needs no change, so the first rung's answer stands.
+  expect(sessions).toHaveLength(1);
+});

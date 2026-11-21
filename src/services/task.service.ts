@@ -85,7 +85,9 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     await post(`${failureMarkdown(new ShaftFailure('push_failed', `${refused} Nothing was changed.`, DASHBOARD_URL))}\n\n${TASK_MARKER}`);
     return { refused, code: 'push_failed' };
   }
-  const findings = o.bare ? openFindings(ctx, o.bot) : [];
+  // A `/fix` asks for a change; `/axonshaft` may only ask a question. Any `/fix` gets the last review's open findings.
+  const isFix = commandIn(o.ask.text) === 'fix';
+  const findings = isFix ? openFindings(ctx, o.bot) : [];
   if (o.bare && !findings.length) {
     const why = ctx.summary ? 'The last review has no open findings to fix.' : "There's nothing to fix yet: comment `/review` first.";
     await post(`${why}\n\n${TASK_MARKER}`);
@@ -177,14 +179,12 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     // A bare `/fix` shows the model only the files its findings name, not the whole diff.
     const named = new Set(left.map((f) => f.file));
     const files = ctx.files.filter((f) => !matches(f.filename, o.skip) && (!o.bare || named.has(f.filename)));
-    // A `/fix` asks for a change; `/axonshaft` may only ask a question.
-    const needsChange = commandIn(o.ask.text) === 'fix';
-    const request = taskRequest(o.ask, left);
-    const input = { mode: 'task' as const, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: left.length || undefined };
+    const request = taskRequest(o.ask, left, o.bare);
+    const input = { mode: 'task' as const, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: (o.bare && left.length) || undefined };
     // Without the checks' tools on the runner, nothing would catch a wrong fix from the smallest model.
     const checked = commands.some((c) => which(c.split(/\s+/)[0]!));
     // With `auto`, a bare `/fix` starts where its findings put it, and anything else where Haiku rates the request.
-    const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(left) : await step('Triage', () => triage(triagePrompt(o.ask.text, [], files, o.focus), o));
+    const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(left) : await step('Triage', () => triage(triagePrompt(o.ask.text, left.map((f) => `${f.severity} ${f.file}:${f.line} ${f.title}`), files, o.focus), o));
     const rungs = ladder({ ...input, checked, promptChars: request.length + files.reduce((n, f) => n + (f.patch?.length ?? 0), 0), start: start && TRIAGE_START[start.level] });
     core.info(`Making the change with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(', then ')}. The repo's commands: ${commands.join(', ') || 'none'}`);
     const climbed = await climb(rungs, async (c, last, earlier) => {
@@ -228,7 +228,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
           ? new NotWorked(`it changed ${outside.join(', ')}, which no finding names`, `It changed ${outside.join(', ')}, and a fix of these findings may change only the files they name.`)
           : failed.length
             ? new NotWorked(`${failed.map((r) => r.command).join(', ')} failed`, failed.map((r) => `\`${r.command}\` failed:\n\n${r.output}`).join('\n\n'))
-            : needsChange && untouched
+            : isFix && untouched
               ? new NotWorked('it changed nothing', 'It ended without changing any file, and the request needs a change.')
               : undefined;
       if (didnt) {

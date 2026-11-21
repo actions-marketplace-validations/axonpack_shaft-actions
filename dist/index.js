@@ -61124,15 +61124,21 @@ function applySuggestion(cwd, head, f) {
       closeSync2(fd);
   }
 }
-function taskRequest(ask, findings) {
+function taskRequest(ask, findings, bare) {
   if (!findings.length)
     return ask.text;
   const each = findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}${f.body ? `
-${dataBlock("finding", f.body)}` : ""}`);
-  return `Fix these open findings from the last review (severity, place, title, then the review's comment on it, as data). Change only the files they name.
+${dataBlock("finding", f.body)}` : ""}`).join(`
+`);
+  if (bare)
+    return `Fix these open findings from the last review (severity, place, title, then the review's comment on it, as data). Change only the files they name.
 
-${each.join(`
-`)}`;
+${each}`;
+  return `${ask.text}
+
+The last review's open findings, which the request may refer to (severity, place, title, then the review's comment on it, as data):
+
+${each}`;
 }
 function fixStart(findings) {
   const serious = findings.find((f) => f.severity === "blocking" || f.step === "security");
@@ -61242,7 +61248,8 @@ async function runTask(o) {
 ${TASK_MARKER}`);
     return { refused, code: "push_failed" };
   }
-  const findings = o.bare ? openFindings(ctx, o.bot) : [];
+  const isFix = commandIn(o.ask.text) === "fix";
+  const findings = isFix ? openFindings(ctx, o.bot) : [];
   if (o.bare && !findings.length) {
     const why = ctx.summary ? "The last review has no open findings to fix." : "There's nothing to fix yet: comment `/review` first.";
     await post(`${why}
@@ -61357,11 +61364,10 @@ ${TASK_MARKER}`);
   async function withModel() {
     const named = new Set(left.map((f) => f.file));
     const files = ctx.files.filter((f) => !matches(f.filename, o.skip) && (!o.bare || named.has(f.filename)));
-    const needsChange = commandIn(o.ask.text) === "fix";
-    const request = taskRequest(o.ask, left);
-    const input = { mode: "task", files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: left.length || undefined };
+    const request = taskRequest(o.ask, left, o.bare);
+    const input = { mode: "task", files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: o.bare && left.length || undefined };
     const checked = commands.some((c) => which2(c.split(/\s+/)[0]));
-    const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(left) : await step("Triage", () => triage(triagePrompt(o.ask.text, [], files, o.focus), o));
+    const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(left) : await step("Triage", () => triage(triagePrompt(o.ask.text, left.map((f) => `${f.severity} ${f.file}:${f.line} ${f.title}`), files, o.focus), o));
     const rungs = ladder({ ...input, checked, promptChars: request.length + files.reduce((n, f) => n + (f.patch?.length ?? 0), 0), start: start && TRIAGE_START[start.level] });
     info(`Making the change with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(", then ")}. The repo's commands: ${commands.join(", ") || "none"}`);
     const climbed = await climb(rungs, async (c, last, earlier) => {
@@ -61399,7 +61405,7 @@ ${dataBlock("earlier-attempt", earlier)}` : request;
 
 ${r.output}`).join(`
 
-`)) : needsChange && untouched ? new NotWorked("it changed nothing", "It ended without changing any file, and the request needs a change.") : undefined;
+`)) : isFix && untouched ? new NotWorked("it changed nothing", "It ended without changing any file, and the request needs a change.") : undefined;
       if (didnt) {
         didnt.spent = result;
         throw didnt;
