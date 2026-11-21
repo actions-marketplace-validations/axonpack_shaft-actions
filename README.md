@@ -160,7 +160,7 @@ What counts as a command:
 - The model reads the pull request's head commit with the review's read-only tools and environment (see [What the review can do](#what-the-review-can-do)). It can't edit, commit or push.
 - The prompt has the question and the line it's on, the PR's title, body, commits and diff after `skip`, and the other comments of people inside the repo (see [What the review can do](#what-the-review-can-do)).
 - The answer cites `file:line` for its claims. It ends with the same footer as the summary comment and is cut at 20,000 characters.
-- With the model and effort on `auto`, it runs on `sonnet` at `medium` effort. With no turn limit set, the limit is 30.
+- With the model and effort on `auto`, Haiku first rates the question, and the answer starts on the model that rating gives (see [Model and effort on auto](#model-and-effort-on-auto)). With no turn limit set, the limit is 30.
 - The dashboard gets the run with the model, the tokens and the answer. A reply has no verdict.
 - When the model's session fails, the failure's card is posted where the question was asked, and the step fails.
 
@@ -168,17 +168,22 @@ What counts as a command:
 
 `/fix` and `/axonshaft <prompt>` run the project's Task job from the dashboard, with its prompt.
 
-- The request is the comment. A bare `/fix` asks for the open findings of the last review, from its summary comment. With no review yet, or nothing open in the last one, it replies with one line saying so and starts no session.
+- The request is the comment. A `/fix` with words after it also gets the last review's open findings, so "fix those" works.
+- A bare `/fix` fixes the open findings of the last review, from its summary comment. With no review yet, or nothing open in the last one, it replies with one line saying so and starts no session.
+  - A finding whose inline comment has a suggested change gets that change applied by the action, as GitHub's "Commit suggestion" would, with no model call. Only inline comments from `axonshaft[bot]` whose finding is in the summary's state count, and only while the comment is still on the pull request's head commit. A suggestion in anyone else's comment is never applied.
+  - The other findings go to the model with the review's whole comment on each, marked as data, and only the diff of the files they name.
+  - When every finding had a suggestion, no model runs: the action checks the change and pushes it, and the reply lists the suggestions it applied.
+  - The fix may change only the files the findings name. When it changes any other file, nothing is pushed, and the reply names the files.
 - The model works on the pull request's head commit. It makes the smallest change that does what was asked and runs the repo's tests and lint.
 - After the session, the action commits the change as `axonshaft[bot]`, with one plain line saying what changed, and pushes it to the pull request's branch.
 - The push starts the repo's own CI on the pull request before anyone has read the change, and CI runs the changed code with whatever secrets its workflows get. Read the commit before you merge or deploy it, and keep secrets out of the workflows that run on pull requests.
-- Comment `/fix` or `/axonshaft` on the pull request's Conversation tab. GitHub runs a comment in a review thread from the pull request's merge commit, so the workflow there isn't the default branch's, and the API refuses the task.
+- Comment `/fix` or `/axonshaft` on the pull request's Conversation tab. GitHub runs a comment in a review thread from the pull request's merge commit, so the workflow there isn't the default branch's, and the API refuses the task. When the API sends a token with that refusal, the action replies on the thread with the reason and says to comment `/fix` on the Conversation tab.
 - The task runs only on a GitHub-hosted runner, a fresh machine for each job. On a self-hosted runner the session doesn't run: the reply and a notice say why, and the run ends with `self_hosted_unsupported`. Reviews and `/ask` still run there.
 - The checkout must not keep a token: set `persist-credentials: false` on `actions/checkout`, as the quick start does. When `.git/config` holds an `extraheader`, a credentials file or a password in a remote's URL, the session doesn't run: the reply warns about it, and the run ends with `credentials_in_checkout`.
 - The task needs a Linux runner. Its commands run in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox, which the action installs from the runner's Ubuntu archive when it's missing (`sudo apt-get install bubblewrap`, 0.6 or later). When the sandbox can't start, for example on macOS or on a runner without `sudo` or user namespaces, the session doesn't run: the reply and a notice say why, and the run ends with `sandbox_unavailable`.
-- The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed or Failed.
+- The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed, Failed or Skipped.
 - A request that only asks a question gets an answer, and nothing is committed.
-- With the model and effort on `auto`, it runs on `opus` at `high` effort.
+- With the model and effort on `auto`, it climbs the model ladder (see [Model and effort on auto](#model-and-effort-on-auto)). An attempt that ends in a failed check, an error, the turn limit, a reply that doesn't match the format, or no change for a `/fix`, moves up a model. The next model starts from a clean checkout of the pull request's head and is told what went wrong.
 - The dashboard gets the run with the model, the tokens and the reply.
 
 ### What a change is allowed to do
@@ -212,6 +217,7 @@ What counts as a command:
   - something that isn't a file or a link, such as a submodule.
 - A change to a `package.json`, a Makefile or a lock file is committed, and the reply lists those files under "Read before merging", because they decide what runs on install and in CI.
 - Before pushing, the action runs the checks again itself, with the same environment: the commands the model listed, or the install, `test` and `lint` when it listed none. When one fails, nothing is pushed, and the reply names it and shows the end of its output. Neither the session nor the checks may move HEAD off the pull request's head commit.
+- The action installs no tools. A check whose program isn't on the runner's `PATH`, such as `bun` on a workflow that never sets it up, is skipped, not failed: the fix is pushed, and the reply says which checks were skipped and that the repo's CI runs them on the push.
 - Only after the checks pass does the action ask the API for the push token (`POST /v1/push-token`), a token with Contents write and nothing else. The API reads the pull request from GitHub again, and refuses a fork's pull request, the default branch, Push mode Disabled and someone without write access.
 - The action pushes through GitHub's API, never with git: a blob for each file, a tree on the head commit's, the commit, and then the branch moves to it without force. No git process sees the token, and the action revokes it when the push is done, whether it worked or not.
 - When the push fails, for example because someone pushed to the branch during the run, the failure card goes in the reply and the step fails with `push_failed`.
@@ -254,20 +260,27 @@ Everything else is set on the dashboard:
 
 ### Model and effort on auto
 
-With the model and effort on `auto`, the action picks both from the diff, after `skip`. The first row that matches wins:
+With the model and effort on `auto`, a run climbs a ladder of models, every one at `low` effort. It starts on the first rung, and moves up only when an attempt doesn't work. A run makes 3 attempts at most.
 
-| The diff | Model | Effort |
-|---|---|---|
-| Touches a `focus` path or a sensitive one: auth, crypto, payments, billing, workflows, migrations, or dependencies in `package.json` | `opus` | `high` |
-| Any diff on a deep review | `opus` | `high` |
-| Over 1,000 changed lines or over 30 files | `opus` | `medium` |
-| Only docs, comments, lockfiles or config | `haiku` | `low` |
-| Anything else | `sonnet` | `medium` |
+| Job | Models, in order |
+|---|---|
+| `/fix` or `/axonshaft`, when the repo's checks can run | `haiku`, `sonnet`, `opus` |
+| `/fix` or `/axonshaft`, when the checks' programs aren't on the runner | `sonnet`, `opus` |
+| `/ask` | `haiku`, `sonnet`, `opus` |
+| A review of only docs, comments, lockfiles or config | `haiku`, `sonnet` |
+| Any other review | `sonnet`, `opus` |
+| A review that touches a `focus` path or a sensitive one: auth, crypto, payments, billing, workflows, migrations, or dependencies in `package.json` | `opus` |
 
-- A model or effort set on the dashboard turns `auto` off for that one only.
-- On a deep review the subagents run on `sonnet` when the model is `auto`, and on the set model when it isn't.
-- If the Claude plan can't use the model `auto` picked, the review falls back to the next smaller one, and the footer's table has a Fallback row.
-- The footer shows the model, the effort and the tokens the run used, and its table adds why `auto` picked them (see [the summary comment](#the-summary-comment)).
+- An attempt doesn't work when its session fails, runs out of turns, or gives a reply that doesn't match the format. For a task it also doesn't work when a check that ran fails, when it changes files a bare `/fix` may not change, or when a `/fix` changes nothing. On a lower rung a reply that doesn't match the format moves up a model instead of asking the same one again.
+- Each attempt is a new session, and a task's starts from a clean checkout. It gets the earlier attempt's failure, marked as data, and not its transcript.
+- Where the ladder starts:
+  - `/ask`, and `/fix` or `/axonshaft` with words: Haiku rates the request first, at low effort, from the comment, the open findings' titles and the pull request's size, with no diff and no file. `simple` starts at `haiku`, `normal` at `sonnet` and `hard` at `opus`, never below the job's first rung. When the rating fails, the run starts on the first rung.
+  - A bare `/fix`: at `sonnet` when a finding is blocking or from the security check, or there are more than 5, else at `haiku`. No model rates it.
+  - A review: from the table.
+- Haiku is skipped when the prompt is over about 100,000 tokens.
+- A model or effort set on the dashboard runs as set: no rating and no ladder. A deep review runs `opus` at `high` effort, with its subagents on `sonnet` when the model is `auto` and on the set model when it isn't.
+- If the Claude plan can't use a model, the run falls back to the next smaller one, and the footer's table has a Fallback row.
+- The footer shows the model, the effort and the tokens the run used, the tokens of every attempt and the rating included. Its table adds why `auto` picked the ladder, the rating and its reason ("Triage"), and each model that didn't work and why ("Tried first"). The dashboard gets the model that ran, with the ones tried before it in parentheses.
 
 ### The turn limit by size
 
@@ -278,6 +291,8 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 | Under 100 lines | 12 |
 | Under 500 lines | 20 |
 | 500 lines or more, or a deep review | 30 |
+
+A bare `/fix` of fewer than 4 findings for the model gets 12 turns, and of fewer than 8 gets 20. Any other task gets 30.
 
 - A limit set on the dashboard always wins.
 - The action knows the limit wasn't set when the Axon Shaft API marks it as its default. With an API too old to say so, the review uses the limit the API sent.
@@ -300,7 +315,7 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
    It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
 7. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
 8. A footer, one small line that opens into a table. The line gives the model by name, the effort, the tokens and the changed lines, such as `Claude Sonnet 5.5, medium effort · 62k tokens, 219 lines`. On an API key the cost follows the tokens (`62k tokens · $0.38, 219 lines`). With no token counts the tokens are left out, and a run with no model call reads `no model call · 219 lines`.
-   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the permissions the app's installation hasn't approved yet, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
+   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the rating and the models tried first, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the permissions the app's installation hasn't approved yet, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
    Billed is cache-weighted: a cache read counts as 0.1 of an input token and a cache write as 1.25, so it can come out above the total when a run writes a lot of cache. A note under the table says so.
    The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
@@ -374,7 +389,7 @@ When the job has [checklists](#checklists), each checklist gets its own check ru
 ### Inline comments
 
 - One inline comment per blocking or should-fix finding, on its lines in the diff. Nits get one too when the dashboard says to post them inline.
-- A finding that already has an inline comment isn't posted again on the next push.
+- A finding that already has an inline comment isn't posted again on the next push, even when the push moved it a line or two: a finding with the same file and title as one in the last review, at most 2 lines away, is that finding.
 - When a push fixes a finding, its thread is resolved.
 
 A dry run prints the same text to the job log.
@@ -402,7 +417,7 @@ The job log folds each step into its own group, with how long it took:
 5. Post the review
 
 The Review group lists each tool call the model made, such as `Read src/pay.ts` or `Grep retry\(`.
-A deep pass's calls carry its name first, such as `[security] Grep exec\(`. The run's page on the dashboard shows this log once the job ends.
+A deep pass's calls carry its name first, such as `[security] Grep exec\(`. A Bash call that fails gets one more line with the command and the first and last lines it printed, such as `Bash failed: socat -V: Exit code 127, bwrap: execvp socat: No such file or directory`. The run's page on the dashboard shows this log once the job ends.
 
 When the AxonShaft app's installation hasn't approved a permission the run wants, the Axon Shaft API mints the token without it and the log warns once for each, saying what to approve. The run carries on without whatever needs that permission, and the summary's footer table lists it under "Missing permissions".
 
