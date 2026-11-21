@@ -1,5 +1,6 @@
-import { beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ShaftFailure } from '../../utils/failure.util';
+import { parseState } from '../../utils/render.util';
 import type { Checklist } from '../api.service';
 
 const logs: string[] = [];
@@ -7,6 +8,7 @@ const warnings: string[] = [];
 vi.doMock('@actions/core', () => ({
   info: (s: string) => logs.push(s),
   warning: (s: string) => warnings.push(s),
+  getIDToken: async () => 'oidc',
   group: (name: string, fn: () => Promise<unknown>) => {
     logs.push(`::group::${name}`);
     return fn();
@@ -51,6 +53,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
   const written: string[] = [];
   const posted: string[] = [];
   const summaries: string[] = [];
+  const inline: string[] = [];
   const [listFiles, listCommits, listComments, listReviewComments] = [0, 1, 2, 3].map(() => async () => ({}));
   const lists = new Map<unknown, unknown[]>([
     [listFiles, files],
@@ -74,6 +77,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
     written,
     posted,
     summaries,
+    inline,
     paginate: async (fn: unknown) => lists.get(fn),
     rest: {
       pulls: {
@@ -81,6 +85,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
         listFiles,
         listCommits,
         listReviewComments,
+        createReview: async ({ comments }: { comments: { body: string }[] }) => inline.push(...comments.map((c) => c.body)),
       },
       issues: { listComments, createComment: comment('create'), updateComment: comment('update') },
       checks: { create: check('create'), update: check('update') },
@@ -112,6 +117,7 @@ async function review(
     refuseChecks?: boolean | 'progress';
     checklists?: Checklist[];
     open?: string;
+    advisories?: boolean;
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
@@ -136,6 +142,7 @@ async function review(
     runUrl: 'https://github.com/o/r/actions/runs/9',
     cwd: '.',
     gates: extra.gates,
+    advisories: extra.advisories,
   });
   return { refs: fake.refs, prompt: runs.at(-1)?.prompt ?? '', run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
@@ -591,4 +598,54 @@ test('a script that throws leaves its checklist not checked, with the reason, ne
   ]);
   expect(warnings.some((w) => w.startsWith("The vulnerabilities list wasn't checked: osv.dev and GitHub's"))).toBe(true);
   expect(logs).not.toContain('Would post the Axon Shaft / vulnerabilities check: success');
+});
+
+describe('private draft advisories', () => {
+  const finding = { severity: 'blocking', step: 'security', file: 'src/a.ts', line: 1, title: 'Token sent in the URL', body: 'The session token goes in the query string.', suggestion: 'b2' };
+  const url = 'https://github.com/o/r/security/advisories/GHSA-1234-5678-9abc';
+  /** The fake API's answer to `POST /v1/advisories`. */
+  const advisoryApi = (res: () => Response) =>
+    vi.stubGlobal('fetch', async (path: string) => {
+      expect(path).toBe('https://api-shaft.axonpack.dev/v1/advisories');
+      return res();
+    });
+  beforeEach(() => {
+    process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
+    found = [finding];
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("on a public repo the inline comment, summary, state marker, check run and run report carry only the short note, and the log never has the finding's text", async () => {
+    advisoryApi(() => Response.json({ ghsa_id: 'GHSA-1234-5678-9abc', html_url: url, withhold: true }));
+    const { outcome } = await review([file('src/a.ts')], { dryRun: false, advisories: true });
+    const posted = [...fake.inline, ...fake.written, ...fake.summaries, JSON.stringify(outcome.output)].join('\n');
+    for (const secret of ['Token sent in the URL', 'query string', 'b2']) expect(posted).not.toContain(secret);
+    expect(fake.inline).toEqual([expect.stringContaining(`The details are in a [private draft security advisory](${url})`)]);
+    const summary = fake.written.at(-1)!;
+    expect(parseState(summary)!.findings).toEqual([expect.objectContaining({ title: 'Security issue, reported privately', severity: 'blocking' })]);
+    expect(summary).toContain(`[Security issue, reported privately](${url})`);
+    expect(fake.posted).toContain(`check create: Axon Shaft / security failure "Blocking findings" ${url}`);
+    expect(outcome.bySeverity.blocking).toBe(1);
+    expect(outcome.output.findings[0]).toMatchObject({ title: 'Security issue, reported privately', url });
+    expect(outcome.output.findings[0]).not.toHaveProperty('suggestion');
+    expect([...logs, ...warnings].join('\n')).not.toContain('Token sent');
+  });
+
+  test('a failed request posts the finding as today, warns, and adds one line to the summary', async () => {
+    advisoryApi(() => Response.json({ error: 'advisory_failed', message: 'Advisories are off for this repo.' }, { status: 403 }));
+    const { outcome } = await review([file('src/a.ts')], { dryRun: false, advisories: true });
+    expect(fake.inline[0]).toContain('The session token goes in the query string.');
+    expect(fake.written.at(-1)).toContain("**Draft advisories:** Couldn't open a private draft advisory for `");
+    expect(warnings).toEqual([expect.stringMatching(/^Couldn't open a draft advisory for \w+, so the finding is posted as it is: Advisories are off for this repo$/)]);
+    expect(outcome.output.findings[0]).toMatchObject({ title: 'Token sent in the URL' });
+  });
+
+  test('a dry run logs the draft it would open; with the setting off nothing is asked', async () => {
+    advisoryApi(() => expect.unreachable());
+    await review([file('src/a.ts')], { advisories: true });
+    expect(logs).toContain(`Would open a draft advisory for ${parseState(logs.find((l) => l.startsWith('--- summary')))!.findings[0]!.fp}`);
+    logs.length = 0;
+    await review([file('src/a.ts')], { dryRun: false });
+    expect(fake.inline[0]).toContain('The session token goes in the query string.');
+  });
 });

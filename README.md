@@ -246,6 +246,7 @@ Everything else is set on the dashboard:
 | `focus` globs | Files that get a closer look. |
 | Environment variables | Extra runner variables the model's environment gets, by name. See [what the review can do](#what-the-review-can-do). |
 | Merge gates | Up to 10 requirements every pull request must meet, in plain words. See [the merge gates check](#the-merge-gates-check). |
+| Private draft advisories | Open a private draft security advisory for each blocking security finding: off, or on public repos. See [private draft advisories](#private-draft-advisories). |
 
 ### Model and effort on auto
 
@@ -365,6 +366,16 @@ When the job has [checklists](#checklists), each checklist gets its own check ru
 - When a push fixes a finding, its thread is resolved.
 
 A dry run prints the same text to the job log.
+
+### Private draft advisories
+
+With "Private draft advisories" on for the repo, a blocking finding from the security check goes into a private draft security advisory on the repo, before the review posts anything. The Axon Shaft API opens the draft with its own token, so the action never holds Repository security advisories write. It asks for the first 3 of these findings on each review, and a later review of the same finding gets the draft it already has.
+
+- On a public repo the PR thread gets a short note in place of the details. The finding's title reads "Security issue, reported privately", and its text says the details are in a private draft security advisory that the repo's admins and security managers can open, with the link. The inline comment, the summary, the `Axon Shaft / security` check run and the run's page on the dashboard all show only the note, and the suggested change is dropped. The finding stays blocking, so the security check still fails.
+- On a private repo the finding keeps its text and links to its draft.
+- If the draft can't be opened (the API refuses, the AxonShaft app hasn't been approved for Repository security advisories write, or the call fails), the finding is posted as it would be without the setting. The job log warns, and the summary has a "Draft advisories" line naming the finding's fingerprint and the reason.
+- Publishing the advisory, requesting a CVE and setting its severity are up to the repo's maintainers on GitHub. Every draft starts at high severity.
+- A dry run logs `Would open a draft advisory for <fingerprint>` and opens none.
 
 ### The job log
 

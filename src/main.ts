@@ -149,6 +149,7 @@ async function run(): Promise<void> {
     checklists: job.checklists,
     latestAction: grant.latest_action,
     missingPermissions: missing,
+    advisories: settings.advisories === true,
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
   });
   core.setOutput('verdict', out.verdict);

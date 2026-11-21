@@ -196,6 +196,8 @@ export type Footer = {
   latestAction?: { version: string; url: string };
   /** GitHub's web editor for the workflow file (`workflowEditUrl()`), linked under the newer release. */
   workflowEditUrl?: string;
+  /** Why a private draft advisory couldn't be opened, for one line in the summary. */
+  advisories?: string;
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];
 };
@@ -421,6 +423,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
     out.push('', details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion!)));
   }
   if (nits.length) out.push('', details(plural(nits.length, 'nit'), table(nits, f)));
+  if (f.advisories) out.push('', `**Draft advisories:** ${f.advisories}`);
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);

@@ -23841,6 +23841,9 @@ async function answer(res) {
   }
   throw new ShaftFailure("api_error", `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
 }
+async function callApi(path, body) {
+  return answer(await post(path, body));
+}
 async function fetchGrant(request) {
   const grant = await answer(await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }));
   if (grant?.run === false) {
@@ -24294,6 +24297,8 @@ function renderSummary(raw, placed, prior, f) {
   }
   if (nits.length)
     out.push("", details(plural(nits.length, "nit"), table(nits, f)));
+  if (f.advisories)
+    out.push("", `**Draft advisories:** ${f.advisories}`);
   if (fixed.length)
     out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
   if (f.skipped)
@@ -58941,6 +58946,38 @@ ${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${
 `)}
 `;
 
+// src/services/advisory.service.ts
+var MAX_DRAFTS = 3;
+var WITHHELD_TITLE = "Security issue, reported privately";
+var withheldBody = (url) => `Axon Shaft found a blocking security issue on these lines. The details are in a [private draft security advisory](${url}) that the repo's admins and security managers can open.`;
+var cut = (text, max) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
+async function openAdvisories(placed, o) {
+  const failed = [];
+  for (const p of placed.filter((f) => f.step === "security" && f.severity === "blocking").slice(0, MAX_DRAFTS)) {
+    if (o.dryRun) {
+      info(`Would open a draft advisory for ${p.fp}`);
+      continue;
+    }
+    try {
+      const body = { fp: p.fp, title: cut(o.clean(p.title), 300), body: cut(o.clean(p.body), 5000), file: cut(p.file, 500), line: Math.max(1, p.line), pull: o.pull };
+      const draft = await callApi("/v1/advisories", body);
+      if (typeof draft?.html_url !== "string")
+        throw new Error("The Axon Shaft API sent an incomplete answer");
+      p.url = draft.html_url;
+      if (draft.withhold) {
+        p.title = WITHHELD_TITLE;
+        p.body = withheldBody(draft.html_url);
+        delete p.suggestion;
+      }
+    } catch (e) {
+      const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, "");
+      warning(`Couldn't open a draft advisory for ${p.fp}, so the finding is posted as it is: ${why}`);
+      failed.push(`\`${p.fp}\` (${why})`);
+    }
+  }
+  return failed.length ? `Couldn't open a private draft advisory for ${failed.join(", ")}, so ${failed.length === 1 ? "that finding shows" : "those findings show"} in full.` : undefined;
+}
+
 // src/services/prestep/deps-diff.service.ts
 import { dirname as dirname3, join as join6 } from "node:path";
 
@@ -60439,6 +60476,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
+  const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);
@@ -60474,6 +60512,7 @@ ${c.body}`);
   const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : undefined;
   const body = renderSummary(review, placed, prior, {
     ...facts,
+    advisories,
     checks: o.checks,
     checklists: planned,
     latestAction: o.latestAction,
@@ -61066,6 +61105,7 @@ ${grant.comment}`);
     checklists: job.checklists,
     latestAction: grant.latest_action,
     missingPermissions: missing,
+    advisories: settings.advisories === true,
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch)
   });
   setOutput("verdict", out.verdict);

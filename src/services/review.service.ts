@@ -7,6 +7,7 @@ import type { Octokit } from '../types/octokit.type';
 import type { ScriptInput } from '../types/prestep.type';
 import type { ClaudeToken, GrantJob, MissingPermission, RunOutput } from './api.service';
 import { type AgentResult, REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
+import { openAdvisories } from './advisory.service';
 import { checkoutFiles } from './checkout.service';
 import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
 import { baseFile, type Context, collectContext } from './context.service';
@@ -74,6 +75,8 @@ export type ReviewOptions = {
   latestAction?: { version: string; url: string };
   /** GitHub's web editor for the workflow file, linked with that line. */
   workflowEditUrl?: string;
+  /** Open a private draft advisory for each blocking security finding (the API's `settings.advisories`). */
+  advisories?: boolean;
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
   cwd: string;
@@ -374,6 +377,8 @@ async function postReview(
   core.startGroup('Post the review');
 
   const placed = place(review.findings, files, o.nits);
+  // Before anything is posted, so a withheld finding's details never reach the PR.
+  const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);
@@ -407,6 +412,7 @@ async function postReview(
   const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : undefined;
   const body = renderSummary(review, placed, prior, {
     ...facts,
+    advisories,
     checks: o.checks,
     checklists: planned,
     latestAction: o.latestAction,

@@ -139,6 +139,11 @@ async function answer(res: Response): Promise<unknown> {
   throw new ShaftFailure('api_error', `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
 }
 
+/** POST to the Axon Shaft API and return its answer's JSON, or throw its error as a `ShaftFailure`. */
+export async function callApi(path: string, body: unknown): Promise<unknown> {
+  return answer(await post(path, body));
+}
+
 /**
  * Whether to run, and this repo's GitHub token, Claude token, settings and job from the Axon Shaft API.
  * Both tokens are masked. It also sends this build's version and the ref the workflow runs it at
