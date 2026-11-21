@@ -214,6 +214,10 @@ export type AgentOptions = {
    * checkout and run these, each call still checked by the guard. No token is added for them.
    */
   commands?: string[];
+  /** In place of the job's tools: none for a triage, which reads only its prompt. */
+  tools?: string[];
+  /** Retry a reply that doesn't match the schema once (the default). A rung of the `auto` ladder moves up instead. */
+  retry?: boolean;
 };
 
 /** What a run used, summed over its models, as `POST /v1/runs` takes it. */
@@ -257,10 +261,10 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       effort: o.effort as EffortLevel,
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
-      tools: deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS,
+      tools: o.tools ?? (deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS),
       // A task's Bash runs the repo's commands, which no allow rule can list ahead, so no rule allows it:
       // only the guard's own allow lets a call through, and if the guard doesn't answer, dontAsk denies it.
-      allowedTools: deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED,
+      allowedTools: o.tools ?? (deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED),
       disallowedTools: DENIED,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
@@ -300,12 +304,21 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
   const controller = new AbortController();
   running.add(controller);
   const timer = setTimeout(() => controller.abort(), o.timeoutMinutes * 60_000);
+  // What every attempt used, so a retry or a failure still counts its tokens.
+  const spent: Omit<AgentResult<T>, 'reply'> = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
   try {
     for (let attempt = 1; ; attempt++) {
       const result = await once(prompt, o, format.schema, controller);
+      if (result) {
+        const usage = result.modelUsage ?? {};
+        const t = sumTokens(usage);
+        spent.models = [...new Set([...spent.models, ...Object.keys(usage)])];
+        spent.costUsd += result.total_cost_usd ?? 0;
+        for (const k of Object.keys(t) as (keyof Tokens)[]) spent.tokens[k] += t[k];
+      }
       if (result?.subtype === 'success') {
         const reply = format.parse(result.structured_output);
-        if (reply) return { reply, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd, tokens: sumTokens(result.modelUsage) };
+        if (reply) return { reply, ...spent };
       } else if (result && result.subtype !== 'error_max_structured_output_retries') {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join('; ')}`);
       }
@@ -313,17 +326,18 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
       const out = result?.subtype === 'success' ? result.structured_output : undefined;
       const what = result?.subtype === 'success' ? `its fields: ${Object.keys(out && typeof out === 'object' ? out : {}).join(', ') || 'none'}` : (result?.errors.join('; ') ?? 'no result');
       core.warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}), ${what}`);
-      if (attempt === 2) {
+      if (attempt === 2 || o.retry === false) {
         throw new ShaftFailure('review_invalid_reply', `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job.`);
       }
     }
   } catch (e) {
-    if (controller.signal.aborted) {
-      throw new ShaftFailure('review_timed_out', `The ${format.name} ran past its ${o.timeoutMinutes}-minute time limit. Raise the time limit on the dashboard, or rerun the job.`, DASHBOARD_URL);
-    }
-    if (e instanceof ShaftFailure) throw e;
-    const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, '');
-    throw new ShaftFailure('review_failed', `The ${format.name} failed: ${why}. Rerun the job; the job log has the details.`);
+    const failure = controller.signal.aborted
+      ? new ShaftFailure('review_timed_out', `The ${format.name} ran past its ${o.timeoutMinutes}-minute time limit. Raise the time limit on the dashboard, or rerun the job.`, DASHBOARD_URL)
+      : e instanceof ShaftFailure
+        ? e
+        : new ShaftFailure('review_failed', `The ${format.name} failed: ${(e instanceof Error ? e.message : String(e)).replace(/\.$/, '')}. Rerun the job; the job log has the details.`);
+    failure.spent = spent;
+    throw failure;
   } finally {
     clearTimeout(timer);
     running.delete(controller);

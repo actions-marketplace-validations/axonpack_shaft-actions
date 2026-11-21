@@ -1,4 +1,5 @@
 import { matchesGlob } from 'node:path';
+import { HAIKU_MAX_PROMPT_TOKENS, LADDER_EFFORT, LADDERS } from '../consts/ladder.const';
 
 export type ChangedFile = { filename: string; additions: number; deletions: number; patch?: string };
 
@@ -25,6 +26,8 @@ export type PickInput = {
   effort?: string;
   /** From the dashboard; unset picks one from the diff's size. */
   maxTurns?: number;
+  /** A bare `/fix`'s open findings left for the model, which size its turn cap. */
+  findings?: number;
 };
 
 /** The turn cap when the dashboard sets none: the API's default, lower for a small diff. */
@@ -32,6 +35,11 @@ export const DEFAULT_MAX_TURNS = 30;
 const TURNS_BY_LINES: [below: number, turns: number][] = [
   [100, 12],
   [500, 20],
+];
+/** A bare `/fix` of a few findings needs fewer turns. */
+const TURNS_BY_FINDINGS: [below: number, turns: number][] = [
+  [4, 12],
+  [8, 20],
 ];
 
 const SENSITIVE =
@@ -63,14 +71,19 @@ export function onlyComments(patch: string | undefined): boolean {
 const isLight = (f: ChangedFile) =>
   DOCS.test(f.filename) || LOCKFILE.test(f.filename) || CONFIG.test(f.filename) || onlyComments(f.patch);
 
+/** The changed files after `skip`, and the first focus or sensitive one. */
+export function sizeUp(input: PickInput) {
+  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
+  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
+  return { files, hot, lines: files.reduce((n, f) => n + f.additions + f.deletions, 0) };
+}
+
 /** The `auto` model and effort table from the plan. The first row that matches wins. */
 export function pick(input: PickInput): Choice {
-  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
-  const lines = files.reduce((n, f) => n + f.additions + f.deletions, 0);
+  const { files, hot, lines } = sizeUp(input);
   const size = `${lines} lines`;
   let row: Pick<Choice, 'model' | 'effort' | 'reason'>;
 
-  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
   if (input.mode === 'task') row = { model: 'opus', effort: 'high', reason: 'task' };
   else if (input.mode === 'reply') row = { model: 'sonnet', effort: 'medium', reason: 'question' };
   else if (hot) row = { model: 'opus', effort: 'high', reason: `${size}, touches ${hot.filename}` };
@@ -82,7 +95,10 @@ export function pick(input: PickInput): Choice {
   const autoModel = !input.model || input.model === 'auto';
   const model = autoModel ? row.model : input.model!;
   // A deep review's main session runs the passes and checks their findings, so it keeps the full cap.
-  const sized = input.mode === 'review' && input.depth !== 'deep' && TURNS_BY_LINES.find(([below]) => lines < below)?.[1];
+  const sized =
+    input.mode === 'review' && input.depth !== 'deep'
+      ? TURNS_BY_LINES.find(([below]) => lines < below)?.[1]
+      : input.mode === 'task' && input.findings && TURNS_BY_FINDINGS.find(([below]) => input.findings! < below)?.[1];
   const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
   return {
     ...row,
@@ -94,4 +110,36 @@ export function pick(input: PickInput): Choice {
     subagentModel: input.depth === 'deep' ? (autoModel ? 'sonnet' : model) : undefined,
     autoModel,
   };
+}
+
+
+/**
+ * The choices to try, in order. With the model and effort both `auto`, a job climbs its ladder from
+ * `LADDERS`, each rung at low effort, without Haiku when the prompt is too big for it. A model or
+ * effort the user set, and a deep review, run `pick`'s one choice. `checked`: a task's checks can run
+ * on this runner. `promptChars`: the prompt's length, at about 4 characters a token. `start`: the
+ * model triage picked, which drops the rungs below it, never the last one.
+ */
+export function ladder(input: PickInput & { checked?: boolean; promptChars?: number; start?: string }): Choice[] {
+  const first = pick(input);
+  if (!first.autoModel || (input.effort && input.effort !== 'auto') || input.depth === 'deep') return [first];
+  const { files, hot, lines } = sizeUp(input);
+  const [key, why]: [keyof typeof LADDERS, string] =
+    input.mode === 'task'
+      ? input.checked === false
+        ? ['taskUnchecked', "task, and the repo's checks can't run on this runner"]
+        : ['task', 'task']
+      : input.mode === 'reply'
+        ? ['reply', 'question']
+        : hot
+          ? ['reviewHot', `${lines} lines, touches ${hot.filename}`]
+          : files.length > 0 && files.every(isLight)
+            ? ['reviewLight', `${lines} lines, docs and config only`]
+            : ['review', `${lines} lines`];
+  // ponytail: about 4 characters a token; count tokens if the cut-off ever matters to the dollar
+  const big = (input.promptChars ?? 0) / 4 > HAIKU_MAX_PROMPT_TOKENS;
+  const allowed: string[] = LADDERS[key].filter((m) => !(big && m === 'haiku'));
+  const models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ''), allowed.length - 1)));
+  const reason = `${why}; auto tries ${models.join(', then ')} at ${LADDER_EFFORT} effort, moving up only when an attempt doesn't work`;
+  return models.map((model) => ({ ...first, model, effort: LADDER_EFFORT, reason }));
 }

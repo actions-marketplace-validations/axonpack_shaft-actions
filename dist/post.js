@@ -23712,6 +23712,7 @@ class ShaftFailure extends Error {
     this.code = code;
     this.url = url;
   }
+  spent;
 }
 var codeUrl = (code) => `${CODES_URL}#${encodeURIComponent(code)}`;
 function failureMarkdown(f) {

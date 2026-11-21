@@ -14,6 +14,8 @@ export class ShaftFailure extends Error {
   ) {
     super(message);
   }
+  /** What a model session used before it failed, so the run still counts it. */
+  spent?: { models: string[]; costUsd: number; tokens: { input: number; output: number; cache_read: number; cache_write: number } };
 }
 
 /** The docs' entry for a failure, notice or skip code. */

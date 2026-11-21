@@ -209,17 +209,17 @@ test('the skip globs drop files from the diff, and the prompt and the summary co
   expect(summary).toContain("**Skipped:** 2 files matched `skip` and weren't reviewed.");
 });
 
-test('focus files are marked in the diff, and auto picks opus and high', async () => {
+test('focus files are marked in the diff, and auto starts at opus, low effort', async () => {
   const { prompt, run } = await review([file('src/core/engine.ts'), file('src/a.ts')], { focus: ['src/core/**'] });
   expect(prompt).toContain('diff --git a/src/core/engine.ts b/src/core/engine.ts (modified, focus)');
   expect(prompt).toContain('diff --git a/src/a.ts b/src/a.ts (modified)\n');
-  expect(run).toMatchObject({ model: 'opus', effort: 'high' });
+  expect(run).toMatchObject({ model: 'opus', effort: 'low' });
 });
 
 test('without focus files: no marking, and sonnet', async () => {
   const { prompt, run } = await review([file('src/a.ts')]);
   expect(prompt).not.toContain(', focus)');
-  expect(run).toMatchObject({ model: 'sonnet', effort: 'medium' });
+  expect(run).toMatchObject({ model: 'sonnet', effort: 'low' });
 });
 
 test("a deep review runs the dashboard's passes as its subagents", async () => {
@@ -228,7 +228,7 @@ test("a deep review runs the dashboard's passes as its subagents", async () => {
   expect(run.passes).toEqual(passes);
 });
 
-test('a failed review creates the summary with its card, message and the run link, and fails the review check', async () => {
+test('a review whose every rung fails creates the summary with its card, message and the run link, and fails the review check', async () => {
   agentError = new ShaftFailure('review_invalid_reply', "The model's reply didn't match the review format twice.");
   await expect(review([file('src/a.ts')], { dryRun: false })).rejects.toBe(agentError);
   expect(fake.written).toEqual([
@@ -241,9 +241,11 @@ test('a failed review creates the summary with its card, message and the run lin
       '<https://github.com/o/r/actions/runs/9>',
     ].join('\n'),
   ]);
+  // A bad reply on Sonnet moves up to Opus, the code review's last rung, whose failure is the run's.
   expect(progress()).toEqual([
     STARTED,
     STEPS[0],
+    'check update: Axon Shaft / review in_progress "Reviewing with Opus, effort low"',
     "create: [![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)](https://shaft.axonpack.dev/docs/reference/codes#review_invalid_reply)",
     'check update: Axon Shaft / review failure "The review failed" https://github.com/o/r/actions/runs/9',
   ]);
@@ -254,7 +256,7 @@ const progress = () => fake.posted.filter((p) => !/Axon Shaft \/ (?!review)/.tes
 const SUMMARY_URL = 'https://github.com/o/r/pull/7#issuecomment-1';
 const STARTED = 'check create: Axon Shaft / review in_progress "Reviewing abc1234" https://github.com/o/r/actions/runs/9';
 /** The review check's update at the start of each step after the read. */
-const STEPS = ['check update: Axon Shaft / review in_progress "Reviewing with Sonnet, effort medium"', 'check update: Axon Shaft / review in_progress "Posting the review"'];
+const STEPS = ['check update: Axon Shaft / review in_progress "Reviewing with Sonnet, effort low"', 'check update: Axon Shaft / review in_progress "Posting the review"'];
 
 test("a first review creates no comment until the result, and the review check shows it's running", async () => {
   await review([file('src/a.ts')], { dryRun: false });
@@ -293,7 +295,7 @@ test('a dry run posts nothing and logs the review check', async () => {
   await review([file('src/a.ts')]);
   expect(fake.posted).toEqual([]);
   expect(logs).toContain('Would start the Axon Shaft / review check');
-  expect(logs).toContain('Would update the Axon Shaft / review check: Reviewing with Sonnet, effort medium');
+  expect(logs).toContain('Would update the Axon Shaft / review check: Reviewing with Sonnet, effort low');
   expect(logs).toContain('Would update the Axon Shaft / review check: Posting the review');
 });
 
@@ -369,7 +371,7 @@ test('each guide is cut at 8,000 characters and all of them at 30,000, saying so
 test("the footer and /v1/runs name the review's model, not the CLI's own helper model", async () => {
   usage = ['claude-haiku-5-5', 'claude-sonnet-5-5'];
   const { summary, outcome } = await review([file('src/a.ts')]);
-  expect(summary).toContain('<sub>Claude Sonnet 5.5, medium effort · ');
+  expect(summary).toContain('<sub>Claude Sonnet 5.5, low effort · ');
   expect(summary).not.toContain('haiku');
   expect(outcome.model).toBe('claude-sonnet-5-5');
 });

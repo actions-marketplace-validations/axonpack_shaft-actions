@@ -1,20 +1,24 @@
 import * as core from '@actions/core';
 import { DASHBOARD_URL } from '../consts/api.const';
-import { matches, pick } from '../utils/auto-pick.util';
+import { FIX_HAIKU_MAX, TRIAGE_START } from '../consts/ladder.const';
+import { ladder, matches } from '../utils/auto-pick.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { pushDenial, type PushTarget, runsCode } from '../utils/push.util';
 import { parseState, prose, redact, type StateFinding } from '../utils/render.util';
+import { dataBlock } from '../utils/prompt.util';
 import { toolDenial } from '../utils/tool-guard.util';
 import { type ReplyFormat, runAgent } from './agent.service';
 import { fetchPushToken } from './api.service';
 import { type CheckResult, repoCommands, runCheck } from './commands.service';
 import { savedCredentials } from './checkout.service';
 import { collectContext } from './context.service';
-import { assertHead, head, pushChanges, readChanges } from './push.service';
+import { climb, NotWorked, NO_SPEND, withSpent } from './ladder.service';
+import { assertHead, head, pushChanges, readChanges, resetTo } from './push.service';
 import { ANSWER_MAX, answerFooter, buildReplyPrompt, postInThread, type ReplyOptions, type ReplyOutcome } from './reply.service';
 import { FALLBACK } from './review.service';
-import type { Ask } from './route.service';
-import { endSandboxes, prepareSandbox } from './sandbox.service';
+import { type Ask, commandIn } from './route.service';
+import { endSandboxes, prepareSandbox, which } from './sandbox.service';
+import { triage, triagePrompt } from './triage.service';
 import { step } from './step.service';
 
 /** Ends everything a task posts. */
@@ -67,6 +71,17 @@ export function selfHosted(): string | undefined {
 export function taskRequest(ask: Ask, findings: StateFinding[]): string {
   if (!findings.length) return ask.text;
   return `Fix these open findings from the last review (severity, place, title):\n\n${findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}`).join('\n')}`;
+}
+
+/**
+ * Where a bare `/fix` starts, with no model call: Sonnet for a blocking finding or more than a few,
+ * else Haiku (the ladder still skips Haiku when the checks can't run).
+ */
+export function fixStart(findings: StateFinding[]): { level: 'simple' | 'normal'; reason: string } {
+  const blocking = findings.some((f) => f.severity === 'blocking');
+  const n = `${findings.length} finding${findings.length === 1 ? '' : 's'}`;
+  if (blocking || findings.length > FIX_HAIKU_MAX) return { level: 'normal', reason: `bare /fix of ${n}${blocking ? ', one or more blocking' : ''}` };
+  return { level: 'simple', reason: `bare /fix of ${n}, none blocking` };
 }
 
 /**
@@ -125,42 +140,72 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   const base = head(o.cwd);
 
   const commands = repoCommands(o.cwd);
-  const choice = pick({ mode: 'task', model: o.model, effort: o.effort, maxTurns: o.maxTurns });
-  core.info(`Making the change with ${choice.model}, effort ${choice.effort}. The repo's commands: ${commands.join(', ') || 'none'}`);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
-  const prompt = buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, {
-    template: o.template,
-    focus: o.focus,
-    slots: { request: taskRequest(o.ask, findings), commands: commands.map((c) => `- \`${c}\``).join('\n') },
-  });
+  // A `/fix` asks for a change; `/axonshaft` may only ask a question.
+  const needsChange = commandIn(o.ask.text) === 'fix';
+  const request = taskRequest(o.ask, findings);
+  const input = { mode: 'task' as const, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, findings: findings.length || undefined };
+  // Without the checks' tools on the runner, nothing would catch a wrong fix from the smallest model.
+  const checked = commands.some((c) => which(c.split(/\s+/)[0]!));
+  // With `auto`, a bare `/fix` starts where its findings put it, and anything else where Haiku rates the request.
+  const start = ladder(input).length < 2 ? undefined : o.bare ? fixStart(findings) : await step('Triage', () => triage(triagePrompt(o.ask.text, [], files, o.focus), o));
+  const rungs = ladder({ ...input, checked, promptChars: request.length + files.reduce((n, f) => n + (f.patch?.length ?? 0), 0), start: start && TRIAGE_START[start.level] });
+  core.info(`Making the change with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(', then ')}. The repo's commands: ${commands.join(', ') || 'none'}`);
   try {
-    const result = await step('Make the change', () =>
-      runAgent(
-        prompt,
-        {
-          claude: o.claude,
-          model: choice.model,
-          effort: choice.effort,
-          fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
-          maxTurns: choice.maxTurns,
-          timeoutMinutes: o.timeoutMinutes,
-          cwd: o.cwd,
-          env: o.env,
-          commands,
-        },
-        TASK_FORMAT,
-      ).finally(endSandboxes),
-    );
+    const climbed = await climb(rungs, async (c, last, earlier) => {
+      // Each rung starts again from the pull request's head, told why the one before didn't work.
+      if (earlier) resetTo(o.cwd, base);
+      const retold = earlier
+        ? `${request}\n\nAn attempt with a smaller model didn't work, and the checkout is back at the pull request's head. What went wrong, as data:\n\n${dataBlock('earlier-attempt', earlier)}`
+        : request;
+      const prompt = buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, {
+        template: o.template,
+        focus: o.focus,
+        slots: { request: retold, commands: commands.map((cmd) => `- \`${cmd}\``).join('\n') },
+      });
+      const result = await step('Make the change', () =>
+        runAgent(
+          prompt,
+          {
+            claude: o.claude,
+            model: c.model,
+            effort: c.effort,
+            fallbackModel: c.autoModel ? FALLBACK[c.model] : undefined,
+            maxTurns: c.maxTurns,
+            timeoutMinutes: o.timeoutMinutes,
+            cwd: o.cwd,
+            env: o.env,
+            commands,
+            retry: last,
+          },
+          TASK_FORMAT,
+        ).finally(endSandboxes),
+      );
+      const changes = readChanges(o.cwd, base);
+      const checks = changes.length ? await step('Run the checks', async () => checkList(result.reply.checks, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
+      const failed = checks.filter((r) => !r.passed);
+      const didnt =
+        last || (changes.length ? !failed.length : !needsChange)
+          ? undefined
+          : changes.length
+            ? new NotWorked(`${failed.map((r) => r.command).join(', ')} failed`, failed.map((r) => `\`${r.command}\` failed:\n\n${r.output}`).join('\n\n'))
+            : new NotWorked('it changed nothing', 'It ended without changing any file, and the request needs a change.');
+      if (didnt) {
+        didnt.spent = result;
+        throw didnt;
+      }
+      return { result, changes, checks, failed };
+    });
+    const choice = climbed.choice;
+    const { changes, checks, failed } = climbed.out;
+    const result = withSpent(withSpent(climbed.out.result, climbed.spent), (start && 'spent' in start && start.spent) || NO_SPEND);
     const lines = [prose(result.reply.answer)];
-    const changes = readChanges(o.cwd, base);
     if (changes.length) {
       const paths = changes.map((c) => c.path);
       const name = (f: string) => `\`${f.replace(/[`\r\n]/g, '')}\``;
       lines.push(`**Changed:** ${paths.map(name).join(', ')}`);
       const runs = runsCode(paths);
       if (runs.length) lines.push(`**Read before merging:** ${runs.map(name).join(', ')} decide${runs.length === 1 ? 's' : ''} what runs on install and in CI.`);
-      const checks = await step('Run the checks', async () => checkList(result.reply.checks, commands, o.cwd).map((c) => runCheck(o.cwd, c, o.env)));
-      const failed = checks.filter((c) => !c.passed);
       if (failed.length) {
         core.warning(`Nothing was pushed: ${failed.map((c) => c.command).join(', ')} failed.`);
         lines.push(`Nothing was pushed, because ${failed.length === 1 ? 'a check' : 'some checks'} failed.`);
@@ -180,7 +225,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>\n\n\`\`\`\`\n${prose(c.output).replace(/`{4,}/g, '```')}\n\`\`\`\`\n\n</details>`);
     }
     const answer = redact(lines.join('\n\n'), o.secrets).slice(0, ANSWER_MAX);
-    const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result);
+    const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result, climbed.tried, start && `${start.level}: ${start.reason}`);
     const commentUrl = await post(`${answer}\n\n${sub}\n\n${TASK_MARKER}`);
     return { model, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
   } catch (e) {

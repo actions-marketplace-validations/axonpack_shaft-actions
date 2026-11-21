@@ -152,7 +152,7 @@ test("a reply that misses the schema twice is review_invalid_reply, and the log 
 
 test('an SDK error, or anything else that breaks the run, is review_failed', async () => {
   reply = [{ type: 'result', subtype: 'error_max_turns', errors: ['Reached the turn limit.'] }];
-  expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toEqual({
+  expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toMatchObject({
     code: 'review_failed',
     message: 'The review failed: The Agent SDK run ended with error_max_turns: Reached the turn limit. Rerun the job; the job log has the details.',
     url: undefined,

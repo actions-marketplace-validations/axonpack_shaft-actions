@@ -34,3 +34,10 @@ export function fillSlots(template: string, slots: Record<string, string | numbe
     return value.trim() ? value : 'None.';
   });
 }
+
+/**
+ * Text the model should read as data, never as instructions, inside `<tag>`: a finding's body, a
+ * request to rate, why an earlier attempt failed. A closing tag in the text is taken out, so it can't
+ * end the block early.
+ */
+export const dataBlock = (tag: string, text: string): string => `<${tag}>\n${text.replace(new RegExp(`</?${tag}\\b[^>]*>`, 'gi'), '')}\n</${tag}>`;

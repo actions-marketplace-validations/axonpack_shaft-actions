@@ -7,19 +7,29 @@ import { stateLine } from '../../utils/render.util';
 
 vi.doMock('@actions/core', () => ({ info: () => {}, warning: () => {}, setSecret: () => {}, group: (_name: string, fn: () => Promise<unknown>) => fn() }));
 /** What each mocked session does in the checkout, and what it replies; every session's prompt and options. */
-let session: (cwd: string) => { answer: string; commit_message: string; checks: string[] } = () => ({ answer: 'Nothing to change.', commit_message: '', checks: [] });
+let session: (cwd: string, model: string) => { answer: string; commit_message: string; checks: string[] } = () => ({ answer: 'Nothing to change.', commit_message: '', checks: [] });
 const sessions: { prompt: string; options: Record<string, unknown> }[] = [];
+/** The triage calls' prompts, and the level each answers. */
+const triages: string[] = [];
+let level = 'normal';
 vi.doMock('../agent.service', async (actual) => ({
   ...(await actual<typeof import('../agent.service')>()),
-  runAgent: async (prompt: string, options: { cwd: string; model: string }) => {
+  runAgent: async (prompt: string, options: { cwd: string; model: string }, format: { name: string }) => {
+    if (format.name === 'triage') {
+      triages.push(prompt);
+      return { reply: { level, reason: 'r' }, models: ['claude-haiku-5-5'], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
+    }
     sessions.push({ prompt, options });
-    return { reply: session(options.cwd), models: [options.model], costUsd: 0.5, tokens: { input: 9000, output: 300, cache_read: 0, cache_write: 0 } };
+    return { reply: session(options.cwd, options.model), models: [options.model], costUsd: 0.5, tokens: { input: 9000, output: 300, cache_read: 0, cache_write: 0 } };
   },
 }));
 // The sandbox runs only on Linux (sandbox.service.test.ts): here the commands run as they would inside it.
 let unsandboxed: string | undefined;
 let ended = 0;
+/** The programs the runner doesn't have on its PATH. */
+let missing: string[] = [];
 vi.doMock('../sandbox.service', () => ({
+  which: (name: string) => (missing.includes(name) ? undefined : `/usr/bin/${name}`),
   prepareSandbox: () => unsandboxed,
   endSandboxes: () => ended++,
   inSandbox: (cwd: string, file: string, args: string[], o: cp.ExecFileSyncOptions) => cp.execFileSync(file, args, { ...o, cwd }),
@@ -81,6 +91,9 @@ beforeEach(() => {
   pushes.length = 0;
   unsandboxed = undefined;
   ended = 0;
+  missing = [];
+  triages.length = 0;
+  level = 'normal';
 });
 
 /** A fake Octokit for PR 7 from `head` (in `headRepo`) into `main`, recording what's posted. */
@@ -181,7 +194,9 @@ test('a change is checked by our own run of its checks, then pushed as the bot w
   expect(fake.posted).toHaveLength(1);
   expect(fake.posted[0]).toContain(`Raised the retries to three in \`src/retry.ts:1\`.\n\n**Changed:** \`fix.txt\`\n\n**Commit:** [\`${sha.slice(0, 7)}\`](file://${join(dir, 'origin')}/commit/${sha}) on \`pr\`\n\n| Check | Result |\n| --- | --- |\n| \`bun run test\` | Passed |`);
   expect(fake.posted[0]).toMatch(/<!-- shaft:task -->$/);
-  expect(out).toMatchObject({ model: 'opus', effort: 'high', output: { comment_url: 'https://github.com/acme/widgets/pull/7#issuecomment-9' } });
+  // Triage rated the request normal, so it started at Sonnet, at low effort, and that worked.
+  expect(triages).toHaveLength(1);
+  expect(out).toMatchObject({ model: 'sonnet', effort: 'low', output: { comment_url: 'https://github.com/acme/widgets/pull/7#issuecomment-9' } });
 });
 
 test("when a check fails no push token is asked for, and the reply names the check and shows its output without the project's values", async () => {
@@ -308,4 +323,31 @@ test("the checks are the model's that the guard allows, else the repo's install,
   expect(checkList([], commands, work)).toEqual(['bun install --frozen-lockfile', 'bun run test', 'bun run lint']);
   expect(TASK_FORMAT.parse({ answer: 'Done.', commit_message: 'Fix it', checks: [] })).toBeTruthy();
   expect(TASK_FORMAT.parse({ answer: 'Done.', checks: [] })).toBeUndefined();
+});
+
+test('a change whose check fails moves up a rung from a clean checkout, told what failed as data', async () => {
+  fake = octokit();
+  level = 'simple';
+  session = (cwd, model) => edits(model === 'haiku' ? 'broken' : 'fix.txt')(cwd);
+  const out = await runTask(options());
+  expect(sessions.map((x) => x.options.model)).toEqual(['haiku', 'sonnet']);
+  // The second rung started without the first one's file, and its prompt says what failed, as data.
+  expect(pushes).toEqual([expect.objectContaining({ changes: [{ path: 'fix.txt', mode: '100644', content: Buffer.from('x') }] })]);
+  expect(sessions[1]!.prompt).toMatch(/<earlier-attempt>\n`bun run test` failed:\n\n[^<]*1 test failed: broken/);
+  expect(fake.posted[0]).toContain('| Tried first | haiku, low effort: bun run test failed |');
+  expect(out).toMatchObject({ model: 'sonnet (after haiku)' });
+});
+
+test("a bare /fix starts at Haiku for a few findings, none blocking, unless the checks' tools aren't on the runner", async () => {
+  const summary = `<!-- shaft:summary -->\nThe card.\n${stateLine({ sha: 'abc', findings: [{ fp: 'f1', file: 'src/retry.ts', line: 4, severity: 'should-fix', title: 'Retries forever' }] })}`;
+  session = edits('fix.txt');
+  for (const [tools, first] of [[[], 'haiku'], [['bun'], 'sonnet']] as const) {
+    fake = octokit('pr', 'acme/widgets', summary);
+    sessions.length = 0;
+    missing = [...tools];
+    await runTask(options({ ask: { id: 3, text: '/fix' }, bare: true }));
+    expect(sessions[0]!.options).toMatchObject({ model: first, effort: 'low', maxTurns: 12 });
+  }
+  // No triage call for a bare /fix: its findings decide.
+  expect(triages).toEqual([]);
 });

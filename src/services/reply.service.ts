@@ -1,12 +1,15 @@
 import * as core from '@actions/core';
-import { type Choice, matches, pick } from '../utils/auto-pick.util';
+import { TRIAGE_START } from '../consts/ladder.const';
+import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
-import { diffText, fillSlots, trustedComments } from '../utils/prompt.util';
+import { dataBlock, diffText, fillSlots, trustedComments } from '../utils/prompt.util';
 import { footer, prose, redact } from '../utils/render.util';
 import { type AgentResult, type ReplyFormat, runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import { chosenModels, FALLBACK, type ReviewOptions } from './review.service';
 import type { Ask } from './route.service';
+import { climb, modelLabel, NO_SPEND, type Tried, withSpent } from './ladder.service';
+import { triage, triagePrompt } from './triage.service';
 import { step } from './step.service';
 
 /** The most of an answer that is posted and kept, as the Axon Shaft API takes it. */
@@ -92,6 +95,8 @@ export function answerFooter(
   sha: string,
   choice: Choice,
   result: Pick<AgentResult<unknown>, 'models' | 'tokens' | 'costUsd'>,
+  tried?: Tried[],
+  triaged?: string,
 ): { sub: string; model: string } {
   const models = chosenModels(result.models, choice, false);
   const sub = footer({
@@ -102,12 +107,14 @@ export function answerFooter(
     models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: [] },
     effort: choice.effort,
     reason: choice.reason,
+    triage: triaged,
+    tried,
     maxTurns: choice.maxTurns,
     tokens: result.tokens,
     // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
     costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
   });
-  return { sub, model: models.main };
+  return { sub, model: modelLabel(models.main, tried ?? []) };
 }
 
 /**
@@ -117,25 +124,32 @@ export function answerFooter(
 export async function replyToComment(o: ReplyOptions): Promise<ReplyOutcome> {
   const ctx = await step('Read the pull request', () => collectContext(o.octokit, o.owner, o.repo, o.number, o.bot));
   const post = (body: string) => postInThread(o, body);
-  const choice = pick({ mode: 'reply', model: o.model, effort: o.effort, maxTurns: o.maxTurns });
-  core.info(`Answering with ${choice.model}, effort ${choice.effort}`);
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
-  let result;
+  const input = { mode: 'reply' as const, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns };
+  const prompt = buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, { template: o.template, focus: o.focus });
+  // With `auto`, Haiku rates the question first, from the question and the PR's size, to pick where the ladder starts.
+  const rated = ladder(input).length > 1 ? await step('Triage', () => triage(triagePrompt(o.ask.text, [], files, o.focus), o)) : undefined;
+  const rungs = ladder({ ...input, promptChars: prompt.length, start: rated && TRIAGE_START[rated.level] });
+  core.info(`Answering with ${rungs.map((c) => `${c.model}, effort ${c.effort}`).join(', then ')}`);
+  let climbed;
   try {
-    result = await step('Answer', () =>
-      runAgent(
-        buildReplyPrompt({ ...ctx, files }, o.ask, o.asker, { template: o.template, focus: o.focus }),
-        {
-          claude: o.claude,
-          model: choice.model,
-          effort: choice.effort,
-          fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
-          maxTurns: choice.maxTurns,
-          timeoutMinutes: o.timeoutMinutes,
-          cwd: o.cwd,
-          env: o.env,
-        },
-        ANSWER_FORMAT,
+    climbed = await step('Answer', () =>
+      climb(rungs, (c, last, earlier) =>
+        runAgent(
+          earlier ? `${prompt}\n\nAn attempt with a smaller model didn't work. What went wrong, as data:\n\n${dataBlock('earlier-attempt', earlier)}` : prompt,
+          {
+            claude: o.claude,
+            model: c.model,
+            effort: c.effort,
+            fallbackModel: c.autoModel ? FALLBACK[c.model] : undefined,
+            maxTurns: c.maxTurns,
+            timeoutMinutes: o.timeoutMinutes,
+            cwd: o.cwd,
+            env: o.env,
+            retry: last,
+          },
+          ANSWER_FORMAT,
+        ),
       ),
     );
   } catch (e) {
@@ -146,8 +160,10 @@ export async function replyToComment(o: ReplyOptions): Promise<ReplyOutcome> {
     }
     throw e;
   }
+  const { choice, tried } = climbed;
+  const result = withSpent(withSpent(climbed.out, climbed.spent), rated?.spent ?? NO_SPEND);
   const answer = redact(prose(result.reply), o.secrets).slice(0, ANSWER_MAX);
-  const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result);
+  const { sub, model } = answerFooter(o, ctx.pr.headSha, choice, result, tried, rated && `${rated.level}: ${rated.reason}`);
   const commentUrl = await post(`${answer}\n\n${sub}\n\n${REPLY_MARKER}`);
   return { model, effort: choice.effort, tokens: result.tokens, costUsd: result.costUsd, output: { answer, comment_url: commentUrl } };
 }

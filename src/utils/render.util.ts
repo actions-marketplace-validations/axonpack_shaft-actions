@@ -189,6 +189,10 @@ export type Footer = {
   effort?: string;
   /** Why `auto` picked the model and effort. */
   reason?: string;
+  /** The triage's level and reason, or why a bare `/fix` started where it did. */
+  triage?: string;
+  /** The `auto` ladder's rungs that didn't work before the one that ran, and why each moved up. */
+  tried?: { model: string; effort: string; why: string }[];
   maxTurns?: number;
   /** The changed lines and files the review read, after `skip`. */
   lines?: number;
@@ -257,6 +261,8 @@ export function footer(f: Footer): string {
     ['Subagents', f.models?.subagents.map(modelCell).join(', ')],
     ['Effort', f.effort],
     ['Why this model', f.reason],
+    ['Triage', f.triage],
+    ['Tried first', f.tried?.map((t) => `${t.model}, ${t.effort} effort: ${t.why}`).join('; ')],
     ['Turn limit', f.maxTurns],
     ['Changed lines', f.lines],
     ['Changed files', f.files],

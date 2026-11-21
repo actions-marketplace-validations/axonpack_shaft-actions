@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { type Choice, matches, pick } from '../utils/auto-pick.util';
+import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
 import { GUIDE_CAP } from '../consts/settings.const';
@@ -25,6 +25,7 @@ import {
   type ReviewStep,
 } from './check-runs.service';
 import { trackComment } from './finalize.service';
+import { climb, modelLabel, type Tried, withSpent } from './ladder.service';
 import { step } from './step.service';
 import {
   type CheckItem,
@@ -257,7 +258,10 @@ async function postReview(
     skipped,
     missingPermissions: o.missingPermissions,
   };
-  const choice = pick({ mode: 'review', depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
+  const pickInput = { mode: 'review' as const, depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns };
+  let rungs = ladder(pickInput);
+  let choice = rungs[0]!;
+  let tried: Tried[] = [];
   const { passes } = o.prompt;
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
 
@@ -334,24 +338,35 @@ async function postReview(
 
     // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
     if (summary) await writeSummary(startSummary(sha, prior), true);
-    // An alias reads as a name (`sonnet` as Sonnet); a full model ID stays as written.
-    const model = /^[a-z]+$/.test(choice.model) ? choice.model[0]!.toUpperCase() + choice.model.slice(1) : choice.model;
-    await progress('Review', `Reviewing with ${model}, effort ${choice.effort}`);
+    rungs = ladder({ ...pickInput, promptChars: prompt.length });
     try {
-      result = await step('Review', () =>
-        runAgent(prompt, {
-        claude: o.claude,
-        model: choice.model,
-        effort: choice.effort,
-        fallbackModel: choice.autoModel ? FALLBACK[choice.model] : undefined,
-        subagentModel: choice.subagentModel,
-        passes,
-        maxTurns: choice.maxTurns,
-        timeoutMinutes: o.timeoutMinutes,
-        cwd: o.cwd,
-        env: o.env,
-      }, modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT),
+      const climbed = await step('Review', () =>
+        climb(rungs, async (c, last) => {
+          // An alias reads as a name (`sonnet` as Sonnet); a full model ID stays as written.
+          const model = /^[a-z]+$/.test(c.model) ? c.model[0]!.toUpperCase() + c.model.slice(1) : c.model;
+          await progress('Review', `Reviewing with ${model}, effort ${c.effort}`);
+          return runAgent(
+            prompt,
+            {
+              claude: o.claude,
+              model: c.model,
+              effort: c.effort,
+              fallbackModel: c.autoModel ? FALLBACK[c.model] : undefined,
+              subagentModel: c.subagentModel,
+              passes,
+              maxTurns: c.maxTurns,
+              timeoutMinutes: o.timeoutMinutes,
+              cwd: o.cwd,
+              env: o.env,
+              // On a lower rung a bad reply moves up a model instead of asking the same one again.
+              retry: last,
+            },
+            modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT,
+          );
+        }),
       );
+      ({ choice, tried } = climbed);
+      result = withSpent(climbed.out, climbed.spent);
     } catch (e) {
       // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
       if (e instanceof ShaftFailure) {
@@ -424,6 +439,7 @@ async function postReview(
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
       effort: choice.effort,
       reason: choice.reason,
+      tried,
       maxTurns: choice.maxTurns,
       tokens: result.tokens,
       // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
@@ -481,7 +497,7 @@ async function postReview(
     verdict: review.verdict,
     findings: placed.filter((p) => p.severity !== 'nit').length,
     summaryUrl: o.dryRun ? '' : (summary?.html_url ?? ''),
-    model: models ? [models.main, ...models.subagents].join(', ') : 'none',
+    model: models ? modelLabel([models.main, ...models.subagents].join(', '), tried) : 'none',
     effort: useModel ? choice.effort : 'none',
     tokens: result.tokens,
     costUsd: result.costUsd,
