@@ -53,10 +53,11 @@ export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 /**
  * What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's
  * tokens. A fork's PR on a job set to ask a maintainer first also gets the `comment` to post, and the
- * GitHub token to post it with.
+ * GitHub token to post it with. `code` names why nothing runs (`paused`, `filtered`, `skip_label`, …), for
+ * the notice to link to its docs; older APIs send none, or only `notice: 'spending_cap'`.
  */
 export type Grant =
-  | { run: false; reason: string; comment?: string; github_token?: string }
+  | { run: false; reason: string; code?: string; notice?: string; comment?: string; github_token?: string }
   | {
       run: true;
       github_token: string;
@@ -71,7 +72,12 @@ export type Grant =
       run_url?: string;
       /** Only when this run is pinned to an older v1 release than the newest. Older APIs don't send it. */
       latest_action?: LatestAction;
+      /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
+      missing_permissions?: MissingPermission[];
     };
+
+/** A permission the AxonShaft app wants at `wanted` that the installation approved only at `granted`, or not at all. */
+export type MissingPermission = { name: string; wanted: string; granted: string | null; warning: string };
 
 /** What the dashboard shows of a finished review: the card, as the PR comment has it. */
 export type RunOutput = {
@@ -132,6 +138,11 @@ async function answer(res: Response): Promise<unknown> {
     throw new ShaftFailure(body.error, body.message, typeof body.url === 'string' ? body.url : undefined);
   }
   throw new ShaftFailure('api_error', `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
+}
+
+/** POST to the Axon Shaft API and return its answer's JSON, or throw its error as a `ShaftFailure`. */
+export async function callApi(path: string, body: unknown): Promise<unknown> {
+  return answer(await post(path, body));
 }
 
 /**

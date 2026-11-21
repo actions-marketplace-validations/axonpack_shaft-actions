@@ -147,7 +147,7 @@ test("a failed session posts its card where the question was asked, linking the 
     {
       where: 'thread',
       comment_id: 4,
-      body: expect.stringMatching(/errors\/review_timed_out\.svg\)\n\nThe reply ran past its 15-minute time limit\.\n\n<https:\/\/github\.com\/acme\/widgets\/actions\/runs\/9>\n\n<!-- shaft:reply -->$/),
+      body: expect.stringMatching(/errors\/review_timed_out\.svg\)\]\(https:\/\/shaft\.axonpack\.dev\/docs\/reference\/codes#review_timed_out\)\n\nThe reply ran past its 15-minute time limit\.\n\n<https:\/\/github\.com\/acme\/widgets\/actions\/runs\/9>\n\n<!-- shaft:reply -->$/),
     },
   ]);
 });

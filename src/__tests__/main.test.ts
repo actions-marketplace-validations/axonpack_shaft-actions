@@ -198,6 +198,22 @@ test('a newer action release from the grant reaches the review, for the line und
   expect(reviewed).toMatchObject({ latestAction: latest_action });
 });
 
+test("each missing permission's warning is logged once, and the review gets the list for its footer", async () => {
+  const warning = 'The AxonShaft app needs Code quality (read). Approve it on GitHub.';
+  const missing_permissions = [
+    { name: 'code_quality', wanted: 'read', granted: null, warning },
+    { name: 'code_quality', wanted: 'read', granted: null, warning },
+    { name: 'checks', wanted: 'write', granted: 'read', warning: 'Checks (write) is approved only as read.' },
+  ];
+  api(Response.json({ ...grant, missing_permissions }));
+  await main();
+  expect(warnings).toEqual([warning, 'Checks (write) is approved only as read.']);
+  expect(reviewed).toMatchObject({ missingPermissions: missing_permissions });
+  api(Response.json(grant));
+  await main();
+  expect(reviewed?.missingPermissions).toEqual([]);
+});
+
 test('a maxTurns the dashboard left unset reaches the review unset, so it picks one by size', async () => {
   api(Response.json({ ...grant, settings: { ...grant.settings, maxTurns: null } }));
   await main();
@@ -276,6 +292,21 @@ test('mention, or any other run: false, posts nothing and ends with a notice', a
   expect(failed).toEqual([]);
 });
 
+test("run: false with a code links the notice to the code's docs; an older API's spending_cap also gets a card in the job summary", async () => {
+  context.eventName = 'pull_request_target';
+  context.payload = fork;
+  api(Response.json({ run: false, reason: 'Axon Shaft is paused on this repo.', code: 'paused' }));
+  await main();
+  expect(notices).toEqual(['Axon Shaft is paused on this repo. See https://shaft.axonpack.dev/docs/reference/codes#paused']);
+  expect(jobSummary).toBe('');
+  notices.length = 0;
+  api(Response.json({ run: false, reason: 'At the cap.', notice: 'spending_cap' }));
+  await main();
+  expect(notices).toEqual(['At the cap. See https://shaft.axonpack.dev/docs/reference/codes#spending_cap']);
+  expect(jobSummary).toBe('[![At the cap.](https://shaft.axonpack.dev/errors/spending_cap.svg)](https://shaft.axonpack.dev/docs/reference/codes#spending_cap)\n\nAt the cap.');
+  expect(failed).toEqual([]);
+});
+
 const asks = { ...comment, comment: { ...comment.comment, body: '/review' } };
 
 test('the run report has the tokens, and the cost only for a run on an API key', async () => {
@@ -306,7 +337,7 @@ test("/review by someone without write access starts nothing, and the notice say
   permission = 'read';
   api(Response.json(grant));
   await main();
-  expect(notices).toEqual(['maintainer has no write access, so no review was started. Only people with write access can start one with /review.']);
+  expect(notices).toEqual(['maintainer has no write access, so no review was started. Only people with write access can start one with /review. See https://shaft.axonpack.dev/docs/reference/codes#no_write_access']);
   expect(checkedOut).toEqual([]);
   expect(reviewed).toBeUndefined();
   expect(reactions).toEqual([]);
@@ -406,7 +437,7 @@ test("/ask by someone without write access answers nothing, and the notice says 
   permission = 'read';
   api(Response.json(replyGrant));
   await main();
-  expect(notices).toEqual(["maintainer has no write access, so the question wasn't answered. Only people with write access can ask with /ask."]);
+  expect(notices).toEqual(["maintainer has no write access, so the question wasn't answered. Only people with write access can ask with /ask. See https://shaft.axonpack.dev/docs/reference/codes#no_write_access"]);
   expect(checkedOut).toEqual([]);
   expect(replied).toBeUndefined();
 });
@@ -462,7 +493,7 @@ test('a task that refuses to push ends with a notice and reports push_failed wit
   api(Response.json(taskGrant));
   await main();
   expect(failed).toEqual([]);
-  expect(notices).toEqual(['Pushing is turned off for this project.']);
+  expect(notices).toEqual(['Pushing is turned off for this project. See https://shaft.axonpack.dev/docs/reference/codes#push_failed']);
   expect(reported).toEqual({ error: { code: 'push_failed', message: 'Pushing is turned off for this project.' }, duration_ms: expect.any(Number) });
 });
 
@@ -472,7 +503,7 @@ test('/fix from someone without write access starts nothing, and the notice says
   permission = 'read';
   api(Response.json(taskGrant));
   await main();
-  expect(notices).toEqual(['maintainer has no write access, so nothing was changed. Only people with write access can start a change with /fix or /axonshaft.']);
+  expect(notices).toEqual(['maintainer has no write access, so nothing was changed. Only people with write access can start a change with /fix or /axonshaft. See https://shaft.axonpack.dev/docs/reference/codes#no_write_access']);
   expect(tasked).toBeUndefined();
 });
 
@@ -482,7 +513,7 @@ test("an API error fails the step with the API's message, and the job summary sh
   await main();
   expect(failed).toEqual([message]);
   expect(jobSummary).toBe(
-    `![${message}](https://shaft.axonpack.dev/errors/not_a_project.svg)\n\n${message}\n\n<https://shaft.axonpack.dev/console/acme>`,
+    `[![${message}](https://shaft.axonpack.dev/errors/not_a_project.svg)](https://shaft.axonpack.dev/docs/reference/codes#not_a_project)\n\n${message}\n\n<https://shaft.axonpack.dev/console/acme>`,
   );
   expect(reviewed).toBeUndefined();
 });
@@ -492,7 +523,7 @@ test('without id-token: write, the card is missing_id_token, with no link', asyn
   await main();
   expect(failed).toEqual(['Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.']);
   expect(jobSummary).toBe(
-    '![Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.](https://shaft.axonpack.dev/errors/missing_id_token.svg)\n\nAdd `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.',
+    '[![Add `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.](https://shaft.axonpack.dev/errors/missing_id_token.svg)](https://shaft.axonpack.dev/docs/reference/codes#missing_id_token)\n\nAdd `permissions: id-token: write` to the workflow, so Axon Shaft can fetch its tokens from its API.',
   );
 });
 
@@ -512,7 +543,7 @@ test('a review failure goes to the job summary too', async () => {
   // The run's row is open, so the dashboard hears of the failure too.
   expect(reported).toEqual({ error: { code: 'review_timed_out', message: 'The review ran past its 15-minute time limit.' }, duration_ms: expect.any(Number) });
   expect(jobSummary).toBe(
-    '![The review ran past its 15-minute time limit.](https://shaft.axonpack.dev/errors/review_timed_out.svg)\n\nThe review ran past its 15-minute time limit.\n\n<https://shaft.axonpack.dev>',
+    '[![The review ran past its 15-minute time limit.](https://shaft.axonpack.dev/errors/review_timed_out.svg)](https://shaft.axonpack.dev/docs/reference/codes#review_timed_out)\n\nThe review ran past its 15-minute time limit.\n\n<https://shaft.axonpack.dev>',
   );
 });
 

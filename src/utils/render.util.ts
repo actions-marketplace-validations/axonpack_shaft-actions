@@ -80,6 +80,16 @@ export function diffLines(patch: string | undefined, addedOnly = false): Map<num
   return lines;
 }
 
+/** Each left-side line number a patch's hunks cover, mapped to that hunk's first right-side line. */
+export function oldLines(patch: string | undefined): Map<number, number> {
+  const lines = new Map<number, number>();
+  for (const m of patch?.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)/gm) ?? []) {
+    const start = Number(m[1]);
+    for (let n = start; n < start + Number(m[2] ?? 1); n++) lines.set(n, Number(m[3]));
+  }
+  return lines;
+}
+
 /** A patch's removed lines, without their `-`. */
 export const removedLines = (patch: string | undefined) =>
   (patch ?? '')
@@ -196,6 +206,10 @@ export type Footer = {
   latestAction?: { version: string; url: string };
   /** GitHub's web editor for the workflow file (`workflowEditUrl()`), linked under the newer release. */
   workflowEditUrl?: string;
+  /** Why a private draft advisory couldn't be opened, for one line in the summary. */
+  advisories?: string;
+  /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
+  missingPermissions?: { name: string; wanted: string; granted: string | null }[];
 };
 
 /**
@@ -249,6 +263,7 @@ export function footer(f: Footer): string {
     ['Skipped by `skip`', f.skipped && plural(f.skipped, 'file')],
     ['Checklists run', ran.join(', ')],
     ['Checklists not run', notRun.join(', ')],
+    ['Missing permissions', f.missingPermissions?.map((p) => `\`${p.name}\` (${p.wanted}${p.granted ? `, approved ${p.granted}` : ''})`).join(', ')],
     ['Input', t && formatTokens(t.input)],
     ['Output', t && formatTokens(t.output)],
     ['Cache read', t && formatTokens(t.cache_read)],
@@ -418,6 +433,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
     out.push('', details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion!)));
   }
   if (nits.length) out.push('', details(plural(nits.length, 'nit'), table(nits, f)));
+  if (f.advisories) out.push('', `**Draft advisories:** ${f.advisories}`);
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);

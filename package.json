@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "bun build src/main.ts --target node --outfile dist/index.js",
+    "build": "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js",
     "lint": "oxlint src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

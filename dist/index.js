@@ -23764,7 +23764,7 @@ var package_default = {
   license: "MIT",
   type: "module",
   scripts: {
-    build: "bun build src/main.ts --target node --outfile dist/index.js",
+    build: "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js",
     lint: "oxlint src",
     typecheck: "tsc --noEmit",
     test: "vitest run",
@@ -23793,6 +23793,7 @@ var API_AUDIENCE = "https://api-shaft.axonpack.dev";
 var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
 var APP_BOT = "axonshaft[bot]";
 var DASHBOARD_URL = "https://shaft.axonpack.dev";
+var CODES_URL = "https://shaft.axonpack.dev/docs/reference/codes";
 var ERROR_CARDS_URL = "https://shaft.axonpack.dev/errors";
 var STATUS_CARDS_URL = "https://shaft.axonpack.dev/status";
 
@@ -23806,9 +23807,12 @@ class ShaftFailure extends Error {
     this.url = url;
   }
 }
+var codeUrl = (code) => `${CODES_URL}#${encodeURIComponent(code)}`;
+var noticeText = (reason, code) => code ? `${reason} See ${codeUrl(code)}` : reason;
 function failureMarkdown(f) {
   const alt = f.message.replace(/[[\]\r\n]+/g, " ");
-  return [`![${alt}](${ERROR_CARDS_URL}/${encodeURIComponent(f.code)}.svg)`, f.message, f.url && `<${f.url}>`].filter(Boolean).join(`
+  const card = `[![${alt}](${ERROR_CARDS_URL}/${encodeURIComponent(f.code)}.svg)](${codeUrl(f.code)})`;
+  return [card, f.message, f.url && `<${f.url}>`].filter(Boolean).join(`
 
 `);
 }
@@ -23840,6 +23844,9 @@ async function answer(res) {
     throw new ShaftFailure(body.error, body.message, typeof body.url === "string" ? body.url : undefined);
   }
   throw new ShaftFailure("api_error", `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
+}
+async function callApi(path, body) {
+  return answer(await post(path, body));
 }
 async function fetchGrant(request) {
   const grant = await answer(await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }));
@@ -24061,6 +24068,15 @@ function diffLines(patch, addedOnly = false) {
   }
   return lines;
 }
+function oldLines(patch) {
+  const lines = new Map;
+  for (const m of patch?.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)/gm) ?? []) {
+    const start = Number(m[1]);
+    for (let n = start;n < start + Number(m[2] ?? 1); n++)
+      lines.set(n, Number(m[3]));
+  }
+  return lines;
+}
 var removedLines = (patch) => (patch ?? "").split(`
 `).filter((l) => l.startsWith("-")).map((l) => l.slice(1));
 function fingerprint(f, code = "") {
@@ -24160,6 +24176,7 @@ function footer(f) {
     ["Skipped by `skip`", f.skipped && plural(f.skipped, "file")],
     ["Checklists run", ran.join(", ")],
     ["Checklists not run", notRun.join(", ")],
+    ["Missing permissions", f.missingPermissions?.map((p) => `\`${p.name}\` (${p.wanted}${p.granted ? `, approved ${p.granted}` : ""})`).join(", ")],
     ["Input", t && formatTokens(t.input)],
     ["Output", t && formatTokens(t.output)],
     ["Cache read", t && formatTokens(t.cache_read)],
@@ -24293,6 +24310,8 @@ function renderSummary(raw, placed, prior, f) {
   }
   if (nits.length)
     out.push("", details(plural(nits.length, "nit"), table(nits, f)));
+  if (f.advisories)
+    out.push("", `**Draft advisories:** ${f.advisories}`);
   if (fixed.length)
     out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
   if (f.skipped)
@@ -24320,13 +24339,6 @@ function unposted(placed, reviewComments, bot) {
   const posted = new Set(reviewComments.filter((c) => c.author === bot).map((c) => /<!-- shaft:finding (\w+) -->\s*$/.exec(c.body)?.[1]));
   return placed.filter((p) => p.inline && !posted.has(p.fp));
 }
-
-// src/services/agent.service.ts
-import { execFileSync as execFileSync3 } from "node:child_process";
-import { existsSync as existsSync5 } from "node:fs";
-import { createRequire as createRequire2 } from "node:module";
-import { tmpdir } from "node:os";
-import { join as join5 } from "node:path";
 
 // node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs
 import { createRequire as DQ } from "node:module";
@@ -58525,6 +58537,51 @@ function prepareSandbox(cwd) {
   }
 }
 
+// src/services/claude-binary.service.ts
+import { execFileSync as execFileSync3 } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync4, rmSync as rmSync2 } from "node:fs";
+import { createRequire as createRequire2 } from "node:module";
+import { tmpdir } from "node:os";
+import { join as join5 } from "node:path";
+
+// src/consts/claude-binary.const.ts
+var CLAUDE_BINARIES = {
+  "@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.325": "sha512-0u8bTug2zH+zWE8CMiFrm/ldmH20uA9B/zhXpI7ATHFJnpPMdwTqE56CFM0m3LOwnNum0jpRn7XV1dn6Pf2pqA==",
+  "@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.325": "sha512-HD3YRFyM5H5QH2usS/WD6gobk3BEp2jq9dKyrkhAVdQIqFMlrcSrRhGA0i3R1IOLxtPAYkmDGepZ62k1kMOW9Q==",
+  "@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.325": "sha512-28oVrCEN6M6MJP8Od4SK/scal1QdLbn5Sci+qL8j55l6csHtPeUYF9zdjWLniFKph43pejfZf5te/Vf/bwehkw==",
+  "@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.325": "sha512-72y6QNRZC4eMCxne/wNsuwNHsViSkgFKlYMCUVXxmiR9gpIMd3rf++oJMIsSuEAQqzqT7jwCrdtibv6R4bx5PA==",
+  "@anthropic-ai/claude-agent-sdk-linux-x64@0.3.325": "sha512-wXEWbDmNYiorY5EKASYjvQct8zHShUPmAS9N/IAsgPA/cx2vsOFqPQw8jRQKeaW6AmFgx7k/Wf7THalNXbMEkQ==",
+  "@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.325": "sha512-BHewYUTd7mDLR5iHTVt6Q28gJKLC5C24b1H3NM0qGt9dxnjVUh1Lza52GzHY2Rb9hAPQymLSXWuVh1OFoFQatA==",
+  "@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.325": "sha512-NH3I2o105oKK8lfJ5RlzCp+YTZn3qncwQ1xSzQ4jqn7LUddThIidpFU7B+TKQxh1X9eayAp7EtrBQ36mXflQwQ==",
+  "@anthropic-ai/claude-agent-sdk-win32-x64@0.3.325": "sha512-pjqVL++V/2oMJ6u1HdB608bcTUvzts1e8hX93Q8khasy2JB+R823bnvpQapcOurOWB3+v1X2JXIjXyWcGPJCQQ=="
+};
+
+// src/services/claude-binary.service.ts
+var SDK_VERSION = package_default.dependencies["@anthropic-ai/claude-agent-sdk"];
+function claudeBinary() {
+  const name = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
+  const file = `${name}/claude${process.platform === "win32" ? ".exe" : ""}`;
+  try {
+    return createRequire2(import.meta.url).resolve(file);
+  } catch {}
+  const spec = `${name}@${SDK_VERSION}`;
+  const integrity = CLAUDE_BINARIES[spec];
+  if (!integrity)
+    throw new ShaftFailure("claude_binary_unverified", `This release records no sha512 for ${spec}, so Claude Code can't be installed on this runner's platform.`);
+  const dir = join5(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
+  rmSync2(dir, { recursive: true, force: true });
+  mkdirSync2(dir, { recursive: true });
+  info(`Installing ${spec}`);
+  const [{ filename }] = JSON.parse(execFileSync3("npm", ["pack", "--json", "--pack-destination", dir, spec], { encoding: "utf8" }));
+  const tarball = join5(dir, filename);
+  if (`sha512-${createHash2("sha512").update(readFileSync4(tarball)).digest("base64")}` !== integrity) {
+    throw new ShaftFailure("claude_binary_unverified", `The ${spec} tarball npm downloaded doesn't match the sha512 this release records, so it wasn't unpacked or run. Check the runner's npm registry.`);
+  }
+  execFileSync3("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, tarball], { stdio: "inherit" });
+  return join5(dir, "node_modules", file);
+}
+
 // src/services/agent.service.ts
 var SCHEMA = {
   type: "object",
@@ -58655,21 +58712,6 @@ var guard = (cwd, commands) => async (input) => {
   const updatedInput = { ...args, command: `${sandboxPrefix(cwd)} ${String(args.command).trim()}` };
   return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput } };
 };
-var SDK_VERSION = package_default.dependencies["@anthropic-ai/claude-agent-sdk"];
-function claudeBinary() {
-  const name = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
-  const file = `${name}/claude${process.platform === "win32" ? ".exe" : ""}`;
-  try {
-    return createRequire2(import.meta.url).resolve(file);
-  } catch {}
-  const dir = join5(process.env.RUNNER_TEMP ?? tmpdir(), "shaft-claude");
-  const bin = join5(dir, "node_modules", file);
-  if (!existsSync5(bin)) {
-    info(`Installing ${name}@${SDK_VERSION}`);
-    execFileSync3("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, `${name}@${SDK_VERSION}`], { stdio: "inherit" });
-  }
-  return bin;
-}
 function cliEnv(claude, names = []) {
   return {
     ...runnerEnv(names),
@@ -58749,11 +58791,11 @@ async function runAgent(prompt, o, format) {
       } else if (result && result.subtype !== "error_max_structured_output_retries") {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join("; ")}`);
       }
-      const raw = result?.subtype === "success" ? result.structured_output ?? result.result : result?.errors;
-      warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}):
-${JSON.stringify(raw, null, 2)}`);
+      const out = result?.subtype === "success" ? result.structured_output : undefined;
+      const what = result?.subtype === "success" ? `its fields: ${Object.keys(out && typeof out === "object" ? out : {}).join(", ") || "none"}` : result?.errors.join("; ") ?? "no result";
+      warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}), ${what}`);
       if (attempt === 2) {
-        throw new ShaftFailure("review_invalid_reply", `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job; both replies are in the job log.`);
+        throw new ShaftFailure("review_invalid_reply", `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job.`);
       }
     }
   } catch (e) {
@@ -58795,7 +58837,7 @@ function route(eventName, payload) {
     if (!event)
       return { mode: "skip", reason: `${eventName} ${payload.action} is not reviewed.` };
     if (eventName === "pull_request" && isFork(pr)) {
-      return { mode: "skip", reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, notice: true };
+      return { mode: "skip", reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, code: "fork_pull_request" };
     }
     return { mode: "review", number: pr.number, event, fork: isFork(pr) };
   }
@@ -58810,17 +58852,17 @@ function route(eventName, payload) {
   if (command === "review" && onPr)
     return { mode: "review", number, fork: pr ? isFork(pr) : undefined, actor };
   if (command === "review")
-    return { mode: "skip", reason: "/review works on a pull request, not an issue.", notice: true };
+    return { mode: "skip", reason: "/review works on a pull request, not an issue.", code: "not_a_pull_request" };
   if (command === "help")
     return { mode: "help", number, actor };
   const c = eventName === "pull_request_review" ? payload.review : payload.comment;
   const ask = eventName === "pull_request_review_comment" ? { id: c.id, text, path: c.path, line: c.line ?? c.original_line ?? undefined, thread: c.in_reply_to_id ?? c.id } : { id: c.id, text };
   if (command === "ask" && !onPr)
-    return { mode: "skip", reason: "/ask works on a pull request, not an issue.", notice: true };
+    return { mode: "skip", reason: "/ask works on a pull request, not an issue.", code: "not_a_pull_request" };
   if (command === "ask")
     return { mode: "reply", number, actor, ask };
   if (!onPr)
-    return { mode: "skip", reason: `/${command === "fix" ? "fix" : "axonshaft"} works on a pull request, not an issue.`, notice: true };
+    return { mode: "skip", reason: `/${command === "fix" ? "fix" : "axonshaft"} works on a pull request, not an issue.`, code: "not_a_pull_request" };
   return { mode: "task", number, actor, ask, bare: command === "fix" && !text.replace("/fix", "").trim() };
 }
 var labelsOf = (item) => (item.labels ?? []).map((l) => l.name);
@@ -58939,6 +58981,38 @@ var stepsBlock = (before, run, after) => `## The steps for this run
 ${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${s}`).join(`
 `)}
 `;
+
+// src/services/advisory.service.ts
+var MAX_DRAFTS = 3;
+var WITHHELD_TITLE = "Security issue, reported privately";
+var withheldBody = (url) => `Axon Shaft found a blocking security issue on these lines. The details are in a [private draft security advisory](${url}) that the repo's admins and security managers can open.`;
+var cut = (text, max) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
+async function openAdvisories(placed, o) {
+  const failed = [];
+  for (const p of placed.filter((f) => f.step === "security" && f.severity === "blocking").slice(0, MAX_DRAFTS)) {
+    if (o.dryRun) {
+      info(`Would open a draft advisory for ${p.fp}`);
+      continue;
+    }
+    try {
+      const body = { fp: p.fp, title: cut(o.clean(p.title), 300), body: cut(o.clean(p.body), 5000), file: cut(p.file, 500), line: Math.max(1, p.line), pull: o.pull, sha: o.sha };
+      const draft = await callApi("/v1/advisories", body);
+      if (typeof draft?.html_url !== "string")
+        throw new Error("The Axon Shaft API sent an incomplete answer");
+      p.url = draft.html_url;
+      if (draft.withhold) {
+        p.title = WITHHELD_TITLE;
+        p.body = withheldBody(draft.html_url);
+        delete p.suggestion;
+      }
+    } catch (e) {
+      const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, "");
+      warning(`Couldn't open a draft advisory for ${p.fp}, so the finding is posted as it is: ${why}`);
+      failed.push(`\`${p.fp}\` (${why})`);
+    }
+  }
+  return failed.length ? `Couldn't open a private draft advisory for ${failed.join(", ")}, so ${failed.length === 1 ? "that finding shows" : "those findings show"} in full.` : undefined;
+}
 
 // src/services/prestep/deps-diff.service.ts
 import { dirname as dirname3, join as join6 } from "node:path";
@@ -59477,6 +59551,32 @@ var changeset = async ({ files, checkout }) => {
   if (named.length)
     lines.push(`Changesets name packages the pull request doesn't change: ${named.map((n) => `\`${n}\``).join(", ")}`);
   return factsText(lines, "");
+};
+
+// src/services/prestep/code-quality.service.ts
+var codeQuality = async ({ files, pr }) => {
+  if (pr.base !== pr.defaultBranch)
+    throw new Error(`GitHub Code Quality's findings are the default branch's (${pr.defaultBranch}), and this pull request goes into ${pr.base}`);
+  const found = await callApi("/v1/code-quality", {});
+  if (!Array.isArray(found))
+    throw new Error("The Axon Shaft API sent an incomplete answer");
+  const hunks = new Map(files.map((f) => [f.filename, oldLines(f.patch)]));
+  return found.flatMap((c) => {
+    const line = hunks.get(c.path)?.get(c.start_line);
+    if (line === undefined)
+      return [];
+    return [
+      {
+        severity: c.severity === "error" ? "should-fix" : "nit",
+        file: c.path,
+        line,
+        title: c.title,
+        body: `${c.message_markdown}
+
+Finding #${c.number} on the default branch, under the repo's Security and quality tab, Code quality.`
+      }
+    ];
+  });
 };
 
 // src/services/prestep/diff-stats.service.ts
@@ -60077,7 +60177,7 @@ var nativeChanges = async ({ files, checkout, base }) => {
 };
 
 // src/services/prestep/prestep.service.ts
-var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv };
+var SCRIPTS = { secrets, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, "code-quality": codeQuality };
 var FACTS = {
   "deps-diff": depsDiffFacts,
   changeset,
@@ -60328,7 +60428,8 @@ async function postReview(ctx, o, canCheck, progress) {
     dashboardRunUrl: o.dashboardRunUrl,
     lines: files.reduce((n, f) => n + f.additions + f.deletions, 0),
     files: files.length,
-    skipped
+    skipped,
+    missingPermissions: o.missingPermissions
   };
   const choice = pick({ mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns });
   const { passes } = o.prompt;
@@ -60437,6 +60538,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const placed = place(review.findings, files, o.nits);
+  const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
     const end = Math.max(p.end_line ?? p.line, p.line);
@@ -60472,6 +60574,7 @@ ${c.body}`);
   const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : undefined;
   const body = renderSummary(review, placed, prior, {
     ...facts,
+    advisories,
     checks: o.checks,
     checklists: planned,
     latestAction: o.latestAction,
@@ -60679,7 +60782,7 @@ var RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lock
 var runsCode = (paths) => paths.filter((p) => RUNS_CODE.test(p));
 
 // src/services/commands.service.ts
-import { existsSync as existsSync6, readFileSync as readFileSync4 } from "node:fs";
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
 import { join as join9 } from "node:path";
 var CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
 var LOCKS = [
@@ -60689,12 +60792,12 @@ var LOCKS = [
   ["yarn.lock", "yarn", "yarn install --frozen-lockfile"],
   ["package-lock.json", "npm", "npm ci"]
 ];
-var read = (cwd, file) => existsSync6(join9(cwd, file)) ? readFileSync4(join9(cwd, file), "utf8") : undefined;
+var read = (cwd, file) => existsSync5(join9(cwd, file)) ? readFileSync5(join9(cwd, file), "utf8") : undefined;
 function repoCommands(cwd) {
   const out = [];
   const pkg = read(cwd, "package.json");
   if (pkg) {
-    const [, pm, install] = LOCKS.find(([lock]) => existsSync6(join9(cwd, lock))) ?? ["", "npm", "npm install"];
+    const [, pm, install] = LOCKS.find(([lock]) => existsSync5(join9(cwd, lock))) ?? ["", "npm", "npm install"];
     let scripts = {};
     try {
       scripts = JSON.parse(pkg).scripts ?? {};
@@ -60726,7 +60829,7 @@ function runCheck(cwd, command, env = []) {
 }
 
 // src/services/push.service.ts
-import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync5, readlinkSync as readlinkSync2 } from "node:fs";
+import { closeSync as closeSync2, constants as constants5, fstatSync, openSync as openSync2, readFileSync as readFileSync6, readlinkSync as readlinkSync2 } from "node:fs";
 import { dirname as dirname8, join as join10 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
@@ -60752,7 +60855,7 @@ function readChanges(cwd, base) {
       const st = fstatSync(fd);
       if (!st.isFile())
         throw new ShaftFailure("push_failed", `${path} isn't a file or a link, so nothing was pushed.`);
-      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync5(fd) };
+      return { path, mode: st.mode & 64 ? "100755" : "100644", content: readFileSync6(fd) };
     } finally {
       closeSync2(fd);
     }
@@ -60964,7 +61067,7 @@ async function run() {
   const started = Date.now();
   const r = route(context2.eventName, context2.payload);
   if (r.mode === "skip")
-    return r.notice ? notice(r.reason) : info(r.reason);
+    return r.code ? notice(noticeText(r.reason, r.code)) : info(r.reason);
   const dryRun = getBooleanInput("dry_run");
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context2.repo;
@@ -60983,14 +61086,20 @@ ${grant.comment}`);
         done = true;
       }
     }
-    return notice(grant.reason);
+    const code = grant.code ?? grant.notice;
+    if (code === "spending_cap")
+      await writeSummary(failureMarkdown(new ShaftFailure(code, grant.reason)));
+    return notice(noticeText(grant.reason, code));
   }
   const octokit = getOctokit(grant.github_token);
+  const missing = Array.isArray(grant.missing_permissions) ? grant.missing_permissions : [];
+  for (const w of new Set(missing.map((p) => p.warning)))
+    warning(w);
   if (r.mode === "help")
     return notice("The Axon Shaft API sent a run for /help, which runs nothing.");
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
     const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : r.mode === "reply" ? "the question wasn't answered. Only people with write access can ask with /ask" : "nothing was changed. Only people with write access can start a change with /fix or /axonshaft";
-    return notice(`${r.actor} has no write access, so ${what}.`);
+    return notice(noticeText(`${r.actor} has no write access, so ${what}.`, "no_write_access"));
   }
   reaction = await reactStart(octokit, context2, dryRun);
   const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
@@ -61043,7 +61152,7 @@ ${grant.comment}`);
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
     }
-    notice(out.refused);
+    notice(noticeText(out.refused, out.code));
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === "reply") {
@@ -61060,6 +61169,8 @@ ${grant.comment}`);
     checks: job.checks,
     checklists: job.checklists,
     latestAction: grant.latest_action,
+    missingPermissions: missing,
+    advisories: settings.advisories === true,
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch)
   });
   setOutput("verdict", out.verdict);
@@ -61071,8 +61182,10 @@ ${grant.comment}`);
 async function fail(e) {
   setFailed(e instanceof Error ? e.message : String(e));
   await reportFailure?.(e);
-  if (!(e instanceof ShaftFailure))
-    return;
-  await summary.addRaw(failureMarkdown(e)).write().catch((w) => warning(`Couldn't write the job summary: ${w.message}`));
+  if (e instanceof ShaftFailure)
+    await writeSummary(failureMarkdown(e));
+}
+function writeSummary(markdown) {
+  return summary.addRaw(markdown).write().catch((w) => warning(`Couldn't write the job summary: ${w.message}`));
 }
 run().catch(fail).finally(() => reaction && reactEnd(reaction, done));

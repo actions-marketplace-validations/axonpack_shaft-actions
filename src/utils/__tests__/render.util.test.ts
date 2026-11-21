@@ -11,6 +11,7 @@ import {
   idleSummary,
   inlineBody,
   modelName,
+  oldLines,
   parseState,
   place,
   redact,
@@ -54,6 +55,15 @@ const review: Review = {
   checked: ['correctness', 'breakage', 'standards', 'tests', 'docs', 'security'],
   not_checked: 'no tests or builds were run.',
 };
+
+test("oldLines maps each line a hunk's old side covers to the hunk's first new line", () => {
+  expect([...oldLines('@@ -3,2 +3,3 @@\n a\n+b\n c\n@@ -20 +21,0 @@\n-d\n@@ -30,0 +30 @@\n+e')]).toEqual([
+    [3, 3],
+    [4, 3],
+    [20, 21],
+  ]);
+  expect(oldLines(undefined).size).toBe(0);
+});
 
 test('diffLines maps new-side line numbers to their text', () => {
   expect([...diffLines(patch).keys()]).toEqual([40, 41, 42, 43, 44]);
@@ -414,6 +424,16 @@ test('the footer table breaks the tokens down on a subscription, with the cost o
   expect(body({ models: { main: 'claude-haiku-5-5', fellBackFrom: 'sonnet', subagents: [] } })).toContain(
     "| Fallback | The plan can't use `sonnet`, so the run used the model above |",
   );
+});
+
+test("the footer table names the permissions the installation hasn't approved, with the level it has; none adds no row", () => {
+  const body = (f: Partial<Footer>) => renderSummary(review, place(review.findings, files, 'summary'), undefined, { ...info, ...f });
+  const missingPermissions = [
+    { name: 'code_quality', wanted: 'read', granted: null },
+    { name: 'checks', wanted: 'write', granted: 'read' },
+  ];
+  expect(body({ missingPermissions })).toContain('| Missing permissions | `code_quality` (read), `checks` (write, approved read) |');
+  expect(body({ missingPermissions: [] })).not.toContain('Missing permissions');
 });
 
 test('modelName: the family and version read as a name; any other ID stays as written', () => {

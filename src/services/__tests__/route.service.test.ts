@@ -8,7 +8,7 @@ import review from './fixtures/pull_request_review.submitted.json';
 import reviewComment from './fixtures/pull_request_review_comment.created.json';
 import push from './fixtures/push.json';
 
-const quiet = (r: ReturnType<typeof route>) => r.mode === 'skip' && !r.notice;
+const quiet = (r: ReturnType<typeof route>) => r.mode === 'skip' && !r.code;
 
 test('pull_request and pull_request_target opened, synchronize, reopened, ready_for_review: review, with the event the API gets', () => {
   const events = { opened: 'opened', reopened: 'opened', synchronize: 'push', ready_for_review: 'ready' };
@@ -31,7 +31,7 @@ test("on pull_request_target a fork's PR is reviewed, with fork: true for the AP
 });
 
 test("on pull_request a fork's PR has no OIDC token, so it's skipped with a notice", () => {
-  expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', notice: true, reason: expect.stringContaining('run the workflow on pull_request_target') });
+  expect(route('pull_request', fork)).toMatchObject({ mode: 'skip', code: 'fork_pull_request', reason: expect.stringContaining('run the workflow on pull_request_target') });
 });
 
 test('/review in a comment on a PR: a review with no event, by the commenter', () => {
@@ -51,7 +51,7 @@ test('/review in a comment on a PR: a review with no event, by the commenter', (
     actor: 'maintainer',
   });
   // On an issue there's no PR to review: it ends with a notice.
-  expect(route('issue_comment', { ...asks('/review'), issue: { number: 3 } })).toMatchObject({ mode: 'skip', notice: true });
+  expect(route('issue_comment', { ...asks('/review'), issue: { number: 3 } })).toMatchObject({ mode: 'skip', code: 'not_a_pull_request' });
   // @axonshaft alone starts nothing any more.
   expect(quiet(route('issue_comment', asks('@axonshaft review')))).toBe(true);
   expect(quiet(route('issue_comment', { ...asks('/review'), sender: { login: 'x[bot]', type: 'Bot' } }))).toBe(true);
@@ -154,10 +154,10 @@ test('a slash command at the start of a line: /review on a PR reviews; /fix is a
   expect(route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body: '/review' } })).toMatchObject({ mode: 'review' });
   // /review and /ask on an issue have no pull request to read.
   const onIssue = (body: string) => ({ ...says(body), issue: { ...comment.issue, pull_request: undefined } });
-  expect(route('issue_comment', onIssue('/review'))).toMatchObject({ mode: 'skip', notice: true });
-  expect(route('issue_comment', onIssue('/ask why?'))).toEqual({ mode: 'skip', reason: '/ask works on a pull request, not an issue.', notice: true });
-  expect(route('issue_comment', onIssue('/fix it'))).toEqual({ mode: 'skip', reason: '/fix works on a pull request, not an issue.', notice: true });
-  expect(route('issue_comment', onIssue('/axonshaft do it'))).toEqual({ mode: 'skip', reason: '/axonshaft works on a pull request, not an issue.', notice: true });
+  expect(route('issue_comment', onIssue('/review'))).toMatchObject({ mode: 'skip', code: 'not_a_pull_request' });
+  expect(route('issue_comment', onIssue('/ask why?'))).toEqual({ mode: 'skip', reason: '/ask works on a pull request, not an issue.', code: 'not_a_pull_request' });
+  expect(route('issue_comment', onIssue('/fix it'))).toEqual({ mode: 'skip', reason: '/fix works on a pull request, not an issue.', code: 'not_a_pull_request' });
+  expect(route('issue_comment', onIssue('/axonshaft do it'))).toEqual({ mode: 'skip', reason: '/axonshaft works on a pull request, not an issue.', code: 'not_a_pull_request' });
 });
 
 test('a bare /fix fixes the last review; anything else after it, or /axonshaft, is its own request', () => {
