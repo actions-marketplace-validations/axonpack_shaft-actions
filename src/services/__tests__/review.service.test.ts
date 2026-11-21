@@ -233,7 +233,7 @@ test('a failed review creates the summary with its card, message and the run lin
   expect(fake.written).toEqual([
     [
       '<!-- shaft:summary -->',
-      "![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",
+      "[![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)](https://shaft.axonpack.dev/docs/reference/codes#review_invalid_reply)",
       '',
       "The model's reply didn't match the review format twice.",
       '',
@@ -243,7 +243,7 @@ test('a failed review creates the summary with its card, message and the run lin
   expect(progress()).toEqual([
     STARTED,
     STEPS[0],
-    "create: ![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",
+    "create: [![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)](https://shaft.axonpack.dev/docs/reference/codes#review_invalid_reply)",
     'check update: Axon Shaft / review failure "The review failed" https://github.com/o/r/actions/runs/9',
   ]);
 });

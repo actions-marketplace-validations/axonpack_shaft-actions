@@ -10,7 +10,7 @@ import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
 import { runTask } from './services/task.service';
-import { failureMarkdown, ShaftFailure } from './utils/failure.util';
+import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util';
 import { redact, workflowEditUrl } from './utils/render.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
@@ -36,7 +36,7 @@ let done = false;
 async function run(): Promise<void> {
   const started = Date.now();
   const r = route(context.eventName, context.payload);
-  if (r.mode === 'skip') return r.notice ? core.notice(r.reason) : core.info(r.reason);
+  if (r.mode === 'skip') return r.code ? core.notice(noticeText(r.reason, r.code)) : core.info(r.reason);
 
   const dryRun = core.getBooleanInput('dry_run');
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
@@ -56,7 +56,10 @@ async function run(): Promise<void> {
         done = true;
       }
     }
-    return core.notice(grant.reason);
+    const code = grant.code ?? grant.notice;
+    // The cap stops every run until an admin acts, so it gets a card in the job summary like a failure.
+    if (code === 'spending_cap') await writeSummary(failureMarkdown(new ShaftFailure(code, grant.reason)));
+    return core.notice(noticeText(grant.reason, code));
   }
   const octokit = getOctokit(grant.github_token);
   // What the installation hasn't approved yet: each warning once, and the review's footer names them.
@@ -71,7 +74,7 @@ async function run(): Promise<void> {
         : r.mode === 'reply'
           ? "the question wasn't answered. Only people with write access can ask with /ask"
           : 'nothing was changed. Only people with write access can start a change with /fix or /axonshaft';
-    return core.notice(`${r.actor} has no write access, so ${what}.`);
+    return core.notice(noticeText(`${r.actor} has no write access, so ${what}.`, 'no_write_access'));
   }
   reaction = await reactStart(octokit, context, dryRun);
   // The project's own variables pass to the model's commands and the checks, so their values are
@@ -131,7 +134,7 @@ async function run(): Promise<void> {
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
     }
-    core.notice(out.refused);
+    core.notice(noticeText(out.refused, out.code));
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === 'reply') {
@@ -163,9 +166,12 @@ async function run(): Promise<void> {
 async function fail(e: unknown): Promise<void> {
   core.setFailed(e instanceof Error ? e.message : String(e));
   await reportFailure?.(e);
-  if (!(e instanceof ShaftFailure)) return;
-  await core.summary
-    .addRaw(failureMarkdown(e))
+  if (e instanceof ShaftFailure) await writeSummary(failureMarkdown(e));
+}
+
+function writeSummary(markdown: string): Promise<unknown> {
+  return core.summary
+    .addRaw(markdown)
     .write()
     .catch((w: Error) => core.warning(`Couldn't write the job summary: ${w.message}`));
 }

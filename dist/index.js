@@ -23793,6 +23793,7 @@ var API_AUDIENCE = "https://api-shaft.axonpack.dev";
 var API_URL = process.env.SHAFT_API_URL ?? API_AUDIENCE;
 var APP_BOT = "axonshaft[bot]";
 var DASHBOARD_URL = "https://shaft.axonpack.dev";
+var CODES_URL = "https://shaft.axonpack.dev/docs/reference/codes";
 var ERROR_CARDS_URL = "https://shaft.axonpack.dev/errors";
 var STATUS_CARDS_URL = "https://shaft.axonpack.dev/status";
 
@@ -23806,9 +23807,12 @@ class ShaftFailure extends Error {
     this.url = url;
   }
 }
+var codeUrl = (code) => `${CODES_URL}#${encodeURIComponent(code)}`;
+var noticeText = (reason, code) => code ? `${reason} See ${codeUrl(code)}` : reason;
 function failureMarkdown(f) {
   const alt = f.message.replace(/[[\]\r\n]+/g, " ");
-  return [`![${alt}](${ERROR_CARDS_URL}/${encodeURIComponent(f.code)}.svg)`, f.message, f.url && `<${f.url}>`].filter(Boolean).join(`
+  const card = `[![${alt}](${ERROR_CARDS_URL}/${encodeURIComponent(f.code)}.svg)](${codeUrl(f.code)})`;
+  return [card, f.message, f.url && `<${f.url}>`].filter(Boolean).join(`
 
 `);
 }
@@ -58810,7 +58814,7 @@ function route(eventName, payload) {
     if (!event)
       return { mode: "skip", reason: `${eventName} ${payload.action} is not reviewed.` };
     if (eventName === "pull_request" && isFork(pr)) {
-      return { mode: "skip", reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, notice: true };
+      return { mode: "skip", reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, code: "fork_pull_request" };
     }
     return { mode: "review", number: pr.number, event, fork: isFork(pr) };
   }
@@ -58825,17 +58829,17 @@ function route(eventName, payload) {
   if (command === "review" && onPr)
     return { mode: "review", number, fork: pr ? isFork(pr) : undefined, actor };
   if (command === "review")
-    return { mode: "skip", reason: "/review works on a pull request, not an issue.", notice: true };
+    return { mode: "skip", reason: "/review works on a pull request, not an issue.", code: "not_a_pull_request" };
   if (command === "help")
     return { mode: "help", number, actor };
   const c = eventName === "pull_request_review" ? payload.review : payload.comment;
   const ask = eventName === "pull_request_review_comment" ? { id: c.id, text, path: c.path, line: c.line ?? c.original_line ?? undefined, thread: c.in_reply_to_id ?? c.id } : { id: c.id, text };
   if (command === "ask" && !onPr)
-    return { mode: "skip", reason: "/ask works on a pull request, not an issue.", notice: true };
+    return { mode: "skip", reason: "/ask works on a pull request, not an issue.", code: "not_a_pull_request" };
   if (command === "ask")
     return { mode: "reply", number, actor, ask };
   if (!onPr)
-    return { mode: "skip", reason: `/${command === "fix" ? "fix" : "axonshaft"} works on a pull request, not an issue.`, notice: true };
+    return { mode: "skip", reason: `/${command === "fix" ? "fix" : "axonshaft"} works on a pull request, not an issue.`, code: "not_a_pull_request" };
   return { mode: "task", number, actor, ask, bare: command === "fix" && !text.replace("/fix", "").trim() };
 }
 var labelsOf = (item) => (item.labels ?? []).map((l) => l.name);
@@ -61040,7 +61044,7 @@ async function run() {
   const started = Date.now();
   const r = route(context2.eventName, context2.payload);
   if (r.mode === "skip")
-    return r.notice ? notice(r.reason) : info(r.reason);
+    return r.code ? notice(noticeText(r.reason, r.code)) : info(r.reason);
   const dryRun = getBooleanInput("dry_run");
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context2.repo;
@@ -61059,7 +61063,10 @@ ${grant.comment}`);
         done = true;
       }
     }
-    return notice(grant.reason);
+    const code = grant.code ?? grant.notice;
+    if (code === "spending_cap")
+      await writeSummary(failureMarkdown(new ShaftFailure(code, grant.reason)));
+    return notice(noticeText(grant.reason, code));
   }
   const octokit = getOctokit(grant.github_token);
   const missing = Array.isArray(grant.missing_permissions) ? grant.missing_permissions : [];
@@ -61069,7 +61076,7 @@ ${grant.comment}`);
     return notice("The Axon Shaft API sent a run for /help, which runs nothing.");
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
     const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : r.mode === "reply" ? "the question wasn't answered. Only people with write access can ask with /ask" : "nothing was changed. Only people with write access can start a change with /fix or /axonshaft";
-    return notice(`${r.actor} has no write access, so ${what}.`);
+    return notice(noticeText(`${r.actor} has no write access, so ${what}.`, "no_write_access"));
   }
   reaction = await reactStart(octokit, context2, dryRun);
   const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
@@ -61122,7 +61129,7 @@ ${grant.comment}`);
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
     }
-    notice(out.refused);
+    notice(noticeText(out.refused, out.code));
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === "reply") {
@@ -61152,8 +61159,10 @@ ${grant.comment}`);
 async function fail(e) {
   setFailed(e instanceof Error ? e.message : String(e));
   await reportFailure?.(e);
-  if (!(e instanceof ShaftFailure))
-    return;
-  await summary.addRaw(failureMarkdown(e)).write().catch((w) => warning(`Couldn't write the job summary: ${w.message}`));
+  if (e instanceof ShaftFailure)
+    await writeSummary(failureMarkdown(e));
+}
+function writeSummary(markdown) {
+  return summary.addRaw(markdown).write().catch((w) => warning(`Couldn't write the job summary: ${w.message}`));
 }
 run().catch(fail).finally(() => reaction && reactEnd(reaction, done));

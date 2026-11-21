@@ -428,7 +428,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 
 The step fails with a message that says what to do. The job summary shows a card for the failure, the same message and, when there is one, a link to where to fix it.
 
-The card is an image of the failure's code from `https://shaft.axonpack.dev/errors/<code>.svg`. When the review itself fails, the PR's summary comment shows the same card, message and link.
+The card is an image of the failure's code from `https://shaft.axonpack.dev/errors/<code>.svg`, and it links to the code's entry in the docs, `https://shaft.axonpack.dev/docs/reference/codes#<code>`. When the review itself fails, the PR's summary comment shows the same card, message and link.
 
 ### Codes from the Axon Shaft API
 
@@ -458,19 +458,19 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 
 ### Runs that end with a notice
 
-These end with a notice, and the step passes:
+These end with a notice, and the step passes. A notice with a code ends with a link to the code's entry in the docs. The API's own reasons get a code only from an API that sends one; with an older API the notice has no link.
 
-- a fork's pull request on `pull_request`;
+- a fork's pull request on `pull_request` (`fork_pull_request`);
 - a job that's off for the event;
 - a fork's pull request the dashboard holds back;
-- a `/review`, `/ask`, `/fix` or `/axonshaft` from someone without write access;
-- a `/ask`, `/fix` or `/axonshaft` on an issue;
+- a `/review`, `/ask`, `/fix` or `/axonshaft` from someone without write access (`no_write_access`);
+- a `/review`, `/ask`, `/fix` or `/axonshaft` on an issue (`not_a_pull_request`);
 - a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
 - a bare `/fix` with nothing to fix (`nothing_to_fix`);
 - a `/fix` or `/axonshaft` on a self-hosted runner (`self_hosted_unsupported`);
 - a `/fix` or `/axonshaft` whose checkout kept a token in `.git/config` (`credentials_in_checkout`);
 - a `/fix` or `/axonshaft` on a runner that can't start the sandbox (`sandbox_unavailable`);
-- a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap.
+- a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap. The job summary shows its card too.
 
 Any other error, such as GitHub's API failing, fails the step with that error's message.
 

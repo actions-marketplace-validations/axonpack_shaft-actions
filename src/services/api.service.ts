@@ -53,10 +53,11 @@ export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 /**
  * What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's
  * tokens. A fork's PR on a job set to ask a maintainer first also gets the `comment` to post, and the
- * GitHub token to post it with.
+ * GitHub token to post it with. `code` names why nothing runs (`paused`, `filtered`, `skip_label`, …), for
+ * the notice to link to its docs; older APIs send none, or only `notice: 'spending_cap'`.
  */
 export type Grant =
-  | { run: false; reason: string; comment?: string; github_token?: string }
+  | { run: false; reason: string; code?: string; notice?: string; comment?: string; github_token?: string }
   | {
       run: true;
       github_token: string;
