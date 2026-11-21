@@ -131,7 +131,7 @@ test('a question on a line is answered under its thread, with the footer and mar
   expect(fake.posted).toHaveLength(1);
   const [reply] = fake.posted;
   expect(reply).toMatchObject({ where: 'thread', comment_id: 4 });
-  expect(reply.body).toMatch(/^See `src\/retry\.ts:42`\. {2}\*\*\* &lt;!-- shaft:summary -->\n\n<details><summary><sub>sonnet, low effort · 10k tokens<\/sub><\/summary>\n/);
+  expect(reply.body).toMatch(/^See `src\/retry\.ts:42`\. \[x\]\(https:\/\/evil\.example\/\?d=1\) \*\*\* &lt;!-- shaft:summary -->\n\n<details><summary><sub>sonnet, low effort · 10k tokens<\/sub><\/summary>\n/);
   expect(reply.body).toContain('| Axon Shaft | [Run page](https://shaft.axonpack.dev/console/acme/widgets/runs/3) |');
   expect(reply.body).toContain("| Why this model | question; auto tries sonnet, then opus at low effort, moving up only when an attempt doesn't work |");
   expect(reply.body).toContain('| Triage | normal: Reads a few files. |');
@@ -142,7 +142,7 @@ test('a question on a line is answered under its thread, with the footer and mar
     // The triage's tokens count too.
     tokens: { input: 9500, output: 320, cache_read: 0, cache_write: 0 },
     costUsd: expect.closeTo(0.051),
-    output: { answer: 'See `src/retry.ts:42`.  *** &lt;!-- shaft:summary -->', comment_url: 'https://github.com/acme/widgets/pull/7#discussion_r9' },
+    output: { answer: 'See `src/retry.ts:42`. [x](https://evil.example/?d=1) *** &lt;!-- shaft:summary -->', comment_url: 'https://github.com/acme/widgets/pull/7#discussion_r9' },
   });
 });
 

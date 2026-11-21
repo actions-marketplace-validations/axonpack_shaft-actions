@@ -157,15 +157,42 @@ const fence = (s: string, lang = '') => `\`\`\`${lang}\n${s.replace(/\n$/, '')}\
 /** One table cell: a `|` or a line break would end the cell or the table. */
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s*[\r\n]+\s*/g, ' ');
 const html = (s: string) => s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** Hosts an image in posted model text may load from: GitHub's own and the dashboard's. */
+const IMAGE_HOSTS = /^(github\.com|[\w-]+\.githubusercontent\.com|shaft\.axonpack\.dev)$/i;
+const trustedImage = (url: string) => {
+  try {
+    const u = new URL(url.replace(/^<|>$/g, ''));
+    return u.protocol === 'https:' && IMAGE_HOSTS.test(u.hostname);
+  } catch {
+    return false;
+  }
+};
+
 /**
- * Model text as it may be posted: no images, and no `<!--`. A comment or file in the PR could talk
- * the model into an image whose URL carries data out when GitHub fetches it, or into a hidden
- * `shaft:` marker that a later run would read back.
+ * Model text as it may be posted: an image only from `IMAGE_HOSTS`, and no `<!--`. A comment or file
+ * in the PR could talk the model into an image whose URL carries data out when GitHub fetches it, so
+ * any other image becomes a plain link with its alt text, which loads nothing until someone clicks
+ * it. A hidden `shaft:` marker would be read back by a later run. Repeated until nothing changes, so
+ * an image hidden in another's alt text is caught too.
  */
-export const prose = (s: string) =>
-  s
-    .replace(/<!--/g, '&lt;!--')
-    .replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, '').replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, '');
+export function prose(text: string): string {
+  let s = text.replace(/<!--/g, '&lt;!--');
+  for (let prev = ''; prev !== s; ) {
+    prev = s;
+    s = s
+      .replace(/!+\[([^\n]*?)\]\s*([([])([^)\]\n]*)[)\]]/g, (m, alt: string, open: string, target: string) =>
+        open === '(' && trustedImage(target.trim().split(/\s+/)[0] ?? '') && !m.startsWith('!!') ? m : open === '(' ? `[${alt}](${target})` : `[${alt}][${target}]`,
+      )
+      .replace(/<img\b[^>]*>/gi, (tag) => {
+        const src = /\bsrc\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1] ?? '';
+        if (trustedImage(src) && !/\bsrcset\b/i.test(tag)) return tag;
+        const alt = /\balt\s*=\s*["']([^"'\n]*)["']/i.exec(tag)?.[1] || 'image';
+        return `[${alt}](${src})`;
+      })
+      .replace(/<\/?(picture|source|video)\b[^>]*>/gi, '');
+  }
+  return s;
+}
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function inlineBody(f: Placed): string {

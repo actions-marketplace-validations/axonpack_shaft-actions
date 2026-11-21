@@ -57925,7 +57925,29 @@ ${s.replace(/\n$/, "")}
 \`\`\``;
 var cell = (s) => s.replace(/\|/g, "\\|").replace(/\s*[\r\n]+\s*/g, " ");
 var html = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-var prose = (s) => s.replace(/<!--/g, "&lt;!--").replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, "").replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, "");
+var IMAGE_HOSTS = /^(github\.com|[\w-]+\.githubusercontent\.com|shaft\.axonpack\.dev)$/i;
+var trustedImage = (url) => {
+  try {
+    const u = new URL(url.replace(/^<|>$/g, ""));
+    return u.protocol === "https:" && IMAGE_HOSTS.test(u.hostname);
+  } catch {
+    return false;
+  }
+};
+function prose(text) {
+  let s = text.replace(/<!--/g, "&lt;!--");
+  for (let prev = "";prev !== s; ) {
+    prev = s;
+    s = s.replace(/!+\[([^\n]*?)\]\s*([([])([^)\]\n]*)[)\]]/g, (m, alt, open, target) => open === "(" && trustedImage(target.trim().split(/\s+/)[0] ?? "") && !m.startsWith("!!") ? m : open === "(" ? `[${alt}](${target})` : `[${alt}][${target}]`).replace(/<img\b[^>]*>/gi, (tag) => {
+      const src = /\bsrc\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1] ?? "";
+      if (trustedImage(src) && !/\bsrcset\b/i.test(tag))
+        return tag;
+      const alt = /\balt\s*=\s*["']([^"'\n]*)["']/i.exec(tag)?.[1] || "image";
+      return `[${alt}](${src})`;
+    }).replace(/<\/?(picture|source|video)\b[^>]*>/gi, "");
+  }
+  return s;
+}
 var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
 function inlineBody(f) {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
