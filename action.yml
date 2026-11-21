@@ -22,3 +22,6 @@ outputs:
 runs:
   using: node24
   main: dist/index.js
+  # At the end of the job, even after a cancel: closes any check run the main step left in progress.
+  post: dist/post.js
+  post-if: always()
