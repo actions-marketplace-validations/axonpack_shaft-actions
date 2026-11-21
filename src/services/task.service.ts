@@ -3,7 +3,7 @@ import { DASHBOARD_URL } from '../consts/api.const';
 import { TRIAGE_START } from '../consts/ladder.const';
 import { ladder, matches } from '../utils/auto-pick.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
-import { pushDenial, type PushTarget, runsCode, sameChanges } from '../utils/push.util';
+import { pushDenial, type PushTarget, runsCode, sameChanges, unaskedBuildInputs } from '../utils/push.util';
 import { footer, prose, redact } from '../utils/render.util';
 import { dataBlock } from '../utils/prompt.util';
 import { type ReplyFormat, runAgent } from './agent.service';
@@ -13,7 +13,7 @@ import { savedCredentials } from './checkout.service';
 import { collectContext } from './context.service';
 import { applySuggestion, fixStart, openFindings, taskRequest } from './fix.service';
 import { climb, NotWorked, NO_SPEND, withSpent } from './ladder.service';
-import { assertHead, head, pushChanges, readChanges, resetTo } from './push.service';
+import { assertHead, fileAt, head, pushChanges, readChanges, resetTo } from './push.service';
 import { ANSWER_MAX, answerFooter, buildReplyPrompt, postInThread, type ReplyOptions, type ReplyOutcome } from './reply.service';
 import { FALLBACK } from './review.service';
 import { commandIn } from './route.service';
@@ -122,12 +122,14 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
   const settle = async (listed: string[]) => {
     const changes = readChanges(o.cwd, base);
     const outside = scope ? changes.map((c) => c.path).filter((p) => !scope.has(p)) : [];
-    const checks = changes.length && !outside.length ? await step('Run the checks', async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
-    return { changes, outside, checks, failed: checks.filter((r) => !r.passed) };
+    // Anything else may touch what runs on install and in CI only when the request asks for it.
+    const unasked = scope ? [] : unaskedBuildInputs(changes, (p) => fileAt(o.cwd, base, p), o.ask.text);
+    const checks = changes.length && !outside.length && !unasked.length ? await step('Run the checks', async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
+    return { changes, outside, unasked, checks, failed: checks.filter((r) => !r.passed) };
   };
   try {
     const ran = o.bare && !left.length ? { ...(await settle([])), result: undefined } : await withModel();
-    const { changes, outside, checks, failed, result } = ran;
+    const { changes, outside, unasked, checks, failed, result } = ran;
     const name = (f: string) => `\`${f.replace(/[`\r\n]/g, '')}\``;
     const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? '' : 's'}, with no model call.`];
     if (applied.length) lines.push(`**Suggestions applied:** ${applied.map((f) => `${name(`${f.file}:${f.line}`)} ${prose(f.title)}`).join('; ')}`);
@@ -139,6 +141,11 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
       if (outside.length) {
         core.warning(`Nothing was pushed: ${outside.join(', ')} isn't named by any finding.`);
         lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(', ')}.`);
+      } else if (unasked.length) {
+        core.warning(`Nothing was pushed: the request didn't ask to change ${unasked.join(', ')}.`);
+        lines.push(
+          `Nothing was pushed: the change touches what runs on install and in CI (${unasked.map(name).join(', ')}), and the request didn't ask for that. To allow it, ask again and name the file, or say dependency or script.`,
+        );
       } else if (failed.length) {
         core.warning(`Nothing was pushed: ${failed.map((c) => c.command).join(', ')} failed.`);
         lines.push(`Nothing was pushed, because ${failed.length === 1 ? 'a check' : 'some checks'} failed.`);
@@ -154,7 +161,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
       const skipped = skippedNote(checks);
-      if (!outside.length) lines.push(checksTable(checks), ...(skipped ? [skipped] : []));
+      if (!outside.length && !unasked.length) lines.push(checksTable(checks), ...(skipped ? [skipped] : []));
       for (const c of failed)
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>\n\n\`\`\`\`\n${prose(c.output).replace(/`{4,}/g, '```')}\n\`\`\`\`\n\n</details>`);
     }
@@ -221,17 +228,19 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         ).finally(endSandboxes),
       );
       const settled = await settle(result.reply.checks);
-      const { changes, outside, failed } = settled;
+      const { changes, outside, unasked, failed } = settled;
       const untouched = sameChanges(changes, prepared);
       const didnt = last
         ? undefined
         : outside.length
           ? new NotWorked(`it changed ${outside.join(', ')}, which no finding names`, `It changed ${outside.join(', ')}, and a fix of these findings may change only the files they name.`)
-          : failed.length
-            ? new NotWorked(`${failed.map((r) => r.command).join(', ')} failed`, failed.map((r) => `\`${r.command}\` failed:\n\n${r.output}`).join('\n\n'))
-            : isFix && untouched
-              ? new NotWorked('it changed nothing', 'It ended without changing any file, and the request needs a change.')
-              : undefined;
+          : unasked.length
+            ? new NotWorked(`it changed ${unasked.join(', ')} unasked`, `It changed ${unasked.join(', ')}, which decide what runs on install and in CI, and the request didn't ask for that. Leave them as they are.`)
+            : failed.length
+              ? new NotWorked(`${failed.map((r) => r.command).join(', ')} failed`, failed.map((r) => `\`${r.command}\` failed:\n\n${r.output}`).join('\n\n'))
+              : isFix && untouched
+                ? new NotWorked('it changed nothing', 'It ended without changing any file, and the request needs a change.')
+                : undefined;
       if (didnt) {
         didnt.spent = result;
         throw didnt;

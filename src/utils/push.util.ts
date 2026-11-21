@@ -1,3 +1,6 @@
+import { basename } from 'node:path';
+import { BUILD_INPUTS, MANIFEST } from '../consts/build-inputs.const';
+
 /** Where the project lets Axon Shaft push: nowhere, only the pull request's own branch, or any branch. */
 export type PushMode = 'disabled' | 'restricted' | 'enabled';
 
@@ -61,3 +64,34 @@ export const runsCode = (paths: string[]): string[] => paths.filter((p) => RUNS_
 
 /** The same files with the same contents: the session changed nothing past the applied suggestions. */
 export const sameChanges = (a: Change[], b: Change[]) => a.length === b.length && a.every((c, i) => c.path === b[i]!.path && Buffer.compare(c.content ?? Buffer.alloc(0), b[i]!.content ?? Buffer.alloc(0)) === 0);
+
+const json = (text: string | undefined): Record<string, unknown> => {
+  try {
+    const v = JSON.parse(text ?? '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {}; // A manifest that doesn't parse counts as changed, so it's caught.
+  }
+};
+const differ = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b);
+
+/**
+ * The build and CI inputs (`BUILD_INPUTS`, a manifest's scripts or dependencies) that `changes` touch
+ * and `request` doesn't ask for, each as the file and what about it changed. `before` is a file's
+ * text at the pull request's head, undefined when the change adds it.
+ */
+export function unaskedBuildInputs(changes: Change[], before: (path: string) => string | undefined, request: string): string[] {
+  const asked = (path: string, words: RegExp) => request.toLowerCase().includes(basename(path).toLowerCase()) || words.test(request);
+  const manifestChanged = changes.some((c) => MANIFEST.pattern.test(c.path));
+  return changes.flatMap((c) => {
+    if (MANIFEST.pattern.test(c.path)) {
+      const [was, now] = [json(before(c.path)), json(c.content?.toString('utf8'))];
+      return [
+        ...(differ(was.scripts, now.scripts) && !asked(c.path, MANIFEST.scripts) ? [`${c.path} (its scripts)`] : []),
+        ...(MANIFEST.depFields.some((k) => differ(was[k], now[k])) && !asked(c.path, MANIFEST.deps) ? [`${c.path} (its dependencies)`] : []),
+      ];
+    }
+    const input = BUILD_INPUTS.find((b) => b.pattern.test(c.path));
+    return input && !(input.lockfile && manifestChanged) && !asked(c.path, input.words) ? [c.path] : [];
+  });
+}

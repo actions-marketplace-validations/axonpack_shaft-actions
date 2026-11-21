@@ -61007,6 +61007,31 @@ ${REPLY_MARKER}`);
 }
 
 // src/utils/push.util.ts
+import { basename as basename6 } from "node:path";
+
+// src/consts/build-inputs.const.ts
+var BUILD_INPUTS = [
+  { pattern: /(^|\/)\.npmrc$/, words: /\bnpmrc\b/i },
+  { pattern: /(^|\/)\.yarnrc(\.ya?ml)?$/, words: /\byarnrc\b/i },
+  { pattern: /(^|\/)bunfig\.toml$/, words: /\bbunfig\b/i },
+  { pattern: /(^|\/)(GNUmakefile|[Mm]akefile)$/, words: /\bmakefile\b/i },
+  { pattern: /(^|\/)Dockerfile[^/]*$/, words: /\bdockerfile\b/i },
+  { pattern: /(^|\/)\.husky\//, words: /\bhusky\b|\bgit hooks?\b/i },
+  { pattern: /(^|\/)\.git-hooks\//, words: /\bgit hooks?\b/i },
+  {
+    pattern: /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|composer\.lock|go\.sum)$/,
+    words: /\bdep(s|endenc(y|ies))\b|\block ?file\b/i,
+    lockfile: true
+  }
+];
+var MANIFEST = {
+  pattern: /(^|\/)package\.json$/,
+  scripts: /\bscripts?\b/i,
+  deps: /\bdep(s|endenc(y|ies))\b/i,
+  depFields: ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "bundledDependencies", "overrides", "resolutions", "pnpm", "trustedDependencies", "packageManager"]
+};
+
+// src/utils/push.util.ts
 function pushDenial(mode, t) {
   if (mode !== "restricted" && mode !== "enabled")
     return "Pushing is turned off for this project. An admin can change Push mode in its settings on the dashboard.";
@@ -61041,6 +61066,30 @@ function commitDenial(changes) {
 var RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|npm-shrinkwrap\.json)$/;
 var runsCode = (paths) => paths.filter((p) => RUNS_CODE.test(p));
 var sameChanges = (a, b) => a.length === b.length && a.every((c, i) => c.path === b[i].path && Buffer.compare(c.content ?? Buffer.alloc(0), b[i].content ?? Buffer.alloc(0)) === 0);
+var json = (text) => {
+  try {
+    const v = JSON.parse(text ?? "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+};
+var differ = (a, b) => JSON.stringify(a) !== JSON.stringify(b);
+function unaskedBuildInputs(changes, before, request) {
+  const asked = (path, words) => request.toLowerCase().includes(basename6(path).toLowerCase()) || words.test(request);
+  const manifestChanged = changes.some((c) => MANIFEST.pattern.test(c.path));
+  return changes.flatMap((c) => {
+    if (MANIFEST.pattern.test(c.path)) {
+      const [was, now] = [json(before(c.path)), json(c.content?.toString("utf8"))];
+      return [
+        ...differ(was.scripts, now.scripts) && !asked(c.path, MANIFEST.scripts) ? [`${c.path} (its scripts)`] : [],
+        ...MANIFEST.depFields.some((k) => differ(was[k], now[k])) && !asked(c.path, MANIFEST.deps) ? [`${c.path} (its dependencies)`] : []
+      ];
+    }
+    const input = BUILD_INPUTS.find((b) => b.pattern.test(c.path));
+    return input && !(input.lockfile && manifestChanged) && !asked(c.path, input.words) ? [c.path] : [];
+  });
+}
 
 // src/services/commands.service.ts
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
@@ -61226,6 +61275,13 @@ function assertHead(cwd, base) {
   if (head(cwd) !== base)
     throw new ShaftFailure("push_failed", "Something in the run moved HEAD off the pull request's head commit, so nothing was pushed.");
 }
+function fileAt(cwd, base, path) {
+  try {
+    return git(cwd, ["show", `${base}:${path}`]);
+  } catch {
+    return;
+  }
+}
 function resetTo(cwd, base) {
   git(cwd, ["reset", "-q", "--hard", base]);
   git(cwd, ["clean", "-q", "-f", "-d"]);
@@ -61324,12 +61380,13 @@ ${TASK_MARKER}`);
   const settle = async (listed) => {
     const changes = readChanges(o.cwd, base);
     const outside = scope ? changes.map((c) => c.path).filter((p) => !scope.has(p)) : [];
-    const checks = changes.length && !outside.length ? await step("Run the checks", async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
-    return { changes, outside, checks, failed: checks.filter((r) => !r.passed) };
+    const unasked = scope ? [] : unaskedBuildInputs(changes, (p) => fileAt(o.cwd, base, p), o.ask.text);
+    const checks = changes.length && !outside.length && !unasked.length ? await step("Run the checks", async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
+    return { changes, outside, unasked, checks, failed: checks.filter((r) => !r.passed) };
   };
   try {
     const ran = o.bare && !left.length ? { ...await settle([]), result: undefined } : await withModel();
-    const { changes, outside, checks, failed, result } = ran;
+    const { changes, outside, unasked, checks, failed, result } = ran;
     const name = (f) => `\`${f.replace(/[`\r\n]/g, "")}\``;
     const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? "" : "s"}, with no model call.`];
     if (applied.length)
@@ -61343,6 +61400,9 @@ ${TASK_MARKER}`);
       if (outside.length) {
         warning(`Nothing was pushed: ${outside.join(", ")} isn't named by any finding.`);
         lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(", ")}.`);
+      } else if (unasked.length) {
+        warning(`Nothing was pushed: the request didn't ask to change ${unasked.join(", ")}.`);
+        lines.push(`Nothing was pushed: the change touches what runs on install and in CI (${unasked.map(name).join(", ")}), and the request didn't ask for that. To allow it, ask again and name the file, or say dependency or script.`);
       } else if (failed.length) {
         warning(`Nothing was pushed: ${failed.map((c) => c.command).join(", ")} failed.`);
         lines.push(`Nothing was pushed, because ${failed.length === 1 ? "a check" : "some checks"} failed.`);
@@ -61359,7 +61419,7 @@ ${TASK_MARKER}`);
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
       const skipped = skippedNote(checks);
-      if (!outside.length)
+      if (!outside.length && !unasked.length)
         lines.push(checksTable(checks), ...skipped ? [skipped] : []);
       for (const c of failed)
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>
@@ -61436,9 +61496,9 @@ ${dataBlock("earlier-attempt", earlier)}` : request;
         retry: last
       }, TASK_FORMAT).finally(endSandboxes));
       const settled = await settle(result.reply.checks);
-      const { changes, outside, failed } = settled;
+      const { changes, outside, unasked, failed } = settled;
       const untouched = sameChanges(changes, prepared);
-      const didnt = last ? undefined : outside.length ? new NotWorked(`it changed ${outside.join(", ")}, which no finding names`, `It changed ${outside.join(", ")}, and a fix of these findings may change only the files they name.`) : failed.length ? new NotWorked(`${failed.map((r) => r.command).join(", ")} failed`, failed.map((r) => `\`${r.command}\` failed:
+      const didnt = last ? undefined : outside.length ? new NotWorked(`it changed ${outside.join(", ")}, which no finding names`, `It changed ${outside.join(", ")}, and a fix of these findings may change only the files they name.`) : unasked.length ? new NotWorked(`it changed ${unasked.join(", ")} unasked`, `It changed ${unasked.join(", ")}, which decide what runs on install and in CI, and the request didn't ask for that. Leave them as they are.`) : failed.length ? new NotWorked(`${failed.map((r) => r.command).join(", ")} failed`, failed.map((r) => `\`${r.command}\` failed:
 
 ${r.output}`).join(`
 

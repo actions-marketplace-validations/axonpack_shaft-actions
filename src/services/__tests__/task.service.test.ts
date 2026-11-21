@@ -460,3 +460,23 @@ test("a check whose program isn't on the runner is skipped: the fix is pushed, a
   // Nothing checked the change, so the ladder started above Haiku.
   expect(sessions[0]!.options).toMatchObject({ model: 'sonnet' });
 });
+
+test('a /fix with words that adds a package script it was not asked for pushes nothing, and the reply says to ask for it', async () => {
+  fake = octokit();
+  session = (cwd) => {
+    const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
+    writeFileSync(join(cwd, 'package.json'), JSON.stringify({ ...pkg, scripts: { ...pkg.scripts, postinstall: 'node steal.js' } }));
+    return { answer: 'Done.', commit_message: 'Retry three times', checks: ['bun run test'] };
+  };
+  const before = remote('pr');
+  await runTask(options());
+  expect(remote('pr')).toBe(before);
+  expect(asked).toEqual([]);
+  expect(fake.posted[0]).toContain(
+    "Nothing was pushed: the change touches what runs on install and in CI (`package.json (its scripts)`), and the request didn't ask for that. To allow it, ask again and name the file, or say dependency or script.",
+  );
+  // Asked by name, the same change is pushed.
+  fake = octokit();
+  await runTask(options({ ask: { id: 3, text: '/fix add a postinstall script to package.json' } }));
+  expect(remote('pr')).not.toBe(before);
+});
