@@ -1,3 +1,6 @@
+import { basename, dirname } from 'node:path';
+import { BUILD_INPUTS, MANIFEST } from '../consts/build-inputs.const';
+
 /** Where the project lets Axon Shaft push: nowhere, only the pull request's own branch, or any branch. */
 export type PushMode = 'disabled' | 'restricted' | 'enabled';
 
@@ -58,3 +61,42 @@ const RUNS_CODE = /(^|\/)(package\.json|Makefile|GNUmakefile|bun\.lockb?|pnpm-lo
 
 /** The `paths` a reviewer should read before merging, because they change what runs. */
 export const runsCode = (paths: string[]): string[] => paths.filter((p) => RUNS_CODE.test(p));
+
+/** The same files with the same contents: the session changed nothing past the applied suggestions. */
+export const sameChanges = (a: Change[], b: Change[]) => a.length === b.length && a.every((c, i) => c.path === b[i]!.path && Buffer.compare(c.content ?? Buffer.alloc(0), b[i]!.content ?? Buffer.alloc(0)) === 0);
+
+const json = (text: string | undefined): Record<string, unknown> => {
+  try {
+    const v = JSON.parse(text ?? '{}');
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {}; // A manifest that doesn't parse counts as changed, so it's caught.
+  }
+};
+const differ = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b);
+
+/**
+ * The build and CI inputs (`BUILD_INPUTS`, a manifest's scripts or dependencies) that `changes` touch
+ * and `request` doesn't ask for, each as the file and what about it changed. A lockfile is exempt
+ * only when a manifest in its folder or below changed its dependencies and the request asked for
+ * that. `before` is a file's text at the pull request's head, undefined when the change adds it.
+ */
+export function unaskedBuildInputs(changes: Change[], before: (path: string) => string | undefined, request: string): string[] {
+  const asked = (path: string, words: RegExp) => request.toLowerCase().includes(basename(path).toLowerCase()) || words.test(request);
+  const manifests = changes
+    .filter((c) => MANIFEST.pattern.test(c.path))
+    .map((c) => {
+      const [was, now] = [json(before(c.path)), json(c.content?.toString('utf8'))];
+      const scripts = differ(was.scripts, now.scripts);
+      const deps = MANIFEST.depFields.some((k) => differ(was[k], now[k]));
+      return { path: c.path, scripts, deps, scriptsAsked: asked(c.path, MANIFEST.scripts), depsAsked: asked(c.path, MANIFEST.deps) };
+    });
+  // A lockfile follows only a dependency change someone asked for, in its own package or one below it.
+  const followsAskedDeps = (lock: string) => manifests.some((m) => m.deps && m.depsAsked && `${dirname(m.path)}/`.startsWith(dirname(lock) === '.' ? '' : `${dirname(lock)}/`));
+  return changes.flatMap((c) => {
+    const m = manifests.find((x) => x.path === c.path);
+    if (m) return [...(m.scripts && !m.scriptsAsked ? [`${c.path} (its scripts)`] : []), ...(m.deps && !m.depsAsked ? [`${c.path} (its dependencies)`] : [])];
+    const input = BUILD_INPUTS.find((b) => b.pattern.test(c.path));
+    return input && !(input.lockfile && followsAskedDeps(c.path)) && !asked(c.path, input.words) ? [c.path] : [];
+  });
+}

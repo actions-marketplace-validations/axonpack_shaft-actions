@@ -19,7 +19,7 @@ const under = (path: string, dir: string) => !relative(dir, path).startsWith('..
 const bin = { bwrap: 'bwrap', env: 'env', pkill: 'pkill' };
 
 /** The first executable file called `name` in an absolute PATH folder. */
-function which(name: string): string | undefined {
+export function which(name: string): string | undefined {
   for (const dir of (process.env.PATH ?? '').split(':').filter((d) => isAbsolute(d))) {
     try {
       const file = join(dir, name);

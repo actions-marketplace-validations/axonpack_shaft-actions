@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runnerEnv } from '../utils/env.util';
-import { inSandbox } from './sandbox.service';
+import { toolDenial } from '../utils/tool-guard.util';
+import { inSandbox, which } from './sandbox.service';
 
 /** The script and target names a task may run: tests, lint, type checks, builds and formatting. */
 const CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
@@ -39,8 +40,11 @@ export function repoCommands(cwd: string): string[] {
   return [...new Set(out)];
 }
 
-/** A check our code ran after the session, and the end of its output when it failed. */
-export type CheckResult = { command: string; passed: boolean; output: string };
+/**
+ * A check our code ran after the session, and the end of its output when it failed. `skipped`: its
+ * program isn't on the runner's PATH, so it didn't run and doesn't block the push.
+ */
+export type CheckResult = { command: string; passed: boolean; output: string; skipped?: string };
 
 const CHECK_TIMEOUT = 10 * 60_000; // ponytail: per command; a slower suite fails its check
 
@@ -51,6 +55,8 @@ const CHECK_TIMEOUT = 10 * 60_000; // ponytail: per command; a slower suite fail
  */
 export function runCheck(cwd: string, command: string, env: string[] = []): CheckResult {
   const [file, ...args] = command.split(/\s+/).map((a) => a.replace(/^['"]|['"]$/g, ''));
+  // The action installs no tools: the repo's CI runs this check on the push.
+  if (!which(file!)) return { command, passed: true, output: '', skipped: file! };
   try {
     inSandbox(cwd, file!, args, { env: runnerEnv(env), encoding: 'utf8', stdio: 'pipe', timeout: CHECK_TIMEOUT });
     return { command, passed: true, output: '' };
@@ -59,4 +65,29 @@ export function runCheck(cwd: string, command: string, env: string[] = []): Chec
     const output = `${stdout}${stderr}`.trim() || message;
     return { command, passed: false, output: output.split('\n').slice(-40).join('\n') };
   }
+}
+
+/**
+ * The checks our code runs after the session: the ones the model ran that the guard allows (no git
+ * command), in its order, or when it ran none, the repo's install, test and lint.
+ */
+export function checkList(listed: string[], commands: string[], cwd: string): string[] {
+  const ok = listed.map((c) => c.trim()).filter((c) => !c.startsWith('git ') && !toolDenial('Bash', { command: c }, cwd, commands));
+  return ok.length ? [...new Set(ok)] : commands.filter((c) => / (ci|install)\b/.test(c) || /\b(test|lint)$/.test(c));
+}
+
+export const checksTable = (checks: CheckResult[]) =>
+  checks.length
+    ? ['| Check | Result |', '| --- | --- |', ...checks.map((c) => `| \`${c.command}\` | ${c.skipped ? 'Skipped' : c.passed ? 'Passed' : 'Failed'} |`)].join('\n')
+    : 'No checks were run.';
+
+/** Why the skipped checks didn't run, one line per missing program, or undefined when none was skipped. */
+export function skippedNote(checks: CheckResult[]): string | undefined {
+  const tools = [...new Set(checks.flatMap((c) => c.skipped ?? []))];
+  if (!tools.length) return;
+  const each = tools.map((t) => {
+    const n = checks.filter((c) => c.skipped === t).length;
+    return `\`${t.replace(/[`\r\n]/g, '')}\` isn't installed on the runner, so ${n === 1 ? 'one check was' : `${n} checks were`} skipped`;
+  });
+  return `${each.join('; ')}. The repo's CI runs them on the push.`;
 }

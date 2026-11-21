@@ -10,6 +10,9 @@ test('action.yml parses, points at the built bundle and has only the dry_run inp
   expect(typeof action.description).toBe('string');
   expect(action.runs.using).toMatch(/^node\d+$/);
   expect(existsSync(action.runs.main)).toBe(true);
+  // The post step closes what a cancelled or killed run left open, so it must run after a cancel too.
+  expect(existsSync(action.runs.post)).toBe(true);
+  expect(action.runs['post-if']).toBe('always()');
   // Everything else comes from the dashboard.
   expect(Object.keys(action.inputs)).toEqual(['dry_run']);
   expect(typeof action.inputs.dry_run.description).toBe('string');

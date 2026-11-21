@@ -8,7 +8,14 @@ import type { PullRequest, ReviewEvent } from './route.service';
  * a review whether the PR comes from a fork, and the pull request when the payload has it.
  * `help` asks for the list of commands to post; the rest are a job kind.
  */
-export type GrantRequest = { job: 'review' | 'task' | 'reply' | 'help'; event?: ReviewEvent; fork?: boolean; pull_request?: PullRequest };
+export type GrantRequest = {
+  job: 'review' | 'task' | 'reply' | 'help';
+  event?: ReviewEvent;
+  fork?: boolean;
+  pull_request?: PullRequest;
+  /** The comment on a line of the diff that asked for the run, so the API can reply on its thread when it refuses it. An older API ignores it. */
+  comment?: { id: number };
+};
 
 /** One of the deep review's subagents, for a check the project keeps on. */
 export type Pass = { name: string; description: string; prompt: string };

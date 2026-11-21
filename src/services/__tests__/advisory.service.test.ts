@@ -4,6 +4,7 @@ import type { Placed } from '../../utils/render.util';
 const logs: string[] = [];
 vi.doMock('@actions/core', () => ({
   getIDToken: async () => 'oidc',
+  saveState: () => {},
   info: (s: string) => logs.push(`info ${s}`),
   warning: (s: string) => logs.push(`warning ${s}`),
 }));

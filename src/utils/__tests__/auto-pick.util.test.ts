@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { type ChangedFile, pick } from '../auto-pick.util';
+import { type ChangedFile, ladder, pick } from '../auto-pick.util';
 
 const file = (filename: string, lines = 10, patch?: string): ChangedFile => ({ filename, additions: lines, deletions: 0, patch });
 
@@ -72,4 +72,40 @@ test('max turns by size when the dashboard sets none: under 100 lines 12, under 
 test("the dashboard's max turns always wins and leaves the reason alone", () => {
   expect(pick({ mode: 'review', files: [file('src/a.ts', 60)], maxTurns: 50 })).toMatchObject({ maxTurns: 50, reason: '60 lines' });
   expect(pick({ mode: 'review', files: [file('src/a.ts', 5000)], maxTurns: 5 }).maxTurns).toBe(5);
+});
+
+const rungs = (input: Parameters<typeof ladder>[0]) => ladder(input).map((c) => `${c.model} ${c.effort}`);
+
+test("with auto, each job climbs its own ladder, every rung at low effort", () => {
+  expect(rungs({ mode: 'task', files: [file('src/a.ts')] })).toEqual(['haiku low', 'sonnet low', 'opus low']);
+  expect(rungs({ mode: 'reply' })).toEqual(['haiku low', 'sonnet low', 'opus low']);
+  expect(rungs({ mode: 'review', files: [file('README.md')] })).toEqual(['haiku low', 'sonnet low']);
+  expect(rungs({ mode: 'review', files: [file('src/a.ts', 5000)] })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'review', files: [file('.github/workflows/ci.yml')] })).toEqual(['opus low']);
+});
+
+test('the floors: no Haiku for a task whose checks cannot run, nor for a prompt past 100K tokens', () => {
+  expect(rungs({ mode: 'task', checked: false })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'reply', promptChars: 400_001 })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'review', files: [file('README.md')], promptChars: 400_001 })).toEqual(['sonnet low']);
+});
+
+test("triage's start drops the rungs below it, never goes below the floor, and never past the top", () => {
+  expect(rungs({ mode: 'task', start: 'sonnet' })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'task', start: 'opus' })).toEqual(['opus low']);
+  expect(rungs({ mode: 'task', checked: false, start: 'haiku' })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'reply', start: 'max' })).toEqual(['haiku low', 'sonnet low', 'opus low']);
+});
+
+test('a model or effort the user set, or a deep review, runs one choice as set', () => {
+  expect(rungs({ mode: 'task', model: 'sonnet' })).toEqual(['sonnet high']);
+  expect(rungs({ mode: 'task', effort: 'medium', start: 'opus' })).toEqual(['opus medium']);
+  expect(rungs({ mode: 'review', depth: 'deep', files: [file('src/a.ts')] })).toEqual(['opus high']);
+});
+
+test('a bare /fix of a few findings gets fewer turns', () => {
+  expect(pick({ mode: 'task', findings: 3 }).maxTurns).toBe(12);
+  expect(pick({ mode: 'task', findings: 6 }).maxTurns).toBe(20);
+  expect(pick({ mode: 'task', findings: 9 }).maxTurns).toBe(30);
+  expect(pick({ mode: 'task', findings: 3, maxTurns: 40 }).maxTurns).toBe(40);
 });
