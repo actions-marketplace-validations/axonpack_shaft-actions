@@ -61204,32 +61204,62 @@ function openFindings(ctx, bot) {
     };
   });
 }
-function applySuggestion(cwd, head, f) {
-  const s = f.suggestion;
-  if (!s || s.sha !== head || !insideCheckout(f.file, cwd))
-    return false;
-  let fd;
-  try {
-    fd = openSync2(join10(cwd, f.file), constants5.O_RDWR | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
-    if (!fstatSync(fd).isFile())
-      return false;
-    const lines = readFileSync6(fd, "utf8").split(`
-`);
-    if (s.start < 1 || s.end < s.start || s.end > lines.length)
-      return false;
-    lines.splice(s.start - 1, s.end - s.start + 1, ...s.text === "" ? [] : s.text.split(`
-`));
-    ftruncateSync(fd, 0);
-    writeSync(fd, lines.join(`
-`), 0);
-    return true;
-  } catch (e) {
-    info(`Couldn't apply the suggestion for ${f.file}:${f.line}: ${e.message}`);
-    return false;
-  } finally {
-    if (fd !== undefined)
-      closeSync2(fd);
+function applySuggestions(cwd, head, findings) {
+  const applied = [];
+  const unapplied = [];
+  const byFile = new Map;
+  for (const f of findings) {
+    if (!f.suggestion)
+      continue;
+    if (f.suggestion.sha !== head || !insideCheckout(f.file, cwd))
+      unapplied.push({ finding: f, why: "the pull request moved since the review" });
+    else
+      byFile.set(f.file, [...byFile.get(f.file) ?? [], f]);
   }
+  for (const [file, group] of byFile) {
+    let fd;
+    try {
+      fd = openSync2(join10(cwd, file), constants5.O_RDWR | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
+      if (!fstatSync(fd).isFile())
+        throw new Error("not a regular file");
+      const lines = readFileSync6(fd, "utf8").split(`
+`);
+      const ok = group.filter((f) => {
+        const { start, end } = f.suggestion;
+        const inRange = start >= 1 && end >= start && end <= lines.length;
+        if (!inRange)
+          unapplied.push({ finding: f, why: "its lines aren't in the file" });
+        return inRange;
+      });
+      const overlaps = (a, b) => a !== b && a.suggestion.start <= b.suggestion.end && b.suggestion.start <= a.suggestion.end;
+      const clear = ok.filter((f) => {
+        const overlap = ok.some((g) => overlaps(f, g));
+        if (overlap)
+          unapplied.push({ finding: f, why: "it overlaps another suggestion" });
+        return !overlap;
+      });
+      if (!clear.length)
+        continue;
+      for (const f of [...clear].sort((a, b) => b.suggestion.start - a.suggestion.start)) {
+        const { start, end, text } = f.suggestion;
+        lines.splice(start - 1, end - start + 1, ...text === "" ? [] : text.split(`
+`));
+      }
+      ftruncateSync(fd, 0);
+      writeSync(fd, lines.join(`
+`), 0);
+      applied.push(...clear);
+    } catch (e) {
+      info(`Couldn't apply the suggestions for ${file}: ${e.message}`);
+      for (const f of group)
+        if (!unapplied.some((u) => u.finding === f))
+          unapplied.push({ finding: f, why: "the file couldn't be changed" });
+    } finally {
+      if (fd !== undefined)
+        closeSync2(fd);
+    }
+  }
+  return { applied, unapplied };
 }
 function taskRequest(ask, findings, bare) {
   if (!findings.length)
@@ -61394,8 +61424,8 @@ ${TASK_MARKER}`);
   }
   const base = head(o.cwd);
   const commands = repoCommands(o.cwd);
-  const applySuggestions = () => findings.filter((f) => o.bare && applySuggestion(o.cwd, base, f));
-  const applied = applySuggestions();
+  const suggest = () => o.bare ? applySuggestions(o.cwd, base, findings) : { applied: [], unapplied: [] };
+  const { applied, unapplied } = suggest();
   const left = findings.filter((f) => !applied.includes(f));
   const prepared = applied.length ? readChanges(o.cwd, base) : [];
   const scope = o.bare ? new Set(findings.map((f) => f.file)) : undefined;
@@ -61413,6 +61443,8 @@ ${TASK_MARKER}`);
     const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? "" : "s"}, with no model call.`];
     if (applied.length)
       lines.push(`**Suggestions applied:** ${applied.map((f) => `${name(`${f.file}:${f.line}`)} ${prose(f.title)}`).join("; ")}`);
+    if (unapplied.length)
+      lines.push(`**Suggestions not applied:** ${unapplied.map((u) => `${name(`${u.finding.file}:${u.finding.line}`)} (${u.why})`).join("; ")}`);
     if (changes.length) {
       const paths = changes.map((c) => c.path);
       lines.push(`**Changed:** ${paths.map(name).join(", ")}`);
@@ -61492,7 +61524,7 @@ ${TASK_MARKER}`);
     const climbed = await climb(rungs, async (c, last, earlier) => {
       if (earlier) {
         resetTo(o.cwd, base);
-        applySuggestions();
+        suggest();
       }
       const retold = earlier ? `${request}
 

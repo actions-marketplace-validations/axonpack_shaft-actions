@@ -480,3 +480,29 @@ test('a /fix with words that adds a package script it was not asked for pushes n
   await runTask(options({ ask: { id: 3, text: '/fix add a postinstall script to package.json' } }));
   expect(remote('pr')).not.toBe(before);
 });
+
+test('overlapping suggestions are neither applied: their findings go to the model, and the reply says why', async () => {
+  const findings = [
+    { fp: 'f1', file: 'src/retry.ts', line: 1, severity: 'should-fix' as const, title: 'Retries once' },
+    { fp: 'f2', file: 'src/retry.ts', line: 2, severity: 'should-fix' as const, title: 'Export is wrong' },
+  ];
+  const summary = `<!-- shaft:summary -->\nThe card.\n${stateLine({ sha: 'abc', findings })}`;
+  const head = git(work, 'rev-parse', 'HEAD');
+  const comment = (fp: string, start: number, line: number) => ({
+    id: line,
+    user: { login: 'axonshaft[bot]' },
+    author_association: 'NONE',
+    path: 'src/retry.ts',
+    start_line: start,
+    line,
+    commit_id: head,
+    html_url: '',
+    body: `**Should fix** · correctness\n\nText.\n\n\`\`\`suggestion\nx\n\`\`\`\n\n<!-- shaft:finding ${fp} -->`,
+  });
+  fake = octokit('pr', 'acme/widgets', summary, [comment('f1', 1, 2), comment('f2', 2, 2)]);
+  session = edits('src/retry.ts');
+  await runTask(bare());
+  expect(sessions[0]!.prompt).toContain('Retries once');
+  expect(sessions[0]!.prompt).toContain('Export is wrong');
+  expect(fake.posted[0]).toContain('**Suggestions not applied:** `src/retry.ts:1` (it overlaps another suggestion); `src/retry.ts:2` (it overlaps another suggestion)');
+});

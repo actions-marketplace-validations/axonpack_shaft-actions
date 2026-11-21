@@ -11,7 +11,7 @@ import { fetchPushToken } from './api.service';
 import { checkList, checksTable, repoCommands, runCheck, skippedNote } from './commands.service';
 import { savedCredentials } from './checkout.service';
 import { collectContext } from './context.service';
-import { applySuggestion, fixStart, openFindings, taskRequest } from './fix.service';
+import { applySuggestions, fixStart, openFindings, taskRequest } from './fix.service';
 import { climb, NotWorked, NO_SPEND, withSpent } from './ladder.service';
 import { assertHead, fileAt, head, pushChanges, readChanges, resetTo } from './push.service';
 import { ANSWER_MAX, answerFooter, buildReplyPrompt, postInThread, type ReplyOptions, type ReplyOutcome } from './reply.service';
@@ -112,8 +112,8 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
 
   const commands = repoCommands(o.cwd);
   // A bare `/fix` applies the review's own suggested changes first, with no model; the model gets only the rest.
-  const applySuggestions = () => findings.filter((f) => o.bare && applySuggestion(o.cwd, base, f));
-  const applied = applySuggestions();
+  const suggest = () => (o.bare ? applySuggestions(o.cwd, base, findings) : { applied: [], unapplied: [] });
+  const { applied, unapplied } = suggest();
   const left = findings.filter((f) => !applied.includes(f));
   const prepared = applied.length ? readChanges(o.cwd, base) : [];
   // A fix of the review's findings may change only the files they name.
@@ -133,6 +133,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     const name = (f: string) => `\`${f.replace(/[`\r\n]/g, '')}\``;
     const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? '' : 's'}, with no model call.`];
     if (applied.length) lines.push(`**Suggestions applied:** ${applied.map((f) => `${name(`${f.file}:${f.line}`)} ${prose(f.title)}`).join('; ')}`);
+    if (unapplied.length) lines.push(`**Suggestions not applied:** ${unapplied.map((u) => `${name(`${u.finding.file}:${u.finding.line}`)} (${u.why})`).join('; ')}`);
     if (changes.length) {
       const paths = changes.map((c) => c.path);
       lines.push(`**Changed:** ${paths.map(name).join(', ')}`);
@@ -199,7 +200,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
       // Each rung starts again from the pull request's head, told why the one before didn't work.
       if (earlier) {
         resetTo(o.cwd, base);
-        applySuggestions();
+        suggest();
       }
       const retold = earlier
         ? `${request}\n\nAn attempt with a smaller model didn't work, and the checkout is back at the pull request's head. What went wrong, as data:\n\n${dataBlock('earlier-attempt', earlier)}`

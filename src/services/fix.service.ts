@@ -46,31 +46,61 @@ export function openFindings(ctx: Context, bot: string): OpenFinding[] {
   });
 }
 
+/** A suggestion that wasn't applied, and why; its finding goes to the model. */
+export type Unapplied = { finding: OpenFinding; why: string };
+
 /**
- * Put a finding's suggested change in the checkout, as GitHub's "Commit suggestion" would: its lines
- * replaced by the suggestion's. Only when the checkout is the commit the comment is on, and the file
- * is a regular file in the checkout, never through a link. Whether it was applied.
+ * Put the findings' suggested changes in the checkout, as GitHub's batch "Commit suggestions" would:
+ * each file read once, every suggestion placed by its line numbers in that original text, applied
+ * from the bottom up so one that changes the line count doesn't move the others, and written once.
+ * Only when the checkout is the commit the comment is on, and the file is a regular file in the
+ * checkout, never through a link. A suggestion out of the file's range, or overlapping another (both
+ * halves), isn't applied.
  */
-export function applySuggestion(cwd: string, head: string, f: OpenFinding): boolean {
-  const s = f.suggestion;
-  if (!s || s.sha !== head || !insideCheckout(f.file, cwd)) return false;
-  let fd;
-  try {
-    fd = openSync(join(cwd, f.file), constants.O_RDWR | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    if (!fstatSync(fd).isFile()) return false;
-    const lines = readFileSync(fd, 'utf8').split('\n');
-    if (s.start < 1 || s.end < s.start || s.end > lines.length) return false;
-    lines.splice(s.start - 1, s.end - s.start + 1, ...(s.text === '' ? [] : s.text.split('\n')));
-    // What was opened is what's written.
-    ftruncateSync(fd, 0);
-    writeSync(fd, lines.join('\n'), 0);
-    return true;
-  } catch (e) {
-    core.info(`Couldn't apply the suggestion for ${f.file}:${f.line}: ${(e as Error).message}`);
-    return false;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+export function applySuggestions(cwd: string, head: string, findings: OpenFinding[]): { applied: OpenFinding[]; unapplied: Unapplied[] } {
+  const applied: OpenFinding[] = [];
+  const unapplied: Unapplied[] = [];
+  const byFile = new Map<string, OpenFinding[]>();
+  for (const f of findings) {
+    if (!f.suggestion) continue;
+    if (f.suggestion.sha !== head || !insideCheckout(f.file, cwd)) unapplied.push({ finding: f, why: 'the pull request moved since the review' });
+    else byFile.set(f.file, [...(byFile.get(f.file) ?? []), f]);
   }
+  for (const [file, group] of byFile) {
+    let fd;
+    try {
+      fd = openSync(join(cwd, file), constants.O_RDWR | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      if (!fstatSync(fd).isFile()) throw new Error('not a regular file');
+      const lines = readFileSync(fd, 'utf8').split('\n');
+      const ok = group.filter((f) => {
+        const { start, end } = f.suggestion!;
+        const inRange = start >= 1 && end >= start && end <= lines.length;
+        if (!inRange) unapplied.push({ finding: f, why: "its lines aren't in the file" });
+        return inRange;
+      });
+      const overlaps = (a: OpenFinding, b: OpenFinding) => a !== b && a.suggestion!.start <= b.suggestion!.end && b.suggestion!.start <= a.suggestion!.end;
+      const clear = ok.filter((f) => {
+        const overlap = ok.some((g) => overlaps(f, g));
+        if (overlap) unapplied.push({ finding: f, why: 'it overlaps another suggestion' });
+        return !overlap;
+      });
+      if (!clear.length) continue;
+      for (const f of [...clear].sort((a, b) => b.suggestion!.start - a.suggestion!.start)) {
+        const { start, end, text } = f.suggestion!;
+        lines.splice(start - 1, end - start + 1, ...(text === '' ? [] : text.split('\n')));
+      }
+      // What was opened is what's written.
+      ftruncateSync(fd, 0);
+      writeSync(fd, lines.join('\n'), 0);
+      applied.push(...clear);
+    } catch (e) {
+      core.info(`Couldn't apply the suggestions for ${file}: ${(e as Error).message}`);
+      for (const f of group) if (!unapplied.some((u) => u.finding === f)) unapplied.push({ finding: f, why: "the file couldn't be changed" });
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  }
+  return { applied, unapplied };
 }
 
 /**
