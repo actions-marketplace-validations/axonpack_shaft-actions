@@ -23764,7 +23764,7 @@ var package_default = {
   license: "MIT",
   type: "module",
   scripts: {
-    build: "bun build src/main.ts --target node --outfile dist/index.js",
+    build: "bun build src/main.ts --target node --outfile dist/index.js && bun src/meta.ts",
     lint: "oxlint src",
     typecheck: "tsc --noEmit",
     test: "vitest run",

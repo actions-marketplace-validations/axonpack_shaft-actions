@@ -1,0 +1,157 @@
+{
+  "version": "1.7.1",
+  "inputs": {
+    "dry_run": {
+      "description": "Print the summary and inline comments to the job log instead of posting them.",
+      "required": false,
+      "default": "false"
+    }
+  },
+  "outputs": {
+    "verdict": {
+      "description": "blocking, needs-changes or looks-good."
+    },
+    "findings": {
+      "description": "The number of blocking and should-fix findings."
+    },
+    "summary_url": {
+      "description": "The link to the summary comment. Empty on a dry run."
+    }
+  },
+  "codes": {
+    "missing_id_token": {
+      "kind": "failure",
+      "message": "The workflow has no `permissions: id-token: write`, so the action can't sign in to the Axon Shaft API."
+    },
+    "api_unreachable": {
+      "kind": "failure",
+      "message": "The action couldn't reach the Axon Shaft API, or the API took over 30 seconds to answer."
+    },
+    "api_error": {
+      "kind": "failure",
+      "message": "The Axon Shaft API failed, or its answer couldn't be used: a setting the action can't run with, or an error page from something in front of the API."
+    },
+    "review_timed_out": {
+      "kind": "failure",
+      "message": "The review, reply or task ran past the time limit set on the dashboard."
+    },
+    "review_invalid_reply": {
+      "kind": "failure",
+      "message": "The model's reply didn't match the review, reply or task format twice, so nothing was posted."
+    },
+    "review_failed": {
+      "kind": "failure",
+      "message": "The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit."
+    },
+    "push_failed": {
+      "kind": "both",
+      "message": "A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out, the change touched `.github/`, or GitHub refused the push."
+    },
+    "nothing_to_fix": {
+      "kind": "notice",
+      "message": "A bare `/fix` had nothing to fix: the last review has no open findings, or there's no review yet."
+    },
+    "self_hosted_unsupported": {
+      "kind": "notice",
+      "message": "A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran."
+    },
+    "credentials_in_checkout": {
+      "kind": "notice",
+      "message": "A task's checkout kept a token in `.git/config`, so no session ran. Set `persist-credentials: false` on `actions/checkout`."
+    },
+    "sandbox_unavailable": {
+      "kind": "notice",
+      "message": "A task couldn't start its sandbox on this runner, so no session ran."
+    },
+    "fork_pull_request": {
+      "kind": "notice",
+      "message": "A fork's pull request ran the workflow on `pull_request`, where GitHub gives it no OIDC token. Run the workflow on `pull_request_target` to review it."
+    },
+    "not_a_pull_request": {
+      "kind": "notice",
+      "message": "`/review`, `/ask`, `/fix` and `/axonshaft` work on a pull request, and this comment was on an issue."
+    },
+    "no_write_access": {
+      "kind": "notice",
+      "message": "The commenter has no write access to the repo. Only people with write access can start a run."
+    }
+  },
+  "scripts": [
+    "secrets",
+    "pr-meta",
+    "env-vars",
+    "schema-pairs",
+    "osv",
+    "code-quality"
+  ],
+  "facts": [
+    "deps-diff",
+    "changeset",
+    "docs-touched",
+    "test-pairs",
+    "new-files",
+    "diff-stats",
+    "log-lines",
+    "flags",
+    "type-escapes",
+    "callers",
+    "unused",
+    "imports",
+    "exports-diff",
+    "routes",
+    "locale-keys",
+    "raw-values",
+    "native-changes"
+  ],
+  "guideFiles": [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    ".github/CONTRIBUTING.md",
+    "CONVENTIONS.md",
+    ".github/pull_request_template.md",
+    "README.md"
+  ],
+  "guideCap": {
+    "file": 8000,
+    "total": 30000
+  },
+  "lockfiles": [
+    {
+      "pattern": "^(?:package-lock|npm-shrinkwrap)\\.json$",
+      "ecosystem": "npm"
+    },
+    {
+      "pattern": "^bun\\.lock$",
+      "ecosystem": "npm"
+    },
+    {
+      "pattern": "^yarn\\.lock$",
+      "ecosystem": "npm"
+    },
+    {
+      "pattern": "^pnpm-lock\\.yaml$",
+      "ecosystem": "npm"
+    },
+    {
+      "pattern": "^requirements.*\\.txt$",
+      "ecosystem": "PyPI"
+    },
+    {
+      "pattern": "^poetry\\.lock$",
+      "ecosystem": "PyPI"
+    },
+    {
+      "pattern": "^uv\\.lock$",
+      "ecosystem": "PyPI"
+    },
+    {
+      "pattern": "^Cargo\\.lock$",
+      "ecosystem": "crates.io"
+    },
+    {
+      "pattern": "^go\\.sum$",
+      "ecosystem": "Go"
+    }
+  ]
+}

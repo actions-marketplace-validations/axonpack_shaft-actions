@@ -551,6 +551,8 @@ bun run test
 bun run build   # writes dist/index.js, which is committed
 ```
 
+The build also writes `dist/meta.json`, which is committed too: the action's version, inputs and outputs, the codes it reports with what each means, its pre-step script keys, the guide files it reads and their size caps, and the lockfiles it parses. The Axon Shaft docs are generated from a copy of it.
+
 The sandbox tests that start bubblewrap run only on Linux, and skip elsewhere with the reason. To run them from macOS, use a Linux container with bubblewrap and git, as a user other than root. It must be `--privileged`, because Docker's masked `/proc` stops bubblewrap from mounting its own:
 
 ```sh
