@@ -1,5 +1,20 @@
 # shaft
 
+## 1.8.0
+
+### Minor Changes
+
+- 001346b: - **Links to the docs**: each failure card links to its code's entry at `https://shaft.axonpack.dev/docs/reference/codes#<code>`, in the PR comment, the check run and the job summary. A notice with a code ends with the same link: `fork_pull_request`, `not_a_pull_request` and `no_write_access` from the action, the task codes such as `push_failed`, and whatever code the Axon Shaft API sends with its reason for not running. An older API sends no code, and its notices have no link.
+  - **Spending cap card**: a run stopped by the monthly spending cap shows the `spending_cap` card in the job summary, as well as the notice.
+- 0c417b5: - **Missing permissions**: when the AxonShaft app's installation hasn't approved a permission the run wants, the job log warns once for each, and the summary's footer table lists them under "Missing permissions", such as `` `code_quality` (read) ``.
+  - **Private draft advisories**: with the dashboard's "Private draft advisories" setting on, each blocking security finding (the first 3 a review) goes into a private draft security advisory, opened by the Axon Shaft API. On a public repo the PR thread, the check run and the run's page show "Security issue, reported privately" with the draft's link in place of the details. On a private repo the finding keeps its text and links to the draft. If a draft can't be opened, the finding posts as before, the job log warns and the summary says why. A dry run logs the drafts it would open.
+  - **Findings stay out of the job log**: a reply that doesn't match the format is logged by its field names, without its text, since the job log is public on a public repo.
+  - **GitHub Code Quality findings checklist**: the `code-quality` script asks the Axon Shaft API for GitHub Code Quality's open findings and keeps those on the lines the pull request changes, with no model call. `error` findings are should fix and the rest are nits. A pull request into a branch other than the default is skipped, since the findings are the default branch's, and so is a repo where the API can't read them, with the reason.
+
+### Patch Changes
+
+- e895a2f: - **Checked Claude Code download**: the action fetches the Claude Code binary from npm with `npm pack` and unpacks it only when the tarball's sha512 matches the one the release recorded from its `bun.lock`. A mismatch, or a runner platform with no recorded hash, fails the step with the new `claude_binary_unverified` code, and the binary never runs. Each run installs into an empty folder, so a binary already in the runner's temp folder is never reused.
+
 ## 1.7.1
 
 ### Patch Changes
