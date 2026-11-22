@@ -59150,14 +59150,27 @@ async function collectContext(octokit, owner, repo, number, bot) {
 
 // src/utils/checklist-plan.util.ts
 var NO_MATCH = "No matching files changed";
+var ONLY_EXCLUDED = "Only files it leaves out changed";
 var NOT_YET = "This version of the action doesn't have this checklist's script yet";
 var undot = (s) => s.replace(/(^|\/)\./g, "$1");
 var touches = (file, paths) => matches(file, paths) || matches(undot(file), paths.map(undot));
-var planChecklists = (checklists, files, scripts = []) => checklists.map((c) => !files.some((f) => touches(f.filename, c.paths)) ? { ...c, skip: NO_MATCH } : c.mode === "script" && !scripts.includes(c.prestep ?? "") ? { ...c, skip: NOT_YET } : { ...c });
+var planChecklists = (checklists, files, scripts = []) => checklists.map((c) => {
+  const covered = files.filter((f) => touches(f.filename, c.paths)).map((f) => f.filename);
+  const leftOut = c.exclude?.length ? covered.filter((f) => touches(f, c.exclude)) : [];
+  if (!covered.length)
+    return { ...c, skip: NO_MATCH };
+  if (leftOut.length === covered.length)
+    return { ...c, skip: ONLY_EXCLUDED };
+  if (c.mode === "script" && !scripts.includes(c.prestep ?? ""))
+    return { ...c, skip: NOT_YET };
+  return leftOut.length ? { ...c, leftOut } : { ...c };
+});
+var stepOf = (c) => c.leftOut?.length ? `${c.prompt}
+   - Leave these changed files out of this check: ${c.leftOut.map((f) => `\`${f}\``).join(", ")}.` : c.prompt;
 var STEPS_AT_END = 'They are at the end of this prompt, under "The steps for this run".';
 var stepsBlock = (before, run, after) => `## The steps for this run
 
-${[...before, ...run.map((c) => c.prompt), ...after].map((s, i) => `${i + 1}. ${s}`).join(`
+${[...before, ...run.map(stepOf), ...after].map((s, i) => `${i + 1}. ${s}`).join(`
 `)}
 `;
 
