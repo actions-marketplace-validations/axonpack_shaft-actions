@@ -272,16 +272,16 @@ With the model and effort on `auto`, a run climbs a ladder of models, every one 
 | Any other review | `sonnet`, `opus` |
 | A review that touches a `focus` path or a sensitive one: auth, crypto, payments, billing, workflows, migrations, or dependencies in `package.json` | `opus` |
 
-- An attempt doesn't work when its session fails, runs out of turns, or gives a reply that doesn't match the format. For a task it also doesn't work when a check that ran fails, when it changes files a bare `/fix` may not change, or when a `/fix` changes nothing. On a lower rung a reply that doesn't match the format moves up a model instead of asking the same one again.
+- An attempt doesn't work when its session fails, runs out of turns, or gives a reply that doesn't match the format. For a task it also doesn't work when a check that ran fails, when it changes files a bare `/fix` may not change, or when a `/fix` changes nothing. A review also doesn't work when it's partial: more than a third of the checklists it should run come back not checked, the model says it only partly reviewed the diff, or its confidence is under 60%. The last rung's partial review is posted as it is. On a lower rung a reply that doesn't match the format moves up a model instead of asking the same one again.
 - Each attempt is a new session, and a task's starts from a clean checkout. It gets the earlier attempt's failure, marked as data, and not its transcript.
 - Where the ladder starts:
   - `/ask`, and `/fix` or `/axonshaft` with words: Haiku rates the request first, at low effort, from the comment, the open findings' titles and the pull request's size, with no diff and no file. `simple` starts at `haiku`, `normal` at `sonnet` and `hard` at `opus`, never below the job's first rung. When the rating fails, the run starts on the first rung.
   - A bare `/fix`: at `sonnet` when a finding is blocking or from the security check, or there are more than 5, else at `haiku`. No model rates it.
-  - A review: from the table.
+  - A review: from the table, and never below what its size asks for. Over 2,000 changed lines (after `skip`) it starts at `opus`, and over 400 never below `sonnet`.
 - Haiku is skipped when the prompt is over about 100,000 tokens.
 - A model or effort set on the dashboard runs as set: no rating and no ladder. A deep review runs `opus` at `high` effort, with its subagents on `sonnet` when the model is `auto` and on the set model when it isn't.
 - If the Claude plan can't use a model, the run falls back to the next smaller one, and the footer's table has a Fallback row.
-- The footer shows the model, the effort and the tokens the run used, the tokens of every attempt and the rating included. Its table adds why `auto` picked the ladder, the rating and its reason ("Triage"), and each model that didn't work and why ("Tried first"). The dashboard gets the model that ran, with the ones tried before it in parentheses.
+- The footer shows the model, the effort and the tokens the run used, the tokens of every attempt and the rating included. Its table adds why `auto` picked the ladder, the rating and its reason ("Triage"), and each model that didn't work and why ("Tried first"), such as "partial review: 5 of 7 checklists not checked". The dashboard gets the model that ran, with the ones tried before it in parentheses.
 
 ### The turn limit by size
 

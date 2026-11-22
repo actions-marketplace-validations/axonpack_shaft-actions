@@ -80,7 +80,7 @@ test("with auto, each job climbs its own ladder, every rung at low effort", () =
   expect(rungs({ mode: 'task', files: [file('src/a.ts')] })).toEqual(['haiku low', 'sonnet low', 'opus low']);
   expect(rungs({ mode: 'reply' })).toEqual(['haiku low', 'sonnet low', 'opus low']);
   expect(rungs({ mode: 'review', files: [file('README.md')] })).toEqual(['haiku low', 'sonnet low']);
-  expect(rungs({ mode: 'review', files: [file('src/a.ts', 5000)] })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'review', files: [file('src/a.ts', 500)] })).toEqual(['sonnet low', 'opus low']);
   expect(rungs({ mode: 'review', files: [file('.github/workflows/ci.yml')] })).toEqual(['opus low']);
 });
 
@@ -108,4 +108,15 @@ test('a bare /fix of a few findings gets fewer turns', () => {
   expect(pick({ mode: 'task', findings: 6 }).maxTurns).toBe(20);
   expect(pick({ mode: 'task', findings: 9 }).maxTurns).toBe(30);
   expect(pick({ mode: 'task', findings: 3, maxTurns: 40 }).maxTurns).toBe(40);
+});
+
+test('a big review starts higher: over 2,000 changed lines at Opus, over 400 never below Sonnet, after skip', () => {
+  expect(rungs({ mode: 'review', files: [file('src/a.ts', 2001)] })).toEqual(['opus low']);
+  expect(rungs({ mode: 'review', files: [file('src/a.ts', 2000)] })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'review', files: [file('README.md', 401)] })).toEqual(['sonnet low']);
+  expect(rungs({ mode: 'review', files: [file('README.md', 3000)] })).toEqual(['opus low']);
+  expect(rungs({ mode: 'review', files: [file('src/a.ts', 3000)], skip: ['src/**'] })).toEqual(['sonnet low', 'opus low']);
+  expect(rungs({ mode: 'review', files: [file('src/a.ts', 1500), file('src/b.ts', 1500)] })[0]).toBe('opus low');
+  // Only reviews: a big task still climbs from Haiku.
+  expect(rungs({ mode: 'task', files: [file('src/a.ts', 5000)] })[0]).toBe('haiku low');
 });

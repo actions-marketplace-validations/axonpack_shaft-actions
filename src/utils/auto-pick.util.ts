@@ -1,5 +1,5 @@
 import { matchesGlob } from 'node:path';
-import { HAIKU_MAX_PROMPT_TOKENS, LADDER_EFFORT, LADDERS } from '../consts/ladder.const';
+import { HAIKU_MAX_PROMPT_TOKENS, LADDER_EFFORT, LADDERS, REVIEW_SIZE_FLOOR } from '../consts/ladder.const';
 
 export type ChangedFile = { filename: string; additions: number; deletions: number; patch?: string };
 
@@ -116,7 +116,8 @@ export function pick(input: PickInput): Choice {
 /**
  * The choices to try, in order. With the model and effort both `auto`, a job climbs its ladder from
  * `LADDERS`, each rung at low effort, without Haiku when the prompt is too big for it. A model or
- * effort the user set, and a deep review, run `pick`'s one choice. `checked`: a task's checks can run
+ * effort the user set, and a deep review, run `pick`'s one choice. A big review starts no lower than
+ * `REVIEW_SIZE_FLOOR` says. `checked`: a task's checks can run
  * on this runner. `promptChars`: the prompt's length, at about 4 characters a token. `start`: the
  * model triage picked, which drops the rungs below it, never the last one.
  */
@@ -139,7 +140,13 @@ export function ladder(input: PickInput & { checked?: boolean; promptChars?: num
   // ponytail: about 4 characters a token; count tokens if the cut-off ever matters to the dollar
   const big = (input.promptChars ?? 0) / 4 > HAIKU_MAX_PROMPT_TOKENS;
   const allowed: string[] = LADDERS[key].filter((m) => !(big && m === 'haiku'));
-  const models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ''), allowed.length - 1)));
+  let models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ''), allowed.length - 1)));
+  const floor = input.mode === 'review' ? REVIEW_SIZE_FLOOR.find(([above]) => lines > above)?.[1] : undefined;
+  if (floor) {
+    const order = ['haiku', 'sonnet', 'opus'];
+    const kept = models.filter((m) => order.indexOf(m) >= order.indexOf(floor));
+    models = kept.length ? kept : [floor];
+  }
   const reason = `${why}; auto tries ${models.join(', then ')} at ${LADDER_EFFORT} effort, moving up only when an attempt doesn't work`;
   return models.map((model) => ({ ...first, model, effort: LADDER_EFFORT, reason }));
 }

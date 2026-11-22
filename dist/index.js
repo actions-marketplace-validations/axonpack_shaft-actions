@@ -58867,6 +58867,12 @@ var LADDERS = {
   reviewHot: ["opus"]
 };
 var LADDER_EFFORT = "low";
+var REVIEW_SIZE_FLOOR = [
+  [2000, "opus"],
+  [400, "sonnet"]
+];
+var PARTIAL_SHARE = 1 / 3;
+var REVIEW_MIN_CONFIDENCE = 60;
 var TRIAGE_START = { simple: "haiku", normal: "sonnet", hard: "opus" };
 var FIX_HAIKU_MAX = 5;
 var HAIKU_MAX_PROMPT_TOKENS = 1e5;
@@ -58948,7 +58954,13 @@ function ladder(input) {
   const [key, why] = input.mode === "task" ? input.checked === false ? ["taskUnchecked", "task, and the repo's checks can't run on this runner"] : ["task", "task"] : input.mode === "reply" ? ["reply", "question"] : hot ? ["reviewHot", `${lines} lines, touches ${hot.filename}`] : files.length > 0 && files.every(isLight) ? ["reviewLight", `${lines} lines, docs and config only`] : ["review", `${lines} lines`];
   const big = (input.promptChars ?? 0) / 4 > HAIKU_MAX_PROMPT_TOKENS;
   const allowed = LADDERS[key].filter((m) => !(big && m === "haiku"));
-  const models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ""), allowed.length - 1)));
+  let models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ""), allowed.length - 1)));
+  const floor = input.mode === "review" ? REVIEW_SIZE_FLOOR.find(([above]) => lines > above)?.[1] : undefined;
+  if (floor) {
+    const order = ["haiku", "sonnet", "opus"];
+    const kept = models.filter((m) => order.indexOf(m) >= order.indexOf(floor));
+    models = kept.length ? kept : [floor];
+  }
   const reason = `${why}; auto tries ${models.join(", then ")} at ${LADDER_EFFORT} effort, moving up only when an attempt doesn't work`;
   return models.map((model) => ({ ...first, model, effort: LADDER_EFFORT, reason }));
 }
@@ -60854,6 +60866,16 @@ async function climb(rungs, attempt) {
   }
   throw new Error("climb needs at least one rung");
 }
+var PARTLY = /\b(?:partly|partially|not fully) reviewed\b|\bpartial review\b/i;
+function partialReview(reply, expected) {
+  const missed = expected.filter((k) => !reply.checked.includes(k)).length;
+  if (expected.length && missed > expected.length * PARTIAL_SHARE)
+    return `partial review: ${missed} of ${expected.length} checklists not checked`;
+  if (PARTLY.test(`${reply.headline} ${reply.not_checked}`))
+    return "partial review: the model says it only partly reviewed the diff";
+  if (reply.confidence < REVIEW_MIN_CONFIDENCE)
+    return `partial review: confidence ${Math.round(reply.confidence)}%`;
+}
 var NO_SPEND = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
 function withSpent(r, spent) {
   const tokens = { ...r.tokens };
@@ -61080,7 +61102,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
       const climbed = await step("Review", () => climb(rungs, async (c, last) => {
         const model = /^[a-z]+$/.test(c.model) ? c.model[0].toUpperCase() + c.model.slice(1) : c.model;
         await progress("Review", `Reviewing with ${model}, effort ${c.effort}`);
-        return runAgent(prompt, {
+        const out = await runAgent(prompt, {
           claude: o.claude,
           model: c.model,
           effort: c.effort,
@@ -61093,6 +61115,10 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
           env: o.env,
           retry: last
         }, modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT);
+        const partial = last ? undefined : partialReview(out.reply, modelled?.map((c) => c.key) ?? []);
+        if (partial)
+          throw Object.assign(new NotWorked(partial), { spent: out });
+        return out;
       }));
       ({ choice, tried } = climbed);
       result = withSpent(climbed.out, climbed.spent);
