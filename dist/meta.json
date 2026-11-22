@@ -1,5 +1,5 @@
 {
-  "version": "1.10.0",
+  "version": "1.10.1",
   "inputs": {
     "dry_run": {
       "description": "Print the summary and inline comments to the job log instead of posting them.",
