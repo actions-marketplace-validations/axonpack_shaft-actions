@@ -110,7 +110,12 @@
     "routes",
     "locale-keys",
     "raw-values",
-    "native-changes"
+    "native-changes",
+    "actionlint",
+    "hadolint",
+    "migration-lint",
+    "tflint",
+    "contract-diff"
   ],
   "guideFiles": [
     "CLAUDE.md",

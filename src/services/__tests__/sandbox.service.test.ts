@@ -29,6 +29,14 @@ test('the sandbox has its own PID namespace and /proc, dies with its parent, and
   expect(sandboxPrefix(cwd)).toMatch(/^'(\/[^']+\/)?env' '-u' 'ANTHROPIC_API_KEY' '-u' 'CLAUDE_CODE_OAUTH_TOKEN' '(\/[^']+\/)?bwrap' '--die-with-parent' .* '--'$/);
 });
 
+test("a linter's sandbox has no network, reads its work folder and its own folder, and writes nothing", () => {
+  const tool = join(process.env.RUNNER_TEMP!, 'shaft-tools', 'hadolint-2.15.1');
+  const args = sandboxArgs(cwd, { tool }).join(' ');
+  expect(args).toContain(`--tmpfs ${process.env.RUNNER_TEMP} `);
+  expect(args).toMatch(new RegExp(`--unshare-net --ro-bind ${tool} ${tool} --ro-bind ${cwd} ${cwd} --chdir ${cwd}`));
+  expect(args).not.toContain(`--bind ${cwd}`.replace('--bind', ' --bind'));
+});
+
 test('a PATH folder that is home itself, or holds the runner temp folder, is never bound back over the empty home', () => {
   const saved = { PATH: process.env.PATH, RUNNER_TEMP: process.env.RUNNER_TEMP };
   process.env.RUNNER_TEMP = join(home, 'work', '_temp');
