@@ -37,8 +37,11 @@ export function which(name: string): string | undefined {
  * runner's temp folder replaced by empty ones, and the checkout the only folder it can write. A
  * tool folder under home on the PATH stays, read-only, unless it is home or holds the temp folder.
  * The network stays, for the install.
+ *
+ * `readOnly` is for a pinned linter (`tool.service.ts`): no network, `cwd` read-only too, and the
+ * linter's own folder, which the empty temp folder hides, bound read-only.
  */
-export function sandboxArgs(cwd: string): string[] {
+export function sandboxArgs(cwd: string, readOnly?: { tool: string }): string[] {
   const home = process.env.HOME || homedir();
   const temp = process.env.RUNNER_TEMP;
   const hidden = temp && !under(temp, home) ? [home, temp] : [home];
@@ -68,7 +71,7 @@ export function sandboxArgs(cwd: string): string[] {
     '/run',
     ...hidden.flatMap((d) => ['--tmpfs', d]),
     ...tools.flatMap((p) => ['--ro-bind', p, p]),
-    '--bind',
+    ...(readOnly ? ['--unshare-net', '--ro-bind', readOnly.tool, readOnly.tool, '--ro-bind'] : ['--bind']),
     cwd,
     cwd,
     '--chdir',
@@ -82,9 +85,9 @@ export function sandboxArgs(cwd: string): string[] {
   ];
 }
 
-/** Run `file` in the sandbox at `cwd`. Throws as `execFileSync` does. */
-export const inSandbox = (cwd: string, file: string, args: string[], o: ExecFileSyncOptions & { encoding: 'utf8' }): string =>
-  execFileSync(bin.bwrap, [...sandboxArgs(cwd), '--', file, ...args], { ...o, cwd });
+/** Run `file` in the sandbox at `cwd`, read-only with no network when `readOnly` is given. Throws as `execFileSync` does. */
+export const inSandbox = (cwd: string, file: string, args: string[], o: ExecFileSyncOptions & { encoding: 'utf8' }, readOnly?: { tool: string }): string =>
+  execFileSync(bin.bwrap, [...sandboxArgs(cwd, readOnly), '--', file, ...args], { ...o, cwd });
 
 /**
  * What the model's Bash command is prefixed with, every word quoted for the shell. bubblewrap starts

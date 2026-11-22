@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import { PARTIAL_SHARE, REVIEW_MIN_CONFIDENCE } from '../consts/ladder.const';
 import type { Choice } from '../utils/auto-pick.util';
 import { ShaftFailure } from '../utils/failure.util';
 
@@ -59,6 +60,20 @@ export async function climb<T>(
     }
   }
   throw new Error('climb needs at least one rung');
+}
+
+const PARTLY = /\b(?:partly|partially|not fully) reviewed\b|\bpartial review\b/i;
+
+/**
+ * Why a review's reply is partial, for the footer, or undefined when it isn't: more than a third of
+ * the checklists it should run (`expected`) not checked, the model saying it only partly reviewed the
+ * diff, or its confidence under 60%.
+ */
+export function partialReview(reply: { checked: string[]; not_checked: string; headline: string; confidence: number }, expected: string[]): string | undefined {
+  const missed = expected.filter((k) => !reply.checked.includes(k)).length;
+  if (expected.length && missed > expected.length * PARTIAL_SHARE) return `partial review: ${missed} of ${expected.length} checklists not checked`;
+  if (PARTLY.test(`${reply.headline} ${reply.not_checked}`)) return 'partial review: the model says it only partly reviewed the diff';
+  if (reply.confidence < REVIEW_MIN_CONFIDENCE) return `partial review: confidence ${Math.round(reply.confidence)}%`;
 }
 
 /** Nothing used, for a run with no model call. */

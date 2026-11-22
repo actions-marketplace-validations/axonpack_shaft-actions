@@ -18,6 +18,23 @@ export const LADDERS = {
 
 export const LADDER_EFFORT = 'low';
 
+/**
+ * A review of more changed lines (after `skip`) than a row's starts at that row's model or above, on
+ * any review ladder. The first row that matches wins.
+ */
+export const REVIEW_SIZE_FLOOR: [above: number, model: 'opus' | 'sonnet'][] = [
+  [2000, 'opus'],
+  [400, 'sonnet'],
+];
+
+/**
+ * A review attempt below the last rung is partial, and moves up a rung, when more than this share of
+ * the checklists it should run come back not checked, when the model says it only partly reviewed the
+ * diff, or when its confidence is under `REVIEW_MIN_CONFIDENCE`.
+ */
+export const PARTIAL_SHARE = 1 / 3;
+export const REVIEW_MIN_CONFIDENCE = 60;
+
 /** The rung a triage level starts at, never below the job's ladder: a `/ask` or `/fix <words>` asks Haiku for the level first. */
 export const TRIAGE_START = { simple: 'haiku', normal: 'sonnet', hard: 'opus' } as const;
 export type TriageLevel = keyof typeof TRIAGE_START;

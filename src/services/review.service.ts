@@ -25,7 +25,7 @@ import {
   type ReviewStep,
 } from './check-runs.service';
 import { trackComment } from './finalize.service';
-import { climb, modelLabel, type Tried, withSpent } from './ladder.service';
+import { climb, modelLabel, NotWorked, partialReview, type Tried, withSpent } from './ladder.service';
 import { step } from './step.service';
 import {
   type CheckItem,
@@ -345,7 +345,7 @@ async function postReview(
           // An alias reads as a name (`sonnet` as Sonnet); a full model ID stays as written.
           const model = /^[a-z]+$/.test(c.model) ? c.model[0]!.toUpperCase() + c.model.slice(1) : c.model;
           await progress('Review', `Reviewing with ${model}, effort ${c.effort}`);
-          return runAgent(
+          const out = await runAgent(
             prompt,
             {
               claude: o.claude,
@@ -363,6 +363,10 @@ async function postReview(
             },
             modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT,
           );
+          // A partial review below the last rung moves up one, counting what it used; the last rung's stands.
+          const partial = last ? undefined : partialReview(out.reply, modelled?.map((c) => c.key) ?? []);
+          if (partial) throw Object.assign(new NotWorked(partial), { spent: out });
+          return out;
         }),
       );
       ({ choice, tried } = climbed);

@@ -24,6 +24,8 @@ const runs: { prompt: string; model: string; effort: string; passes?: unknown[];
 let usage: string[] = [];
 /** When set, the review fails with it. */
 let agentError: Error | undefined;
+/** What each attempt's reply changes, in order; by default it checked every checklist it ran, at 90% confidence. */
+let replies: object[] = [];
 vi.doMock('../agent.service', async (actual) => ({
   ...(await actual<typeof import('../agent.service')>()),
   // `steps` is what the reply's schema limits `step` to: unset for 1.5's fixed steps.
@@ -32,7 +34,7 @@ vi.doMock('../agent.service', async (actual) => ({
     const steps = format.schema === (await actual<typeof import('../agent.service')>()).SCHEMA ? undefined : (step.enum ?? []);
     runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes, steps });
     if (agentError) throw agentError;
-    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: ['correctness', 'tests'], not_checked: 'n' };
+    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: steps ?? ['correctness', 'tests'], not_checked: 'n', ...replies.shift() };
     return { reply: review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
   },
 }));
@@ -155,6 +157,7 @@ beforeEach(() => {
   usage = [];
   agentError = undefined;
   found = [];
+  replies = [];
 });
 
 test('buildPrompt fills every slot with the run\'s data and changes nothing else', () => {
@@ -503,13 +506,13 @@ test('with checklists, only those whose paths match run: their steps after the d
     'Would post the Axon Shaft / correctness check: failure',
     'Would post the Axon Shaft / migrations check: skipped',
     'Would post the Axon Shaft / secrets check: skipped',
-    'Would post the Axon Shaft / own-1 check: skipped',
+    'Would post the Axon Shaft / own-1 check: success',
   ]);
   expect(outcome.output.checks).toEqual([
     { key: 'correctness', label: 'The correctness list', state: 'failed' },
     { key: 'migrations', label: 'The migrations list', state: 'not_checked', reason: 'No matching files changed' },
     { key: 'secrets', label: 'The secrets list', state: 'not_checked', reason: "This version of the action doesn't have this checklist's script yet" },
-    { key: 'own-1', label: 'The own-1 list', state: 'not_checked' },
+    { key: 'own-1', label: 'The own-1 list', state: 'passed' },
   ]);
   expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'] }]);
   expect(summary).toContain('<kbd>❌ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
@@ -589,8 +592,9 @@ test("a script+model checklist runs in the model, with its pre-step's facts afte
 });
 
 test('a script that throws leaves its checklist not checked, with the reason, never passed', async () => {
-  // osv.dev is down, and the fake GitHub client has no advisory API.
-  vi.stubGlobal('fetch', async () => new Response('', { status: 503 }));
+  // The API is older, so osv.dev is asked straight, and it's down; the fake GitHub client has no advisory API.
+  process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
+  vi.stubGlobal('fetch', async (url: string) => new Response('', { status: url.endsWith('/v1/packages/check') ? 404 : 503 }));
   const vulns = { ...checklist('vulnerabilities', ['**/*.lock'], 'script'), prestep: 'osv' };
   const { outcome } = await review([file('bun.lock')], { checklists: [vulns], open: OPEN });
   vi.unstubAllGlobals();
@@ -651,4 +655,29 @@ describe('private draft advisories', () => {
     await review([file('src/a.ts')], { dryRun: false });
     expect(fake.inline[0]).toContain('The session token goes in the query string.');
   });
+});
+
+test("a partial review below the last rung moves up one, says why in the footer and counts both rungs' tokens; the last rung's partial result stands", async () => {
+  replies = [{ checked: [], not_checked: 'The diff was too large.' }];
+  const { summary, outcome } = await review([file('src/a.ts'), file('README.md')], { checklists: CHECKLISTS, open: OPEN });
+  expect(runs.map((r) => r.model)).toEqual(['sonnet', 'opus']);
+  expect(summary).toContain('sonnet, low effort: partial review: 2 of 2 checklists not checked');
+  expect(outcome.tokens.input).toBe(240000);
+  expect(outcome.output.checks?.find((c) => c.key === 'correctness')?.state).toBe('passed');
+
+  // The model saying so, or a low confidence, does the same. Opus is the last rung, so its 50% is kept.
+  [runs.length, logs.length] = [0, 0];
+  replies = [{ not_checked: 'The diff was only partly reviewed.' }, { confidence: 50 }];
+  const low = await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN });
+  expect(runs.map((r) => r.model)).toEqual(['sonnet', 'opus']);
+  expect(low.summary).toContain('partial review: the model says it only partly reviewed the diff');
+  expect(low.outcome.output.confidence).toBe(50);
+  [runs.length, logs.length] = [0, 0];
+  replies = [{ confidence: 55 }];
+  expect((await review([file('src/a.ts')])).summary).toContain('sonnet, low effort: partial review: confidence 55%');
+  // One checklist of three not checked is a third, not more, so the review stands.
+  runs.length = 0;
+  replies = [{ checked: ['correctness', 'own-1'] }];
+  await review([file('src/a.ts'), file('README.md')], { checklists: [...CHECKLISTS, checklist('docs', ['**/*.md'])], open: OPEN });
+  expect(runs.map((r) => r.model)).toEqual(['sonnet']);
 });

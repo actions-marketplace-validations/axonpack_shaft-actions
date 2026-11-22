@@ -58283,7 +58283,7 @@ function which2(name) {
     } catch {}
   }
 }
-function sandboxArgs(cwd) {
+function sandboxArgs(cwd, readOnly) {
   const home = process.env.HOME || homedir2();
   const temp = process.env.RUNNER_TEMP;
   const hidden = temp && !under2(temp, home) ? [home, temp] : [home];
@@ -58310,7 +58310,7 @@ function sandboxArgs(cwd) {
     "/run",
     ...hidden.flatMap((d) => ["--tmpfs", d]),
     ...tools.flatMap((p) => ["--ro-bind", p, p]),
-    "--bind",
+    ...readOnly ? ["--unshare-net", "--ro-bind", readOnly.tool, readOnly.tool, "--ro-bind"] : ["--bind"],
     cwd,
     cwd,
     "--chdir",
@@ -58323,7 +58323,7 @@ function sandboxArgs(cwd) {
     "/tmp"
   ];
 }
-var inSandbox = (cwd, file, args, o) => execFileSync(bin.bwrap, [...sandboxArgs(cwd), "--", file, ...args], { ...o, cwd });
+var inSandbox = (cwd, file, args, o, readOnly) => execFileSync(bin.bwrap, [...sandboxArgs(cwd, readOnly), "--", file, ...args], { ...o, cwd });
 var sandboxPrefix = (cwd) => [bin.env, "-u", "ANTHROPIC_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", bin.bwrap, ...sandboxArgs(cwd), "--"].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(" ");
 function endSandboxes() {
   try {
@@ -58688,6 +58688,14 @@ async function answer(res) {
 async function callApi(path, body) {
   return answer(await post(path, body));
 }
+async function callNewApi(path, body) {
+  const res = await post(path, body);
+  if ((res.status === 403 || res.status === 404) && typeof (await res.clone().json().catch(() => {
+    return;
+  }))?.error !== "string")
+    return;
+  return answer(res);
+}
 async function fetchGrant(request) {
   const grant = await answer(await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }));
   if (grant?.run === false) {
@@ -58859,6 +58867,12 @@ var LADDERS = {
   reviewHot: ["opus"]
 };
 var LADDER_EFFORT = "low";
+var REVIEW_SIZE_FLOOR = [
+  [2000, "opus"],
+  [400, "sonnet"]
+];
+var PARTIAL_SHARE = 1 / 3;
+var REVIEW_MIN_CONFIDENCE = 60;
 var TRIAGE_START = { simple: "haiku", normal: "sonnet", hard: "opus" };
 var FIX_HAIKU_MAX = 5;
 var HAIKU_MAX_PROMPT_TOKENS = 1e5;
@@ -58940,7 +58954,13 @@ function ladder(input) {
   const [key, why] = input.mode === "task" ? input.checked === false ? ["taskUnchecked", "task, and the repo's checks can't run on this runner"] : ["task", "task"] : input.mode === "reply" ? ["reply", "question"] : hot ? ["reviewHot", `${lines} lines, touches ${hot.filename}`] : files.length > 0 && files.every(isLight) ? ["reviewLight", `${lines} lines, docs and config only`] : ["review", `${lines} lines`];
   const big = (input.promptChars ?? 0) / 4 > HAIKU_MAX_PROMPT_TOKENS;
   const allowed = LADDERS[key].filter((m) => !(big && m === "haiku"));
-  const models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ""), allowed.length - 1)));
+  let models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ""), allowed.length - 1)));
+  const floor = input.mode === "review" ? REVIEW_SIZE_FLOOR.find(([above]) => lines > above)?.[1] : undefined;
+  if (floor) {
+    const order = ["haiku", "sonnet", "opus"];
+    const kept = models.filter((m) => order.indexOf(m) >= order.indexOf(floor));
+    models = kept.length ? kept : [floor];
+  }
   const reason = `${why}; auto tries ${models.join(", then ")} at ${LADDER_EFFORT} effort, moving up only when an attempt doesn't work`;
   return models.map((model) => ({ ...first, model, effort: LADDER_EFFORT, reason }));
 }
@@ -59408,12 +59428,30 @@ var envVars = ({ files, checkout }) => {
   }));
 };
 
+// src/services/prestep/packages-check.service.ts
+var packageKey = (p) => `${p.ecosystem}:${p.name}@${p.version}`;
+var BATCH = 1000;
+async function checkPackages(pins, check) {
+  const packages = [...new Map(pins.map((p) => [packageKey(p), { ecosystem: p.ecosystem, name: p.name, version: p.version }])).values()];
+  const found = new Map;
+  for (let i = 0;i < packages.length; i += BATCH) {
+    const answer = await callNewApi("/v1/packages/check", { packages: packages.slice(i, i + BATCH), check: [check] });
+    if (answer === undefined)
+      return;
+    if (!Array.isArray(answer?.[check]))
+      throw new Error("The Axon Shaft API sent an incomplete answer");
+    for (const v of answer[check])
+      found.set(packageKey(v), v);
+  }
+  return found;
+}
+
 // src/services/prestep/osv.service.ts
 var OSV = "https://api.osv.dev/v1";
 var USER_AGENT = "axon-shaft-action";
 var CALL_MS = 1e4;
 var TOTAL_MS = 60000;
-var BATCH = 1000;
+var BATCH2 = 1000;
 var GITHUB_MAX = 50;
 var GITHUB_ECOSYSTEM = { npm: "npm", PyPI: "pip", Go: "go", "crates.io": "rust" };
 var RANK = { critical: 4, high: 3, moderate: 2, medium: 2, low: 1 };
@@ -59442,8 +59480,8 @@ function fromOsvRecord(v, name) {
 }
 async function fromOsv(pins, signal) {
   const ids = [];
-  for (let i = 0;i < pins.length; i += BATCH) {
-    const queries = pins.slice(i, i + BATCH).map((p) => ({ package: { name: p.name, ecosystem: p.ecosystem }, version: p.version }));
+  for (let i = 0;i < pins.length; i += BATCH2) {
+    const queries = pins.slice(i, i + BATCH2).map((p) => ({ package: { name: p.name, ecosystem: p.ecosystem }, version: p.version }));
     const { results } = await getJson(`${OSV}/querybatch`, signal(), { queries });
     for (const r of results)
       ids.push((r.vulns ?? []).map((v) => v.id));
@@ -59473,6 +59511,21 @@ function fromGitHub(octokit, pins, signal) {
     }));
   }));
 }
+async function direct(octokit, pins) {
+  const total = AbortSignal.timeout(TOTAL_MS);
+  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
+  try {
+    return await fromOsv(pins, signal);
+  } catch (e) {
+    const why = e.message;
+    warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
+    try {
+      return await fromGitHub(octokit, pins.slice(0, GITHUB_MAX), signal);
+    } catch (e2) {
+      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${e2.message}), so no package was checked.`);
+    }
+  }
+}
 function finding(p, found) {
   const byId = new Map;
   for (const a of found) {
@@ -59499,24 +59552,48 @@ var osv = async (input) => {
   const pins = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) => changes.flatMap((c) => c.to.filter((p) => p.public && !p.name.startsWith("@")).map((p) => ({ ...p, file, ecosystem }))));
   if (!pins.length)
     return [];
-  const total = AbortSignal.timeout(TOTAL_MS);
-  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
-  let found;
-  try {
-    found = await fromOsv(pins, signal);
-  } catch (e) {
-    const why = e.message;
-    warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
-    try {
-      found = await fromGitHub(input.octokit, pins.slice(0, GITHUB_MAX), signal);
-    } catch (e2) {
-      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${e2.message}), so no package was checked.`);
-    }
-    if (pins.length > GITHUB_MAX && !found.flat().length) {
-      throw new Error(`osv.dev failed (${why}), and GitHub's advisory database checked only ${GITHUB_MAX} of the ${pins.length} versions, finding nothing.`);
-    }
+  const api = await checkPackages(pins, "vulnerabilities");
+  const found = api ? pins.map((p) => api.get(packageKey(p))?.advisories) : await direct(input.octokit, pins);
+  const checked = pins.filter((_, i) => found[i]).length;
+  if (checked < pins.length && !found.some((a) => a?.length)) {
+    throw new Error(`${api ? "The Axon Shaft API" : "GitHub's advisory database"} checked only ${checked} of the ${pins.length} versions, finding nothing.`);
   }
   return pins.flatMap((p, i) => found[i]?.length ? [finding(p, found[i])] : []);
+};
+
+// src/services/prestep/licences.service.ts
+var DECLARED = ["npm", "PyPI", "crates.io"];
+var licences = async (input) => {
+  const pins = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) => DECLARED.includes(ecosystem) ? changes.flatMap((c) => c.kind === "added" ? c.to.filter((p) => p.public && !p.name.startsWith("@")).map((p) => ({ ...p, file, ecosystem })) : []) : []);
+  if (!pins.length)
+    return [];
+  const api = await checkPackages(pins, "licences");
+  if (!api)
+    throw new Error("The Axon Shaft API doesn't look up licences yet, so no package was checked.");
+  const found = pins.flatMap((p) => {
+    const l = api.get(packageKey(p));
+    if (!l || !l.denied && l.licence !== "unknown")
+      return [];
+    return [
+      l.denied ? {
+        severity: "blocking",
+        file: p.file,
+        line: p.line,
+        title: `${p.name} ${p.version} is licensed ${l.licence}`,
+        body: `\`${p.name}\` ${p.version} declares the licence \`${l.licence}\`, which is strong copyleft and on the deny list. Pick another package, or say in the pull request why it's fine here.`
+      } : {
+        severity: "should-fix",
+        file: p.file,
+        line: p.line,
+        title: `${p.name} ${p.version} declares no licence`,
+        body: `\`${p.name}\` ${p.version} declares no licence on ${p.ecosystem}, so it isn't clear the project may use it. Check the package's own licence file, or pick another package.`
+      }
+    ];
+  });
+  const checked = pins.filter((p) => api.has(packageKey(p))).length;
+  if (checked < pins.length && !found.length)
+    throw new Error(`The Axon Shaft API checked only ${checked} of the ${pins.length} licences, finding nothing.`);
+  return found;
 };
 
 // src/services/prestep/pr-meta.service.ts
@@ -60335,8 +60412,290 @@ var nativeChanges = async ({ files, checkout, base }) => {
   ], "");
 };
 
+// src/services/tool.service.ts
+import { execFileSync as execFileSync4 } from "node:child_process";
+import { createHash as createHash3 } from "node:crypto";
+import { chmodSync, mkdirSync as mkdirSync3, mkdtempSync, rmSync as rmSync3, writeFileSync } from "node:fs";
+import { tmpdir as tmpdir2 } from "node:os";
+import { dirname as dirname8, isAbsolute as isAbsolute4, join as join9, normalize } from "node:path";
+
+// src/consts/tools.const.ts
+var GH2 = "https://github.com";
+var TOOLS = {
+  actionlint: {
+    version: "1.7.12",
+    archive: "tar.gz",
+    file: "actionlint",
+    assets: {
+      x64: { url: `${GH2}/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz`, sha256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" },
+      arm64: { url: `${GH2}/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz`, sha256: "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6" }
+    }
+  },
+  hadolint: {
+    version: "2.15.1",
+    archive: "bin",
+    file: "hadolint",
+    assets: {
+      x64: { url: `${GH2}/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64`, sha256: "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507" },
+      arm64: { url: `${GH2}/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-arm64`, sha256: "f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d" }
+    }
+  },
+  squawk: {
+    version: "2.71.0",
+    archive: "bin",
+    file: "squawk",
+    assets: {
+      x64: { url: `${GH2}/sbdchd/squawk/releases/download/v2.71.0/squawk-linux-x64`, sha256: "ab978cb412e5e5eb2f06aaa4c5035a1567f6eba53274d7d1e068f73169b88bbd" },
+      arm64: { url: `${GH2}/sbdchd/squawk/releases/download/v2.71.0/squawk-linux-arm64`, sha256: "cc6b563f205e9d93472232ca21113c736d6e1f45a7ce700170b7e17bcecc9b7f" }
+    }
+  },
+  tflint: {
+    version: "0.66.0",
+    archive: "zip",
+    file: "tflint",
+    assets: {
+      x64: { url: `${GH2}/terraform-linters/tflint/releases/download/v0.66.0/tflint_linux_amd64.zip`, sha256: "22be11cadc25cd02401e94c0ccc91aa63467debb8485c2a755d98f4c0a9d1e2e" },
+      arm64: { url: `${GH2}/terraform-linters/tflint/releases/download/v0.66.0/tflint_linux_arm64.zip`, sha256: "1105a0a5ddee7cdac7957a3475571a946b839192ea1bc0c722c6c4686001067e" }
+    }
+  },
+  oasdiff: {
+    version: "1.37.0",
+    archive: "tar.gz",
+    file: "oasdiff",
+    assets: {
+      x64: { url: `${GH2}/oasdiff/oasdiff/releases/download/v1.37.0/oasdiff_1.37.0_linux_amd64.tar.gz`, sha256: "eac87307d31d08c36800c58a409c247f1c5db37fbb72e2544402f22a87cbca3c" },
+      arm64: { url: `${GH2}/oasdiff/oasdiff/releases/download/v1.37.0/oasdiff_1.37.0_linux_arm64.tar.gz`, sha256: "072a425ac647ecf2808721e91293fd644cee7935d2b32e650b3158539b2c7898" }
+    }
+  },
+  buf: {
+    version: "1.75.0",
+    archive: "bin",
+    file: "buf",
+    assets: {
+      x64: { url: `${GH2}/bufbuild/buf/releases/download/v1.75.0/buf-Linux-x86_64`, sha256: "fad1e38d6909bbb583a4da81d8c02a01046e2cd663bde7e337dd24277393764b" },
+      arm64: { url: `${GH2}/bufbuild/buf/releases/download/v1.75.0/buf-Linux-aarch64`, sha256: "00eb190aa82df17f393e05b04889cc60a0b13b3259d336e21a87d5f23ab4fd26" }
+    }
+  }
+};
+var TOOL_MAX_BYTES = 150000000;
+var TOOL_DOWNLOAD_MS = 120000;
+var TOOL_RUN_MS = 60000;
+var TOOL_MAX_OUTPUT = 5000000;
+
+// src/services/tool.service.ts
+var root = () => join9(process.env.RUNNER_TEMP ?? tmpdir2(), "shaft-tools");
+async function download(url) {
+  const res = await fetch(url, { headers: { "user-agent": "axon-shaft-action" }, signal: AbortSignal.timeout(TOOL_DOWNLOAD_MS) });
+  if (!res.ok || !res.body)
+    throw new Error(`the download answered ${res.status}`);
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of res.body) {
+    size += chunk.length;
+    if (size > TOOL_MAX_BYTES)
+      throw new Error("the download is bigger than any of these tools");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+async function install(name) {
+  const tool = TOOLS[name];
+  const arch = process.arch;
+  if (process.platform !== "linux" || !tool.assets[arch])
+    throw new Error(`${name} runs only on Linux runners on x64 or arm64, and this one is ${process.platform} ${process.arch}`);
+  const { url, sha256 } = tool.assets[arch];
+  info(`Installing ${name} ${tool.version}`);
+  let bytes;
+  try {
+    bytes = await download(url);
+  } catch (e) {
+    throw new Error(`${name} ${tool.version} couldn't be downloaded (${e.message})`);
+  }
+  if (createHash3("sha256").update(bytes).digest("hex") !== sha256) {
+    throw new Error(`the ${name} ${tool.version} download doesn't match the sha256 this release records, so it wasn't run`);
+  }
+  const dir = join9(root(), `${name}-${tool.version}`);
+  rmSync3(dir, { recursive: true, force: true });
+  mkdirSync3(dir, { recursive: true });
+  const program = join9(dir, tool.file);
+  if (tool.archive === "bin")
+    writeFileSync(program, bytes);
+  else {
+    const archive = join9(dir, `download.${tool.archive}`);
+    writeFileSync(archive, bytes);
+    execFileSync4(tool.archive === "zip" ? "unzip" : "tar", tool.archive === "zip" ? ["-o", "-q", archive, tool.file, "-d", dir] : ["-xzf", archive, "-C", dir, tool.file], {
+      stdio: "pipe"
+    });
+    rmSync3(archive);
+  }
+  chmodSync(program, 493);
+  return program;
+}
+var installed = new Map;
+var sandbox = null;
+async function runTool(name, args, files, env = {}) {
+  if (!installed.has(name))
+    installed.set(name, install(name));
+  const program = await installed.get(name).catch((e) => {
+    installed.delete(name);
+    throw e;
+  });
+  mkdirSync3(root(), { recursive: true });
+  if (sandbox === null)
+    sandbox = prepareSandbox(root());
+  if (sandbox)
+    throw new Error(`the sandbox the linters run in didn't start: ${sandbox}`);
+  const work = mkdtempSync(join9(root(), "work-"));
+  try {
+    for (const [path, text] of Object.entries(files)) {
+      if (isAbsolute4(path) || normalize(path).startsWith(".."))
+        continue;
+      mkdirSync3(dirname8(join9(work, path)), { recursive: true });
+      writeFileSync(join9(work, path), text);
+    }
+    try {
+      const out = inSandbox(work, program, args, { encoding: "utf8", env: { ...runnerEnv(), ...env }, stdio: ["ignore", "pipe", "pipe"], timeout: TOOL_RUN_MS, maxBuffer: TOOL_MAX_OUTPUT }, { tool: dirname8(program) });
+      return { out, err: "", status: 0 };
+    } catch (e) {
+      const { status, stdout, stderr, signal } = e;
+      if (status === null || signal)
+        throw new Error(`${name} was stopped (${signal ?? "no exit code"}), after ${TOOL_RUN_MS / 1000} seconds or ${TOOL_MAX_OUTPUT / 1e6} MB of output at most`);
+      return { out: stdout ?? "", err: stderr ?? "", status };
+    }
+  } finally {
+    rmSync3(work, { recursive: true, force: true });
+  }
+}
+var changedFiles = (files, test) => files.filter((f) => f.status !== "removed" && test.test(f.filename)).map((f) => f.filename);
+var readAll = (checkout, paths) => Object.fromEntries(paths.flatMap((p) => checkout.read(p) === undefined ? [] : [[p, checkout.read(p)]]));
+function report(name, run) {
+  try {
+    return JSON.parse(run.out.trim() || "null");
+  } catch {
+    throw new Error(`${name} gave no report: ${(run.err.trim() || run.out.trim()).slice(0, 300)}`);
+  }
+}
+
+// src/services/prestep/actionlint.service.ts
+var WORKFLOW = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+var ACTION = /(?:^|\/)action\.ya?ml$/;
+var USES = /^\s*(?:-\s*)?uses:\s*['"]?([^'"\s#]+)/;
+var actionlint = async ({ files, checkout }) => {
+  const lines = [];
+  for (const f of files.filter((f) => WORKFLOW.test(f.filename) || ACTION.test(f.filename))) {
+    for (const [n, text] of diffLines(f.patch, true)) {
+      const uses = USES.exec(text)?.[1];
+      if (uses && !/^(?:\.\/|docker:\/\/|actions\/)/.test(uses) && !/@[0-9a-f]{40}$/.test(uses))
+        lines.push(`${f.filename}:${n} uses ${uses}, not pinned to a commit SHA`);
+      if (/^\s*permissions:\s*write-all\b/.test(text))
+        lines.push(`${f.filename}:${n} permissions: write-all`);
+    }
+  }
+  const workflows = changedFiles(files, WORKFLOW);
+  if (workflows.length) {
+    try {
+      const run = await runTool("actionlint", ["-format", "{{json .}}", "-shellcheck=", "-pyflakes=", "-no-color", ...workflows], readAll(checkout, [...workflows, ".github/actionlint.yaml", ".github/actionlint.yml"]));
+      for (const i of report("actionlint", run) ?? [])
+        lines.push(`${i.filepath}:${i.line} actionlint ${i.kind}: ${i.message}`);
+    } catch (e) {
+      lines.push(`actionlint didn't run: ${e.message}.`);
+    }
+  }
+  return factsText(lines, "actionlint found nothing in the changed workflows, and every action the change adds is pinned.");
+};
+
+// src/services/prestep/hadolint.service.ts
+var DOCKERFILE = /(?:^|\/)Dockerfile[^/]*$/;
+var hadolint = async ({ files, checkout }) => {
+  const dockerfiles = changedFiles(files, DOCKERFILE);
+  if (!dockerfiles.length)
+    return "No Dockerfile changed, so hadolint had nothing to read. Compose files are for the model alone.";
+  const run = await runTool("hadolint", ["--format", "json", "--no-color", ...dockerfiles], readAll(checkout, [...dockerfiles, ".hadolint.yaml", ".hadolint.yml"]));
+  const issues = report("hadolint", run) ?? [];
+  return factsText(issues.map((i) => `${i.file}:${i.line} ${i.code} (${i.level}): ${i.message}`), "hadolint found nothing in the changed Dockerfiles.");
+};
+
+// src/services/prestep/migration-lint.service.ts
+var migrationLint = async ({ files, checkout }) => {
+  const sql = changedFiles(files, /\.sql$/i);
+  if (!sql.length)
+    return "No SQL file changed, so squawk had nothing to read.";
+  const run = await runTool("squawk", ["--reporter", "json", ...sql], readAll(checkout, [...sql, ".squawk.toml"]));
+  const issues = report("squawk", run) ?? [];
+  return factsText(issues.map((i) => `${i.file}:${i.line + 1} ${i.rule_name} (${i.level.toLowerCase()}): ${i.message}${i.help ? ` ${i.help}.` : ""}`), "squawk found nothing in the changed SQL files.");
+};
+
+// src/services/prestep/tflint.service.ts
+import { dirname as dirname9 } from "node:path";
+var tflint = async ({ files, checkout }) => {
+  const changed = changedFiles(files, /\.(?:tf|tfvars)$/);
+  if (!changed.length)
+    return "No Terraform file changed, so tflint had nothing to read. Kubernetes, Helm and CloudFormation files are for the model alone.";
+  const dirs = [...new Set(changed.map((f) => dirname9(f)))];
+  const paths = checkout.find(dirs.map((d) => d === "." ? "*.{tf,tfvars}" : `${d}/*.{tf,tfvars}`));
+  const run = await runTool("tflint", ["--recursive", "--format", "json", "--call-module-type=none"], readAll(checkout, paths), { TFLINT_PLUGIN_DIR: "/nonexistent" });
+  const { issues = [], errors = [] } = report("tflint", run) ?? {};
+  return factsText([...issues.map((i) => `${i.range.filename}:${i.range.start.line} ${i.rule.name} (${i.rule.severity}): ${i.message}`), ...errors.map((e) => `tflint error: ${e.message}`)], "tflint found nothing in the changed Terraform folders.");
+};
+
+// src/services/prestep/contract-diff.service.ts
+var OPENAPI = /(?:^|\/)openapi\.[^/]+$/;
+var MAX_OPENAPI = 10;
+var MAX_PROTO = 1000;
+async function openapi({ files, checkout, base }) {
+  const lines = [];
+  for (const f of changedFiles(files, OPENAPI).slice(0, MAX_OPENAPI)) {
+    const [was, now] = [await base(f), checkout.read(f)];
+    if (was === undefined || now === undefined) {
+      lines.push(`${f}: ${was === undefined ? "new in this pull request, so there is nothing to compare" : "couldn't be read"}.`);
+      continue;
+    }
+    try {
+      const run = await runTool("oasdiff", ["breaking", `base/${f}`, `head/${f}`, "--format", "json"], { [`base/${f}`]: was, [`head/${f}`]: now });
+      const changes = report("oasdiff", run) ?? [];
+      lines.push(...changes.map((c) => `${f} ${[c.operation, c.path].filter(Boolean).join(" ")}: ${c.text} (${c.id}, ${c.level >= 3 ? "breaking" : "warning"})`));
+      if (!changes.length)
+        lines.push(`${f}: oasdiff found no breaking change.`);
+    } catch (e) {
+      lines.push(`${f}: oasdiff didn't run: ${e.message}.`);
+    }
+  }
+  return lines;
+}
+async function proto({ files, checkout, base }) {
+  const changed = files.filter((f) => f.filename.endsWith(".proto"));
+  if (!changed.length)
+    return [];
+  const head = readAll(checkout, checkout.find(["**/*.proto", "**/buf.yaml", "**/buf.work.yaml", "**/buf.lock"]).slice(0, MAX_PROTO));
+  const was = { ...head };
+  for (const f of changed) {
+    const text = f.status === "added" ? undefined : await base(f.filename);
+    if (text === undefined)
+      delete was[f.filename];
+    else
+      was[f.filename] = text;
+  }
+  const tree = Object.fromEntries([...Object.entries(head).map(([p, t]) => [`head/${p}`, t]), ...Object.entries(was).map(([p, t]) => [`base/${p}`, t])]);
+  try {
+    const run = await runTool("buf", ["breaking", "head", "--against", "base", "--error-format", "json"], tree);
+    const found = run.out.split(`
+`).filter((l) => l.startsWith("{")).map((l) => JSON.parse(l));
+    if (run.status && !found.length)
+      throw new Error(run.err.trim().slice(0, 300));
+    return found.length ? found.map((b) => `${b.path.replace(/^head\//, "")}:${b.start_line} ${b.type}: ${b.message}`) : ["buf found no breaking change in the .proto files."];
+  } catch (e) {
+    return [`buf didn't run: ${e.message}.`];
+  }
+}
+var contractDiff = async (input) => {
+  const lines = [...await openapi(input), ...await proto(input)];
+  if (changedFiles(input.files, /\.graphql$/).length)
+    lines.push("GraphQL schemas changed: no tool compares them here, so read their diff.");
+  return factsText(lines, "No OpenAPI or .proto file changed.");
+};
+
 // src/services/prestep/prestep.service.ts
-var SCRIPTS = { secrets: secrets2, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, "code-quality": codeQuality };
+var SCRIPTS = { secrets: secrets2, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, licences, "code-quality": codeQuality };
 var FACTS = {
   "deps-diff": depsDiffFacts,
   changeset,
@@ -60354,7 +60713,12 @@ var FACTS = {
   routes,
   "locale-keys": localeKeys,
   "raw-values": rawValues,
-  "native-changes": nativeChanges
+  "native-changes": nativeChanges,
+  actionlint,
+  hadolint,
+  "migration-lint": migrationLint,
+  tflint,
+  "contract-diff": contractDiff
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
@@ -60501,6 +60865,16 @@ async function climb(rungs, attempt) {
     }
   }
   throw new Error("climb needs at least one rung");
+}
+var PARTLY = /\b(?:partly|partially|not fully) reviewed\b|\bpartial review\b/i;
+function partialReview(reply, expected) {
+  const missed = expected.filter((k) => !reply.checked.includes(k)).length;
+  if (expected.length && missed > expected.length * PARTIAL_SHARE)
+    return `partial review: ${missed} of ${expected.length} checklists not checked`;
+  if (PARTLY.test(`${reply.headline} ${reply.not_checked}`))
+    return "partial review: the model says it only partly reviewed the diff";
+  if (reply.confidence < REVIEW_MIN_CONFIDENCE)
+    return `partial review: confidence ${Math.round(reply.confidence)}%`;
 }
 var NO_SPEND = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
 function withSpent(r, spent) {
@@ -60728,7 +61102,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
       const climbed = await step("Review", () => climb(rungs, async (c, last) => {
         const model = /^[a-z]+$/.test(c.model) ? c.model[0].toUpperCase() + c.model.slice(1) : c.model;
         await progress("Review", `Reviewing with ${model}, effort ${c.effort}`);
-        return runAgent(prompt, {
+        const out = await runAgent(prompt, {
           claude: o.claude,
           model: c.model,
           effort: c.effort,
@@ -60741,6 +61115,10 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
           env: o.env,
           retry: last
         }, modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT);
+        const partial = last ? undefined : partialReview(out.reply, modelled?.map((c) => c.key) ?? []);
+        if (partial)
+          throw Object.assign(new NotWorked(partial), { spent: out });
+        return out;
       }));
       ({ choice, tried } = climbed);
       result = withSpent(climbed.out, climbed.spent);
@@ -61029,7 +61407,7 @@ ${REPLY_MARKER}`);
 }
 
 // src/utils/push.util.ts
-import { basename as basename6, dirname as dirname8 } from "node:path";
+import { basename as basename6, dirname as dirname10 } from "node:path";
 
 // src/consts/build-inputs.const.ts
 var BUILD_INPUTS = [
@@ -61105,7 +61483,7 @@ function unaskedBuildInputs(changes, before, request) {
     const deps = MANIFEST.depFields.some((k) => differ(was[k], now[k]));
     return { path: c.path, scripts, deps, scriptsAsked: asked(c.path, MANIFEST.scripts), depsAsked: asked(c.path, MANIFEST.deps) };
   });
-  const followsAskedDeps = (lock) => manifests.some((m) => m.deps && m.depsAsked && `${dirname8(m.path)}/`.startsWith(dirname8(lock) === "." ? "" : `${dirname8(lock)}/`));
+  const followsAskedDeps = (lock) => manifests.some((m) => m.deps && m.depsAsked && `${dirname10(m.path)}/`.startsWith(dirname10(lock) === "." ? "" : `${dirname10(lock)}/`));
   return changes.flatMap((c) => {
     const m = manifests.find((x) => x.path === c.path);
     if (m)
@@ -61117,7 +61495,7 @@ function unaskedBuildInputs(changes, before, request) {
 
 // src/services/commands.service.ts
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
-import { join as join9 } from "node:path";
+import { join as join10 } from "node:path";
 var CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
 var LOCKS = [
   ["bun.lock", "bun", "bun install --frozen-lockfile"],
@@ -61126,12 +61504,12 @@ var LOCKS = [
   ["yarn.lock", "yarn", "yarn install --frozen-lockfile"],
   ["package-lock.json", "npm", "npm ci"]
 ];
-var read = (cwd, file) => existsSync5(join9(cwd, file)) ? readFileSync5(join9(cwd, file), "utf8") : undefined;
+var read = (cwd, file) => existsSync5(join10(cwd, file)) ? readFileSync5(join10(cwd, file), "utf8") : undefined;
 function repoCommands(cwd) {
   const out = [];
   const pkg = read(cwd, "package.json");
   if (pkg) {
-    const [, pm, install] = LOCKS.find(([lock]) => existsSync5(join9(cwd, lock))) ?? ["", "npm", "npm install"];
+    const [, pm, install] = LOCKS.find(([lock]) => existsSync5(join10(cwd, lock))) ?? ["", "npm", "npm install"];
     let scripts = {};
     try {
       scripts = JSON.parse(pkg).scripts ?? {};
@@ -61182,7 +61560,7 @@ function skippedNote(checks) {
 
 // src/services/fix.service.ts
 import { closeSync as closeSync2, constants as constants5, fstatSync, ftruncateSync, openSync as openSync2, readFileSync as readFileSync6, writeSync } from "node:fs";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 var MARKER = /\n*<!-- shaft:finding (\w+) -->\s*$/;
 function openFindings(ctx, bot) {
   const findings = parseState(ctx.summary?.body)?.findings ?? [];
@@ -61221,7 +61599,7 @@ function applySuggestions(cwd, head, findings) {
   for (const [file, group] of byFile) {
     let fd;
     try {
-      fd = openSync2(join10(cwd, file), constants5.O_RDWR | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
+      fd = openSync2(join11(cwd, file), constants5.O_RDWR | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
       if (!fstatSync(fd).isFile())
         throw new Error("not a regular file");
       const lines = readFileSync6(fd, "utf8").split(`
@@ -61289,16 +61667,16 @@ function fixStart(findings) {
 
 // src/services/push.service.ts
 import { closeSync as closeSync3, constants as constants6, fstatSync as fstatSync2, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2 } from "node:fs";
-import { dirname as dirname9, join as join11 } from "node:path";
+import { dirname as dirname11, join as join12 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
   assertHead(cwd, base);
   const paths = git(cwd, ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"]).split("\x00").filter(Boolean).map((l) => l.slice(3));
-  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname9(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
+  const why = commitDenial(paths.map((path) => ({ path }))) ?? paths.map((p) => insideCheckout(dirname11(p), cwd) ? undefined : `${p} isn't inside the checkout, so nothing was pushed.`).find(Boolean);
   if (why)
     throw new ShaftFailure("push_failed", why);
   const changes = paths.map((path) => {
-    const file = join11(cwd, path);
+    const file = join12(cwd, path);
     let fd;
     try {
       fd = openSync3(file, constants6.O_RDONLY | constants6.O_NOFOLLOW | constants6.O_NONBLOCK);

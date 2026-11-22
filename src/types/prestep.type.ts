@@ -22,7 +22,7 @@ export type ScriptFinding = Omit<Finding, 'step'>;
 /** A pre-step script: reads files only, never runs the repo's code and never calls the network. */
 export type Script = (input: ScriptInput) => ScriptFinding[];
 
-/** A pre-step script that calls the network (`osv`), for public packages only. */
+/** A pre-step script that calls the network (`osv`, `licences`, `code-quality`): the Axon Shaft API, and for `osv` on an older API osv.dev, for public packages only. */
 export type NetworkScript = (input: ScriptInput) => Promise<ScriptFinding[]>;
 
 /** A pre-step that hands the model facts, as text, for a `script+model` checklist. */
