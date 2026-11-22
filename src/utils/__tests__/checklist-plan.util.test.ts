@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import type { Checklist } from '../../services/api.service';
-import { NO_MATCH, NOT_YET, planChecklists, stepsBlock } from '../checklist-plan.util';
+import { NO_MATCH, NOT_YET, ONLY_EXCLUDED, planChecklists, stepsBlock } from '../checklist-plan.util';
 
 const checklist = (key: string, paths: string[], mode: Checklist['mode'] = 'model'): Checklist => ({ key, name: key, mode, model: 'main', paths, prestep: null, prompt: `**${key}.** Look.` });
 
@@ -35,4 +35,19 @@ test('the steps are numbered from 1: before, each checklist that runs, then afte
   expect(stepsBlock(['**Read.** The PR.'], [checklist('correctness', [])], ['**Verify.** Each finding.'])).toBe(
     '## The steps for this run\n\n1. **Read.** The PR.\n2. **correctness.** Look.\n3. **Verify.** Each finding.\n',
   );
+});
+
+test("a checklist doesn't run when every file it covers matches its exclude, and is told to leave out the ones that do", () => {
+  const c = { ...checklist('@acme/query-limits', ['src/**/*.ts']), exclude: ['**/*.test.ts', 'src/generated/**'] };
+  const files = (...names: string[]) => names.map((filename) => ({ filename }));
+  expect(planChecklists([c], files('src/a.test.ts', 'src/generated/db.ts', 'README.md'))[0]!.skip).toBe(ONLY_EXCLUDED);
+  const [runs] = planChecklists([c], files('src/a.ts', 'src/a.test.ts', 'README.md'));
+  expect(runs).toMatchObject({ leftOut: ['src/a.test.ts'] });
+  expect(runs!.skip).toBeUndefined();
+  expect(stepsBlock([], [runs!], [])).toBe(
+    '## The steps for this run\n\n1. **@acme/query-limits.** Look.\n   - Leave these changed files out of this check: `src/a.test.ts`.\n',
+  );
+  // Nothing excluded changed: its step is as sent, and an empty exclude changes nothing.
+  expect(planChecklists([c], files('src/a.ts'))[0]).not.toHaveProperty('leftOut');
+  expect(planChecklists([{ ...c, exclude: [] }], files('src/a.test.ts'))[0]!.skip).toBeUndefined();
 });

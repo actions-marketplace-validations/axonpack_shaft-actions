@@ -385,7 +385,7 @@ The action also posts one check run per review check on the reviewed commit, nam
 - The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run. Until an admin approves Checks (write) on the installation, the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.
 
-When the job has [checklists](#checklists), each checklist gets its own check run instead, named after its key in the job's order, such as `Axon Shaft / access-control`, or `Axon Shaft / own-1` for the project's own checklists. A checklist that didn't run is `skipped`, and its title says why: "No matching files changed", or, for a script checklist, that this version of the action doesn't have its script yet.
+When the job has [checklists](#checklists), each checklist gets its own check run instead, named after its key in the job's order, such as `Axon Shaft / access-control`, or `Axon Shaft / own-1` for the project's own checklists. A checklist that didn't run is `skipped`, and its title says why: "No matching files changed", "Only files it leaves out changed", or, for a script checklist, that this version of the action doesn't have its script yet.
 
 ### Inline comments
 
@@ -528,6 +528,7 @@ The guides set the standards the review checks against, such as needing a test o
 An Axon Shaft API that sends the job's checklists also sends the prompt with its steps left open. The action then decides which checklists run on this pull request:
 
 - A checklist runs when a changed file, after `skip`, matches one of its `paths`. `**` matches any change, including files under folders such as `.github/`.
+- A checklist the API sends with `exclude` globs, as a community checklist can, never looks at the changed files that match them. When every file it would cover matches one, it's skipped. Otherwise its step tells the model to leave those files out.
 - A script checklist runs a script built into the action in place of the model. The script reads the diff, the pull request's description, the guides and files in the checkout. It never runs the repo's code, and only `osv`, `licences` and `code-quality` call the network. Its findings are posted like the model's, inline and in the summary, and set its check run. A blocking or should-fix finding from a script raises the review's verdict. When only script checklists run, no model is called. The action has these scripts so far:
   - `secrets` (Secrets): keys and tokens in a known format on added lines, such as AWS, GitHub, Anthropic, OpenAI, Stripe, Slack, Google and npm keys, and private keys. A finding names the kind of key and the line, never the value. Blocking.
   - `pr-meta` (Pull request basics): each section of `.github/pull_request_template.md` that the description leaves out or leaves empty, no linked issue when the template asks for one, and a title that isn't a Conventional Commit when a guide asks for them. Nits.

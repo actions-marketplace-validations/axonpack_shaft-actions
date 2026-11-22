@@ -22,7 +22,8 @@ export type Pass = { name: string; description: string; prompt: string };
 
 /**
  * One checklist the job keeps on, in the job's order, then the project's own (`own-<n>`): it runs when
- * a changed file matches its `paths`, and `prompt` is its step.
+ * a changed file matches its `paths` and not its `exclude`, and `prompt` is its step. A community one
+ * (`@publisher/slug`) also has its `publisher` and `version`, which the action doesn't need.
  */
 export type Checklist = {
   key: string;
@@ -30,6 +31,8 @@ export type Checklist = {
   mode: 'script' | 'script+model' | 'model';
   model: 'main' | 'light';
   paths: string[];
+  /** Globs on the changed files it never looks at, from an API that sends them. */
+  exclude?: string[];
   prestep: string | null;
   prompt: string;
 };
