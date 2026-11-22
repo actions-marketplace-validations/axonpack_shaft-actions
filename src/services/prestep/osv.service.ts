@@ -3,6 +3,7 @@ import type { Octokit } from '../../types/octokit.type';
 import type { NetworkScript } from '../../types/prestep.type';
 import type { Ecosystem, Pin } from '../../utils/lockfile.util';
 import { depsDiff } from './deps-diff.service';
+import { checkPackages, packageKey } from './packages-check.service';
 
 const OSV = 'https://api.osv.dev/v1';
 /** Names the client and nothing about the repo or who runs it. */
@@ -87,6 +88,23 @@ function fromGitHub(octokit: Octokit, pins: Checked[], signal: Signal): Promise<
   );
 }
 
+/** Today's lookup without the API, for an API older than `POST /v1/packages/check`: osv.dev, then GitHub's advisory database. */
+async function direct(octokit: Octokit, pins: Checked[]): Promise<Advisory[][]> {
+  const total = AbortSignal.timeout(TOTAL_MS);
+  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
+  try {
+    return await fromOsv(pins, signal);
+  } catch (e) {
+    const why = (e as Error).message;
+    core.warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
+    try {
+      return await fromGitHub(octokit, pins.slice(0, GITHUB_MAX), signal);
+    } catch (e2) {
+      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${(e2 as Error).message}), so no package was checked.`);
+    }
+  }
+}
+
 /**
  * A package version's advisories as one finding: blocking when any is high or critical, and linked to
  * the most severe one's page. Records that alias each other are merged.
@@ -114,33 +132,24 @@ function finding(p: Checked, found: Advisory[]) {
 }
 
 /**
- * Advisories for each version a lockfile adds or changes, from osv.dev, or from GitHub's advisory
- * database when osv.dev fails. Only public packages are sent: never a scoped (`@x/y`) package, a
- * private registry's, git or URL package, or a version the pull request leaves as it was. When
- * neither source answers, this throws, so the checklist is skipped and never passes.
+ * Advisories for each version a lockfile adds or changes, from the Axon Shaft API, or straight from
+ * osv.dev and GitHub's advisory database on an older API. Only public packages are sent: never a
+ * scoped (`@x/y`) package, a private registry's, git or URL package, or a version the pull request
+ * leaves as it was. When no source answers, or some versions went unchecked and nothing was found,
+ * this throws, so the checklist is skipped and never passes.
  */
 export const osv: NetworkScript = async (input) => {
   const pins: Checked[] = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) =>
     changes.flatMap((c) => c.to.filter((p) => p.public && !p.name.startsWith('@')).map((p) => ({ ...p, file, ecosystem }))),
   );
   if (!pins.length) return [];
-  const total = AbortSignal.timeout(TOTAL_MS);
-  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
-  let found: Advisory[][];
-  try {
-    found = await fromOsv(pins, signal);
-  } catch (e) {
-    const why = (e as Error).message;
-    core.warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
-    try {
-      found = await fromGitHub(input.octokit, pins.slice(0, GITHUB_MAX), signal);
-    } catch (e2) {
-      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${(e2 as Error).message}), so no package was checked.`);
-    }
-    // Unchecked versions with nothing found would read as a pass.
-    if (pins.length > GITHUB_MAX && !found.flat().length) {
-      throw new Error(`osv.dev failed (${why}), and GitHub's advisory database checked only ${GITHUB_MAX} of the ${pins.length} versions, finding nothing.`);
-    }
+  // The API's answer, which asks osv.dev and GitHub itself and keeps answers a day; an older API's is undefined.
+  const api = await checkPackages<{ ecosystem: string; name: string; version: string; advisories: Advisory[] }>(pins, 'vulnerabilities');
+  const found: (Advisory[] | undefined)[] = api ? pins.map((p) => api.get(packageKey(p))?.advisories) : await direct(input.octokit, pins);
+  // Unchecked versions with nothing found would read as a pass.
+  const checked = pins.filter((_, i) => found[i]).length;
+  if (checked < pins.length && !found.some((a) => a?.length)) {
+    throw new Error(`${api ? 'The Axon Shaft API' : "GitHub's advisory database"} checked only ${checked} of the ${pins.length} versions, finding nothing.`);
   }
   return pins.flatMap((p, i) => (found[i]?.length ? [finding(p, found[i])] : []));
 };

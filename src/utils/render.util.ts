@@ -80,6 +80,16 @@ export function diffLines(patch: string | undefined, addedOnly = false): Map<num
   return lines;
 }
 
+/** Each left-side line number a patch's hunks cover, mapped to that hunk's first right-side line. */
+export function oldLines(patch: string | undefined): Map<number, number> {
+  const lines = new Map<number, number>();
+  for (const m of patch?.matchAll(/^@@ -(\d+)(?:,(\d+))? \+(\d+)/gm) ?? []) {
+    const start = Number(m[1]);
+    for (let n = start; n < start + Number(m[2] ?? 1); n++) lines.set(n, Number(m[3]));
+  }
+  return lines;
+}
+
 /** A patch's removed lines, without their `-`. */
 export const removedLines = (patch: string | undefined) =>
   (patch ?? '')
@@ -95,12 +105,19 @@ export function fingerprint(f: Pick<Finding, 'file' | 'title'>, code = ''): stri
     .slice(0, 6);
 }
 
+/** How far a finding's line may move between reviews and still be the earlier finding. */
+export const LINE_DRIFT = 2;
+
 /**
  * Decide where each finding goes. A blocking or should-fix finding whose lines are all in the
- * diff goes inline; anything else goes in the summary. Nits follow the `nits` input.
+ * diff goes inline; anything else goes in the summary. Nits follow the `nits` input. A finding with
+ * the same file and title as one of the last review's (`prior`), a line or two away, keeps that
+ * one's fingerprint, so a push that moves it doesn't post it again.
  */
-export function place(findings: Finding[], files: { filename: string; patch?: string }[], nits: string): Placed[] {
+export function place(findings: Finding[], files: { filename: string; patch?: string }[], nits: string, prior: StateFinding[] = []): Placed[] {
   const byFile = new Map(files.map((f) => [f.filename, diffLines(f.patch)]));
+  const left = [...prior];
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
   return findings
     .filter((f) => nits !== 'off' || f.severity !== 'nit')
     .map((f) => {
@@ -108,7 +125,13 @@ export function place(findings: Finding[], files: { filename: string; patch?: st
       const end = Math.max(f.end_line ?? f.line, f.line);
       let inDiff = !!lines;
       for (let n = f.line; inDiff && n <= end; n++) inDiff = lines!.has(n);
-      return { ...f, fp: fingerprint(f, lines?.get(f.line)), inline: inDiff && (f.severity !== 'nit' || nits === 'inline') };
+      const fp = fingerprint(f, lines?.get(f.line));
+      // Each earlier finding is matched once, by the first finding to claim it: the same fingerprint, else the nearest line.
+      const match =
+        left.find((p) => p.fp === fp) ??
+        left.filter((p) => p.file === f.file && same(p.title, f.title) && Math.abs(p.line - f.line) <= LINE_DRIFT).sort((a, b) => Math.abs(a.line - f.line) - Math.abs(b.line - f.line))[0];
+      if (match) left.splice(left.indexOf(match), 1);
+      return { ...f, fp: match?.fp ?? fp, inline: inDiff && (f.severity !== 'nit' || nits === 'inline') };
     });
 }
 
@@ -134,15 +157,42 @@ const fence = (s: string, lang = '') => `\`\`\`${lang}\n${s.replace(/\n$/, '')}\
 /** One table cell: a `|` or a line break would end the cell or the table. */
 const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/\s*[\r\n]+\s*/g, ' ');
 const html = (s: string) => s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** Hosts an image in posted model text may load from: GitHub's own and the dashboard's. */
+const IMAGE_HOSTS = /^(github\.com|[\w-]+\.githubusercontent\.com|shaft\.axonpack\.dev)$/i;
+const trustedImage = (url: string) => {
+  try {
+    const u = new URL(url.replace(/^<|>$/g, ''));
+    return u.protocol === 'https:' && IMAGE_HOSTS.test(u.hostname);
+  } catch {
+    return false;
+  }
+};
+
 /**
- * Model text as it may be posted: no images, and no `<!--`. A comment or file in the PR could talk
- * the model into an image whose URL carries data out when GitHub fetches it, or into a hidden
- * `shaft:` marker that a later run would read back.
+ * Model text as it may be posted: an image only from `IMAGE_HOSTS`, and no `<!--`. A comment or file
+ * in the PR could talk the model into an image whose URL carries data out when GitHub fetches it, so
+ * any other image becomes a plain link with its alt text, which loads nothing until someone clicks
+ * it. A hidden `shaft:` marker would be read back by a later run. Repeated until nothing changes, so
+ * an image hidden in another's alt text is caught too.
  */
-export const prose = (s: string) =>
-  s
-    .replace(/<!--/g, '&lt;!--')
-    .replace(/!\[[^\n]*?\]\s*[([][^)\]\n]*[)\]]/g, '').replace(/<\/?(img|picture|source|video)\b[^>]*>/gi, '');
+export function prose(text: string): string {
+  let s = text.replace(/<!--/g, '&lt;!--');
+  for (let prev = ''; prev !== s; ) {
+    prev = s;
+    s = s
+      .replace(/!+\[([^\n]*?)\]\s*([([])([^)\]\n]*)[)\]]/g, (m, alt: string, open: string, target: string) =>
+        open === '(' && trustedImage(target.trim().split(/\s+/)[0] ?? '') && !m.startsWith('!!') ? m : open === '(' ? `[${alt}](${target})` : `[${alt}][${target}]`,
+      )
+      .replace(/<img\b[^>]*>/gi, (tag) => {
+        const src = /\bsrc\s*=\s*["']?([^"'\s>]+)/i.exec(tag)?.[1] ?? '';
+        if (trustedImage(src) && !/\bsrcset\b/i.test(tag)) return tag;
+        const alt = /\balt\s*=\s*["']([^"'\n]*)["']/i.exec(tag)?.[1] || 'image';
+        return `[${alt}](${src})`;
+      })
+      .replace(/<\/?(picture|source|video)\b[^>]*>/gi, '');
+  }
+  return s;
+}
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 export function inlineBody(f: Placed): string {
@@ -179,6 +229,10 @@ export type Footer = {
   effort?: string;
   /** Why `auto` picked the model and effort. */
   reason?: string;
+  /** The triage's level and reason, or why a bare `/fix` started where it did. */
+  triage?: string;
+  /** The `auto` ladder's rungs that didn't work before the one that ran, and why each moved up. */
+  tried?: { model: string; effort: string; why: string }[];
   maxTurns?: number;
   /** The changed lines and files the review read, after `skip`. */
   lines?: number;
@@ -196,6 +250,10 @@ export type Footer = {
   latestAction?: { version: string; url: string };
   /** GitHub's web editor for the workflow file (`workflowEditUrl()`), linked under the newer release. */
   workflowEditUrl?: string;
+  /** Why a private draft advisory couldn't be opened, for one line in the summary. */
+  advisories?: string;
+  /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
+  missingPermissions?: { name: string; wanted: string; granted: string | null }[];
 };
 
 /**
@@ -243,12 +301,15 @@ export function footer(f: Footer): string {
     ['Subagents', f.models?.subagents.map(modelCell).join(', ')],
     ['Effort', f.effort],
     ['Why this model', f.reason],
+    ['Triage', f.triage],
+    ['Tried first', f.tried?.map((t) => `${t.model}, ${t.effort} effort: ${t.why}`).join('; ')],
     ['Turn limit', f.maxTurns],
     ['Changed lines', f.lines],
     ['Changed files', f.files],
     ['Skipped by `skip`', f.skipped && plural(f.skipped, 'file')],
     ['Checklists run', ran.join(', ')],
     ['Checklists not run', notRun.join(', ')],
+    ['Missing permissions', f.missingPermissions?.map((p) => `\`${p.name}\` (${p.wanted}${p.granted ? `, approved ${p.granted}` : ''})`).join(', ')],
     ['Input', t && formatTokens(t.input)],
     ['Output', t && formatTokens(t.output)],
     ['Cache read', t && formatTokens(t.cache_read)],
@@ -418,6 +479,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
     out.push('', details(`Suggested change for <code>${html(loc(p))}</code>`, fence(p.suggestion!)));
   }
   if (nits.length) out.push('', details(plural(nits.length, 'nit'), table(nits, f)));
+  if (f.advisories) out.push('', `**Draft advisories:** ${f.advisories}`);
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);

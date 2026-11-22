@@ -1,7 +1,8 @@
 import { beforeEach, expect, test, vi } from 'vitest';
 
 const infos: string[] = [];
-vi.doMock('@actions/core', () => ({ info: (s: string) => infos.push(s), warning: () => {} }));
+const warnings: string[] = [];
+vi.doMock('@actions/core', () => ({ info: (s: string) => infos.push(s), warning: (s: string) => warnings.push(s) }));
 /** What the mocked Agent SDK does on each `query`: yield these messages, throw, or wait for the abort. */
 let reply: 'hang' | Error | object[] = [];
 const asked: { options: { agents?: unknown; abortController: AbortController; outputFormat: { schema: any } } }[] = [];
@@ -15,7 +16,7 @@ vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
   },
 }));
 const { ENV_ALLOW } = await import('../../consts/env.const');
-const { cliEnv, deepAgents, REVIEW_FORMAT, reviewSchema, runAgent, SCHEMA, sumTokens, toolTarget } = await import('../agent.service');
+const { bashFailure, cliEnv, deepAgents, REVIEW_FORMAT, reviewSchema, runAgent, SCHEMA, sumTokens, toolTarget } = await import('../agent.service');
 
 beforeEach(() => {
   reply = [];
@@ -140,15 +141,18 @@ test('a run past the time limit is review_timed_out, linking the dashboard', asy
   });
 });
 
-test('a reply that misses the schema twice is review_invalid_reply', async () => {
-  reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'maybe' }, result: '', modelUsage: {}, total_cost_usd: 0 }];
+test("a reply that misses the schema twice is review_invalid_reply, and the log names its fields without the finding's text", async () => {
+  const findings = [{ title: 'Token sent in the URL', body: 'The session token goes in the query string.' }];
+  reply = [{ type: 'result', subtype: 'success', structured_output: { verdict: 'maybe', findings }, result: '', modelUsage: {}, total_cost_usd: 0 }];
+  warnings.length = 0;
   expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toMatchObject({ code: 'review_invalid_reply', url: undefined });
   expect(asked).toHaveLength(2);
+  expect(warnings).toEqual([1, 2].map((n) => `The reply didn't match the review schema (attempt ${n}), its fields: verdict, findings`));
 });
 
 test('an SDK error, or anything else that breaks the run, is review_failed', async () => {
   reply = [{ type: 'result', subtype: 'error_max_turns', errors: ['Reached the turn limit.'] }];
-  expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toEqual({
+  expect(await failure(runAgent('prompt', options, REVIEW_FORMAT))).toMatchObject({
     code: 'review_failed',
     message: 'The review failed: The Agent SDK run ended with error_max_turns: Reached the turn limit. Rerun the job; the job log has the details.',
     url: undefined,
@@ -193,4 +197,23 @@ test('each tool call goes to the log, a deep pass\'s named after it', async () =
   expect(toolTarget({ command: 'bun   test\n --watch' })).toBe('bun test --watch');
   expect(toolTarget({ file_path: 'x'.repeat(300) })).toHaveLength(200);
   expect(toolTarget({})).toBe('');
+});
+
+test('a failed Bash call gets one short line in the log: the command and what it printed first and last', async () => {
+  const use = (id: string, name: string, input: object) => ({ type: 'assistant', parent_tool_use_id: null, message: { content: [{ type: 'tool_use', id, name, input }] } });
+  const result = (id: string, content: unknown, is_error: boolean) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content, is_error }] } });
+  reply = [
+    use('b1', 'Bash', { command: 'socat -V' }),
+    result('b1', 'Exit code 127\nbwrap: execvp socat: No such file or directory', true),
+    use('b2', 'Bash', { command: 'bun run test' }),
+    result('b2', [{ type: 'text', text: '3 passed' }], false),
+    use('r1', 'Read', { file_path: 'missing.ts' }),
+    result('r1', 'File does not exist.', true),
+    { type: 'result', subtype: 'success', structured_output: { verdict: 'looks-good', headline: 'h', findings: [] }, modelUsage: {}, total_cost_usd: 0 },
+  ];
+  infos.length = 0;
+  await runAgent('prompt', options, REVIEW_FORMAT).catch(() => {});
+  expect(infos).toEqual(['Bash socat -V', 'Bash failed: socat -V: Exit code 127, bwrap: execvp socat: No such file or directory', 'Bash bun run test', 'Read missing.ts']);
+  expect(bashFailure('x', undefined)).toBe('Bash failed: x: no output');
+  expect(bashFailure('x', 'y'.repeat(400))).toHaveLength(300);
 });

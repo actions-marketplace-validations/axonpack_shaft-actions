@@ -8,14 +8,22 @@ import type { PullRequest, ReviewEvent } from './route.service';
  * a review whether the PR comes from a fork, and the pull request when the payload has it.
  * `help` asks for the list of commands to post; the rest are a job kind.
  */
-export type GrantRequest = { job: 'review' | 'task' | 'reply' | 'help'; event?: ReviewEvent; fork?: boolean; pull_request?: PullRequest };
+export type GrantRequest = {
+  job: 'review' | 'task' | 'reply' | 'help';
+  event?: ReviewEvent;
+  fork?: boolean;
+  pull_request?: PullRequest;
+  /** The comment on a line of the diff that asked for the run, so the API can reply on its thread when it refuses it. An older API ignores it. */
+  comment?: { id: number };
+};
 
 /** One of the deep review's subagents, for a check the project keeps on. */
 export type Pass = { name: string; description: string; prompt: string };
 
 /**
  * One checklist the job keeps on, in the job's order, then the project's own (`own-<n>`): it runs when
- * a changed file matches its `paths`, and `prompt` is its step.
+ * a changed file matches its `paths` and not its `exclude`, and `prompt` is its step. A community one
+ * (`@publisher/slug`) also has its `publisher` and `version`, which the action doesn't need.
  */
 export type Checklist = {
   key: string;
@@ -23,6 +31,8 @@ export type Checklist = {
   mode: 'script' | 'script+model' | 'model';
   model: 'main' | 'light';
   paths: string[];
+  /** Globs on the changed files it never looks at, from an API that sends them. */
+  exclude?: string[];
   prestep: string | null;
   prompt: string;
 };
@@ -53,10 +63,11 @@ export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 /**
  * What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's
  * tokens. A fork's PR on a job set to ask a maintainer first also gets the `comment` to post, and the
- * GitHub token to post it with.
+ * GitHub token to post it with. `code` names why nothing runs (`paused`, `filtered`, `skip_label`, …), for
+ * the notice to link to its docs; older APIs send none, or only `notice: 'spending_cap'`.
  */
 export type Grant =
-  | { run: false; reason: string; comment?: string; github_token?: string }
+  | { run: false; reason: string; code?: string; notice?: string; comment?: string; github_token?: string }
   | {
       run: true;
       github_token: string;
@@ -71,7 +82,12 @@ export type Grant =
       run_url?: string;
       /** Only when this run is pinned to an older v1 release than the newest. Older APIs don't send it. */
       latest_action?: LatestAction;
+      /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
+      missing_permissions?: MissingPermission[];
     };
+
+/** A permission the AxonShaft app wants at `wanted` that the installation approved only at `granted`, or not at all. */
+export type MissingPermission = { name: string; wanted: string; granted: string | null; warning: string };
 
 /** What the dashboard shows of a finished review: the card, as the PR comment has it. */
 export type RunOutput = {
@@ -132,6 +148,21 @@ async function answer(res: Response): Promise<unknown> {
     throw new ShaftFailure(body.error, body.message, typeof body.url === 'string' ? body.url : undefined);
   }
   throw new ShaftFailure('api_error', `The Axon Shaft API answered ${res.status}. Rerun the job in a few minutes.`);
+}
+
+/** POST to the Axon Shaft API and return its answer's JSON, or throw its error as a `ShaftFailure`. */
+export async function callApi(path: string, body: unknown): Promise<unknown> {
+  return answer(await post(path, body));
+}
+
+/**
+ * Like `callApi`, but undefined when the API is older than `path`: its 404, or the 403 its guard gives
+ * a path it doesn't know, neither with the JSON error every route of the API sends.
+ */
+export async function callNewApi(path: string, body: unknown): Promise<unknown> {
+  const res = await post(path, body);
+  if ((res.status === 403 || res.status === 404) && typeof (await res.clone().json().catch(() => undefined))?.error !== 'string') return undefined;
+  return answer(res);
 }
 
 /**

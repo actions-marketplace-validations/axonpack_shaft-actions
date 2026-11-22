@@ -1,5 +1,57 @@
 # shaft
 
+## 1.10.1
+
+### Patch Changes
+
+- dc9fc46: - **Checklists that leave files out**: a checklist the API sends with `exclude` globs, as a community checklist can, is skipped when every changed file it would cover matches one ("Only files it leaves out changed"). When it runs, its step tells the model to leave those files out.
+
+## 1.10.0
+
+### Minor Changes
+
+- 3103b45: - **Package lookups through the Axon Shaft API**: the `osv` script (Known vulnerabilities) sends `POST /v1/packages/check` the ecosystem, name and version of the public packages a pull request adds or changes, and the API asks osv.dev and GitHub's advisory database. It sends nothing else. With an older API, the action asks osv.dev itself, as 1.9 did.
+  - **Licences checklist**: a new `licences` script checks the licence each new public npm, PyPI or crates.io package declares, through the same API call. A strong copyleft licence (GPL, AGPL, SSPL, OSL) is blocking, and no declared licence is should-fix. It's skipped on an older API.
+- 4d9ef46: - **Pinned linters for five checklists**: GitHub workflows gets actionlint's report and a scan for unpinned actions and `permissions: write-all`, Containers hadolint's, Infrastructure as code tflint's, Database migrations squawk's, and HTTP and schema contracts oasdiff's and `buf breaking`'s. Each linter is pinned to one release, downloaded only from that project's GitHub release, checked against the sha256 this release records before it runs, and run in the sandbox with no network. When it can't run, the checklist runs on the model alone and the facts say why.
+
+### Patch Changes
+
+- d2b2d1d: - **Partial reviews move up the ladder**: on `auto`, a review that leaves more than a third of its checklists not checked, says it only partly reviewed the diff, or rates its confidence under 60% moves up a model, as a failed attempt does. The last model's partial review is posted as it is. The footer's Tried first row says why, such as "partial review: 5 of 7 checklists not checked".
+  - **Big reviews start higher**: over 2,000 changed lines after `skip`, a review starts at Opus, and over 400 lines it never starts below Sonnet.
+
+## 1.9.0
+
+### Minor Changes
+
+- 6546009: - **Model ladder for `auto`**: a run starts on the smallest model that fits the job, at low effort, and moves up a model only when an attempt fails (an error, the turn limit, a reply that doesn't match the format, a failed check, or no change from a `/fix`). Reviews start at Sonnet, at Haiku for docs and config, and at Opus when they touch a sensitive file. `/ask` and `/fix` with words ask Haiku to rate the request first. A model or effort set on the dashboard runs as set. The footer lists each model tried and why the run moved on.
+  - **Bare `/fix` reuses the review**: the review's own suggested changes are applied with no model call, all of a file's at once where the review put them (overlapping ones go to the model), the other findings go to the model with the review's whole comment and only the files they name, and a fix that changes any other file isn't pushed.
+  - **`/fix` with words** gets the last review's open findings too, so "fix those" works.
+  - **Missing tools skip checks**: a check whose program isn't on the runner is skipped instead of failing, the fix is pushed, and the reply says which checks were skipped.
+  - **Inline `/fix`**: a `/fix` on a line of the diff sends the comment's ID to the API, which replies on that thread when it refuses the run.
+  - **No repeat inline comments**: a finding that moved a line or two since the last review isn't posted again.
+  - **Failed Bash calls in the log**: each one gets a short line with the command and what it printed.
+  - **Build files need asking**: a `/fix` with words won't push a change to package scripts or dependencies, lockfiles, `.npmrc`, `.yarnrc`, `bunfig.toml`, a Makefile, a Dockerfile or Git hooks unless the request names the file or says dependency or script. A lockfile goes through only with a dependency change that was asked for.
+  - **Images in posted text**: an image the model wrote stays only when it loads from GitHub or the dashboard; any other becomes a plain link.
+
+### Patch Changes
+
+- 67bde06: - **Cancelled runs close their checks**: when a workflow is cancelled or times out, the action closes the check runs it left in progress (`Axon Shaft / review` and the rest) as cancelled, swaps the summary comment's "Reviewing" for the new `cancelled` card, and records the run on the dashboard with the `cancelled` code. A new post step does the same at the end of the job if the step was killed first. A failed review fails any check still in progress, and its comment shows the failure card.
+
+## 1.8.0
+
+### Minor Changes
+
+- 001346b: - **Links to the docs**: each failure card links to its code's entry at `https://shaft.axonpack.dev/docs/reference/codes#<code>`, in the PR comment, the check run and the job summary. A notice with a code ends with the same link: `fork_pull_request`, `not_a_pull_request` and `no_write_access` from the action, the task codes such as `push_failed`, and whatever code the Axon Shaft API sends with its reason for not running. An older API sends no code, and its notices have no link.
+  - **Spending cap card**: a run stopped by the monthly spending cap shows the `spending_cap` card in the job summary, as well as the notice.
+- 0c417b5: - **Missing permissions**: when the AxonShaft app's installation hasn't approved a permission the run wants, the job log warns once for each, and the summary's footer table lists them under "Missing permissions", such as `` `code_quality` (read) ``.
+  - **Private draft advisories**: with the dashboard's "Private draft advisories" setting on, each blocking security finding (the first 3 a review) goes into a private draft security advisory, opened by the Axon Shaft API. On a public repo the PR thread, the check run and the run's page show "Security issue, reported privately" with the draft's link in place of the details. On a private repo the finding keeps its text and links to the draft. If a draft can't be opened, the finding posts as before, the job log warns and the summary says why. A dry run logs the drafts it would open.
+  - **Findings stay out of the job log**: a reply that doesn't match the format is logged by its field names, without its text, since the job log is public on a public repo.
+  - **GitHub Code Quality findings checklist**: the `code-quality` script asks the Axon Shaft API for GitHub Code Quality's open findings and keeps those on the lines the pull request changes, with no model call. `error` findings are should fix and the rest are nits. A pull request into a branch other than the default is skipped, since the findings are the default branch's, and so is a repo where the API can't read them, with the reason.
+
+### Patch Changes
+
+- e895a2f: - **Checked Claude Code download**: the action fetches the Claude Code binary from npm with `npm pack` and unpacks it only when the tarball's sha512 matches the one the release recorded from its `bun.lock`. A mismatch, or a runner platform with no recorded hash, fails the step with the new `claude_binary_unverified` code, and the binary never runs. Each run installs into an empty folder, so a binary already in the runner's temp folder is never reused.
+
 ## 1.7.1
 
 ### Patch Changes

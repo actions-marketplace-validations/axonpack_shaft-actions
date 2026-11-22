@@ -1,8 +1,3 @@
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import * as core from '@actions/core';
 import { type AgentDefinition, type EffortLevel, type HookCallback, type ModelUsage, type PreToolUseHookInput, query, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import pkg from '../../package.json' with { type: 'json' };
@@ -13,6 +8,7 @@ import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TY
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
 import { sandboxPrefix } from './sandbox.service';
+import { claudeBinary } from './claude-binary.service';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -176,28 +172,6 @@ export const guard =
     const updatedInput = { ...args, command: `${sandboxPrefix(cwd)} ${String(args.command).trim()}` };
     return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow', updatedInput } };
   };
-const SDK_VERSION = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
-
-/**
- * The Agent SDK runs a native Claude Code binary from a per-platform npm package. dist/index.js
- * can't carry it (about 350 MB), so on a runner we install the matching one into RUNNER_TEMP.
- */
-function claudeBinary(): string | undefined {
-  const name = `@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`;
-  const file = `${name}/claude${process.platform === 'win32' ? '.exe' : ''}`;
-  try {
-    return createRequire(import.meta.url).resolve(file); // running from source, with node_modules
-  } catch {}
-  // ponytail: glibc only; a musl runner (Alpine) needs the -musl package
-  const dir = join(process.env.RUNNER_TEMP ?? tmpdir(), 'shaft-claude');
-  const bin = join(dir, 'node_modules', file);
-  if (!existsSync(bin)) {
-    core.info(`Installing ${name}@${SDK_VERSION}`);
-    execFileSync('npm', ['install', '--no-save', '--no-package-lock', '--prefix', dir, `${name}@${SDK_VERSION}`], { stdio: 'inherit' });
-  }
-  return bin;
-}
-
 /**
  * The CLI's environment, which every command the model runs inherits: `ENV_ALLOW`, the project's own
  * `names` (never one `ENV_DENIED` matches) and the Claude token. Nothing else the runner holds (the
@@ -240,6 +214,10 @@ export type AgentOptions = {
    * checkout and run these, each call still checked by the guard. No token is added for them.
    */
   commands?: string[];
+  /** In place of the job's tools: none for a triage, which reads only its prompt. */
+  tools?: string[];
+  /** Retry a reply that doesn't match the schema once (the default). A rung of the `auto` ladder moves up instead. */
+  retry?: boolean;
 };
 
 /** What a run used, summed over its models, as `POST /v1/runs` takes it. */
@@ -269,12 +247,27 @@ export function toolTarget(input: Record<string, unknown>): string {
   return line.length > 200 ? `${line.slice(0, 199)}…` : line;
 }
 
+/**
+ * One short log line for a Bash call that failed: the command, and the first and last lines of what
+ * it printed ("Exit code 127", "bwrap: execvp socat: No such file or directory"), so what a reply
+ * claims about the runner can be checked. The runner masks every secret the run registered.
+ */
+export function bashFailure(command: string, content: unknown): string {
+  const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map((c) => (typeof c?.text === 'string' ? c.text : '')).join('\n') : '';
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const said = lines.length > 1 ? `${lines[0]}, ${lines.at(-1)}` : (lines[0] ?? 'no output');
+  const line = `Bash failed: ${command}: ${said}`;
+  return line.length > 300 ? `${line.slice(0, 299)}…` : line;
+}
+
 async function once(prompt: string, o: AgentOptions, schema: Record<string, unknown>, controller: AbortController): Promise<SDKResultMessage | undefined> {
   const deep = !!o.subagentModel && !!o.passes?.length;
   const edit = !!o.commands;
   let result: SDKResultMessage | undefined;
   // A deep pass's own tool calls name the pass, by the call that started it.
   const passes = new Map<string, string>();
+  // Each Bash call's command, by its ID, for the log line when it fails.
+  const bash = new Map<string, string>();
   for await (const m of query({
     prompt,
     options: {
@@ -283,10 +276,10 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       effort: o.effort as EffortLevel,
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
-      tools: deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS,
+      tools: o.tools ?? (deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS),
       // A task's Bash runs the repo's commands, which no allow rule can list ahead, so no rule allows it:
       // only the guard's own allow lets a call through, and if the guard doesn't answer, dontAsk denies it.
-      allowedTools: deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED,
+      allowedTools: o.tools ?? (deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED),
       disallowedTools: DENIED,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
@@ -301,11 +294,15 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
     },
   })) {
     if (m.type === 'result') result = m;
+    if (m.type === 'user' && Array.isArray(m.message.content)) {
+      for (const b of m.message.content) if (b.type === 'tool_result' && b.is_error && bash.has(b.tool_use_id)) core.info(bashFailure(bash.get(b.tool_use_id)!, b.content));
+    }
     if (m.type !== 'assistant') continue;
     for (const b of m.message.content) {
       if (b.type !== 'tool_use') continue;
       const input = (b.input ?? {}) as Record<string, unknown>;
       if (typeof input.subagent_type === 'string') passes.set(b.id, input.subagent_type);
+      if (b.name === 'Bash') bash.set(b.id, toolTarget(input));
       const who = m.parent_tool_use_id ? `[${passes.get(m.parent_tool_use_id) ?? 'pass'}] ` : '';
       core.info(`${who}${b.name} ${toolTarget(input)}`);
     }
@@ -318,35 +315,50 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
  * reply that doesn't match the schema is retried once, then the run fails. Every failure comes out
  * as a `ShaftFailure` with a `review_*` code, whatever the job.
  */
+/** The sessions running now, so a cancelled run can stop them. */
+const running = new Set<AbortController>();
+export const stopAgents = () => running.forEach((c) => c.abort());
+
 export async function runAgent<T>(prompt: string, o: AgentOptions, format: ReplyFormat<T>): Promise<AgentResult<T>> {
   const controller = new AbortController();
+  running.add(controller);
   const timer = setTimeout(() => controller.abort(), o.timeoutMinutes * 60_000);
+  // What every attempt used, so a retry or a failure still counts its tokens.
+  const spent: Omit<AgentResult<T>, 'reply'> = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
   try {
     for (let attempt = 1; ; attempt++) {
       const result = await once(prompt, o, format.schema, controller);
+      if (result) {
+        const usage = result.modelUsage ?? {};
+        const t = sumTokens(usage);
+        spent.models = [...new Set([...spent.models, ...Object.keys(usage)])];
+        spent.costUsd += result.total_cost_usd ?? 0;
+        for (const k of Object.keys(t) as (keyof Tokens)[]) spent.tokens[k] += t[k];
+      }
       if (result?.subtype === 'success') {
         const reply = format.parse(result.structured_output);
-        if (reply) return { reply, models: Object.keys(result.modelUsage), costUsd: result.total_cost_usd, tokens: sumTokens(result.modelUsage) };
+        if (reply) return { reply, ...spent };
       } else if (result && result.subtype !== 'error_max_structured_output_retries') {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join('; ')}`);
       }
-      const raw = result?.subtype === 'success' ? (result.structured_output ?? result.result) : result?.errors;
-      core.warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}):\n${JSON.stringify(raw, null, 2)}`);
-      if (attempt === 2) {
-        throw new ShaftFailure(
-          'review_invalid_reply',
-          `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job; both replies are in the job log.`,
-        );
+      // Only the reply's field names: the job log is public on a public repo, and a finding's text mustn't reach it.
+      const out = result?.subtype === 'success' ? result.structured_output : undefined;
+      const what = result?.subtype === 'success' ? `its fields: ${Object.keys(out && typeof out === 'object' ? out : {}).join(', ') || 'none'}` : (result?.errors.join('; ') ?? 'no result');
+      core.warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}), ${what}`);
+      if (attempt === 2 || o.retry === false) {
+        throw new ShaftFailure('review_invalid_reply', `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job.`);
       }
     }
   } catch (e) {
-    if (controller.signal.aborted) {
-      throw new ShaftFailure('review_timed_out', `The ${format.name} ran past its ${o.timeoutMinutes}-minute time limit. Raise the time limit on the dashboard, or rerun the job.`, DASHBOARD_URL);
-    }
-    if (e instanceof ShaftFailure) throw e;
-    const why = (e instanceof Error ? e.message : String(e)).replace(/\.$/, '');
-    throw new ShaftFailure('review_failed', `The ${format.name} failed: ${why}. Rerun the job; the job log has the details.`);
+    const failure = controller.signal.aborted
+      ? new ShaftFailure('review_timed_out', `The ${format.name} ran past its ${o.timeoutMinutes}-minute time limit. Raise the time limit on the dashboard, or rerun the job.`, DASHBOARD_URL)
+      : e instanceof ShaftFailure
+        ? e
+        : new ShaftFailure('review_failed', `The ${format.name} failed: ${(e instanceof Error ? e.message : String(e)).replace(/\.$/, '')}. Rerun the job; the job log has the details.`);
+    failure.spent = spent;
+    throw failure;
   } finally {
     clearTimeout(timer);
+    running.delete(controller);
   }
 }

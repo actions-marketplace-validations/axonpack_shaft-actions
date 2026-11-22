@@ -61,6 +61,21 @@ export function assertHead(cwd: string, base: string): void {
   if (head(cwd) !== base) throw new ShaftFailure('push_failed', 'Something in the run moved HEAD off the pull request\'s head commit, so nothing was pushed.');
 }
 
+/** A file's text at `base`, or undefined when `base` doesn't have it. */
+export function fileAt(cwd: string, base: string, path: string): string | undefined {
+  try {
+    return git(cwd, ['show', `${base}:${path}`]);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Back to `base`, with nothing in the checkout that git doesn't ignore, for the next attempt. */
+export function resetTo(cwd: string, base: string): void {
+  git(cwd, ['reset', '-q', '--hard', base]);
+  git(cwd, ['clean', '-q', '-f', '-d']);
+}
+
 /** A commit to push: `changes` on top of `base`, by `author`, to `branch` of `owner/repo`. */
 export type PushRequest = { owner: string; repo: string; branch: string; base: string; changes: Change[]; message: string; author: { name: string; email: string } };
 

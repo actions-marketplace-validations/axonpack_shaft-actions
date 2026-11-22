@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import type { Octokit } from '../types/octokit.type';
 import { type CheckState, findingsTable, type Gate, gatesTable, type Placed, SEVERITIES } from '../utils/render.util';
+import { trackCheck } from './finalize.service';
 
 /** The check run branch protection can require. */
 export const GATES_CHECK = 'Axon Shaft / gates';
@@ -60,7 +61,11 @@ export async function postCheck(
     output: { title: c.title, summary: clean(c.summary) },
   };
   return (c.id ? octokit.rest.checks.update({ ...run, check_run_id: c.id }) : octokit.rest.checks.create({ ...run, head_sha: sha })).then(
-    ({ data }) => data.id,
+    ({ data }) => {
+      // So a run that ends early still closes a check it left in progress.
+      trackCheck(data.id, c.conclusion ? undefined : c.name);
+      return data.id;
+    },
     (e: Error) => {
       core.warning(
         `Couldn't post the ${c.name} check: ${e.message}. The AxonShaft GitHub App needs the Checks (write) permission, approved on the repo's installation.`,

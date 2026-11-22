@@ -6,10 +6,12 @@ import type { Finding } from '../../utils/render.util';
 import { depsDiffFacts } from './deps-diff.service';
 import { envVars } from './env-vars.service';
 import { osv } from './osv.service';
+import { licences } from './licences.service';
 import { prMeta } from './pr-meta.service';
 import { schemaPairs } from './schema-pairs.service';
 import { secrets } from './secrets.service';
 import { changeset } from './changeset.service';
+import { codeQuality } from './code-quality.service';
 import { diffStats } from './diff-stats.service';
 import { docsTouched } from './docs-touched.service';
 import { flags } from './flags.service';
@@ -25,9 +27,14 @@ import { routes } from './routes.service';
 import { localeKeys } from './locale-keys.service';
 import { rawValues } from './raw-values.service';
 import { nativeChanges } from './native-changes.service';
+import { actionlint } from './actionlint.service';
+import { hadolint } from './hadolint.service';
+import { migrationLint } from './migration-lint.service';
+import { tflint } from './tflint.service';
+import { contractDiff } from './contract-diff.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
-export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv };
+export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv, licences, 'code-quality': codeQuality };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */
 export const FACTS: Record<string, Facts> = {
@@ -48,6 +55,12 @@ export const FACTS: Record<string, Facts> = {
   'locale-keys': localeKeys,
   'raw-values': rawValues,
   'native-changes': nativeChanges,
+  // The pinned linters (consts/tools.const.ts), run in the sandbox. One that can't run leaves its checklist to the model alone.
+  actionlint,
+  hadolint,
+  'migration-lint': migrationLint,
+  tflint,
+  'contract-diff': contractDiff,
 };
 
 /**

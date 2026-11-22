@@ -1,5 +1,8 @@
 import type { Octokit } from '../types/octokit.type';
 
+/** The skips the action decides itself, which end with a notice. */
+export type SkipCode = 'fork_pull_request' | 'not_a_pull_request';
+
 /** The pull request event, as the Code review job's `on` choices name it. */
 export type ReviewEvent = 'opened' | 'push' | 'ready';
 
@@ -15,7 +18,8 @@ export type Route =
   | { mode: 'reply'; number: number; actor: string; ask: Ask }
   /** `/help`: post the list of commands. */
   | { mode: 'help'; number: number; actor: string }
-  | { mode: 'skip'; reason: string; notice?: boolean };
+  /** With a `code`, the run ends with a notice that links to the code's docs; without one, only a log line. */
+  | { mode: 'skip'; reason: string; code?: SkipCode };
 
 /**
  * The comment a `/ask` or `/fix` came in, which the answer goes under: its ID and text (a review's
@@ -59,7 +63,7 @@ export function route(eventName: string, payload: any): Route {
     const event = REVIEW_EVENTS[payload.action];
     if (!event) return { mode: 'skip', reason: `${eventName} ${payload.action} is not reviewed.` };
     if (eventName === 'pull_request' && isFork(pr)) {
-      return { mode: 'skip', reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, notice: true };
+      return { mode: 'skip', reason: `PR #${pr.number} is from a fork, and a fork's pull_request run gets no OIDC token. To review it, run the workflow on pull_request_target.`, code: 'fork_pull_request' };
     }
     return { mode: 'review', number: pr.number, event, fork: isFork(pr) };
   }
@@ -77,16 +81,16 @@ export function route(eventName: string, payload: any): Route {
   const onPr = Boolean(pr || payload.issue?.pull_request);
   // An issue_comment's payload doesn't say where the PR's branch lives, so `fork` stays undefined there.
   if (command === 'review' && onPr) return { mode: 'review', number: number!, fork: pr ? isFork(pr) : undefined, actor };
-  if (command === 'review') return { mode: 'skip', reason: '/review works on a pull request, not an issue.', notice: true };
+  if (command === 'review') return { mode: 'skip', reason: '/review works on a pull request, not an issue.', code: 'not_a_pull_request' };
   if (command === 'help') return { mode: 'help', number: number!, actor };
   const c = eventName === 'pull_request_review' ? payload.review : payload.comment;
   const ask: Ask =
     eventName === 'pull_request_review_comment'
       ? { id: c.id, text, path: c.path, line: c.line ?? c.original_line ?? undefined, thread: c.in_reply_to_id ?? c.id }
       : { id: c.id, text };
-  if (command === 'ask' && !onPr) return { mode: 'skip', reason: '/ask works on a pull request, not an issue.', notice: true };
+  if (command === 'ask' && !onPr) return { mode: 'skip', reason: '/ask works on a pull request, not an issue.', code: 'not_a_pull_request' };
   if (command === 'ask') return { mode: 'reply', number: number!, actor, ask };
-  if (!onPr) return { mode: 'skip', reason: `/${command === 'fix' ? 'fix' : 'axonshaft'} works on a pull request, not an issue.`, notice: true };
+  if (!onPr) return { mode: 'skip', reason: `/${command === 'fix' ? 'fix' : 'axonshaft'} works on a pull request, not an issue.`, code: 'not_a_pull_request' };
   return { mode: 'task', number: number!, actor, ask, bare: command === 'fix' && !text.replace('/fix', '').trim() };
 }
 

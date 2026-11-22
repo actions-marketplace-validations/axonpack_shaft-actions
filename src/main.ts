@@ -1,16 +1,17 @@
 import * as core from '@actions/core';
 import { context, getOctokit } from '@actions/github';
 import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
-import type { Tokens } from './services/agent.service';
+import { stopAgents, type Tokens } from './services/agent.service';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
+import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
 import { runTask } from './services/task.service';
-import { failureMarkdown, ShaftFailure } from './utils/failure.util';
+import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util';
 import { redact, workflowEditUrl } from './utils/render.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
@@ -36,14 +37,19 @@ let done = false;
 async function run(): Promise<void> {
   const started = Date.now();
   const r = route(context.eventName, context.payload);
-  if (r.mode === 'skip') return r.notice ? core.notice(r.reason) : core.info(r.reason);
+  if (r.mode === 'skip') return r.code ? core.notice(noticeText(r.reason, r.code)) : core.info(r.reason);
 
   const dryRun = core.getBooleanInput('dry_run');
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context.repo;
   const pull_request = pullRequestOf(context.payload);
   const grant = await step('Config from the dashboard', () =>
-    fetchGrant(r.mode === 'review' ? { job: 'review', event: r.event, fork: r.fork, pull_request } : { job: r.mode, pull_request }),
+    fetchGrant(
+      r.mode === 'review'
+        ? { job: 'review', event: r.event, fork: r.fork, pull_request }
+        : // A comment on a line of the diff: the API replies on its thread itself when it refuses the run.
+          { job: r.mode, pull_request, ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }) },
+    ),
   );
   if (!grant.run) {
     // The API's comment to post once: how to start a fork's review, or the list of commands for /help.
@@ -56,9 +62,15 @@ async function run(): Promise<void> {
         done = true;
       }
     }
-    return core.notice(grant.reason);
+    const code = grant.code ?? grant.notice;
+    // The cap stops every run until an admin acts, so it gets a card in the job summary like a failure.
+    if (code === 'spending_cap') await writeSummary(failureMarkdown(new ShaftFailure(code, grant.reason)));
+    return core.notice(noticeText(grant.reason, code));
   }
   const octokit = getOctokit(grant.github_token);
+  // What the installation hasn't approved yet: each warning once, and the review's footer names them.
+  const missing = Array.isArray(grant.missing_permissions) ? grant.missing_permissions : [];
+  for (const w of new Set(missing.map((p) => p.warning))) core.warning(w);
 
   if (r.mode === 'help') return core.notice('The Axon Shaft API sent a run for /help, which runs nothing.');
   if (r.actor && !(await hasWriteAccess(octokit, owner, repo, r.actor))) {
@@ -68,7 +80,7 @@ async function run(): Promise<void> {
         : r.mode === 'reply'
           ? "the question wasn't answered. Only people with write access can ask with /ask"
           : 'nothing was changed. Only people with write access can start a change with /fix or /axonshaft';
-    return core.notice(`${r.actor} has no write access, so ${what}.`);
+    return core.notice(noticeText(`${r.actor} has no write access, so ${what}.`, 'no_write_access'));
   }
   reaction = await reactStart(octokit, context, dryRun);
   // The project's own variables pass to the model's commands and the checks, so their values are
@@ -81,6 +93,8 @@ async function run(): Promise<void> {
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
       duration_ms: Date.now() - started,
     });
+  const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+  trackRun({ token: grant.github_token, owner, repo, runUrl, started, secrets });
   // On pull_request the checkout is the PR merged into its base; anywhere else it's the base branch.
   if (context.eventName !== 'pull_request') await step('Check out the pull request', async () => checkoutHead(cwd, r.number, grant.github_token));
 
@@ -103,7 +117,7 @@ async function run(): Promise<void> {
     env: globs(settings.env),
     bot: APP_BOT,
     dryRun,
-    runUrl: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+    runUrl,
     dashboardRunUrl: grant.run_url,
     cwd,
   };
@@ -128,7 +142,7 @@ async function run(): Promise<void> {
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
     }
-    core.notice(out.refused);
+    core.notice(noticeText(out.refused, out.code));
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === 'reply') {
@@ -145,6 +159,8 @@ async function run(): Promise<void> {
     checks: job.checks,
     checklists: job.checklists,
     latestAction: grant.latest_action,
+    missingPermissions: missing,
+    advisories: settings.advisories === true,
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
   });
   core.setOutput('verdict', out.verdict);
@@ -158,13 +174,35 @@ async function run(): Promise<void> {
 async function fail(e: unknown): Promise<void> {
   core.setFailed(e instanceof Error ? e.message : String(e));
   await reportFailure?.(e);
-  if (!(e instanceof ShaftFailure)) return;
-  await core.summary
-    .addRaw(failureMarkdown(e))
+  if (e instanceof ShaftFailure) await writeSummary(failureMarkdown(e));
+}
+
+function writeSummary(markdown: string): Promise<unknown> {
+  return core.summary
+    .addRaw(markdown)
     .write()
     .catch((w: Error) => core.warning(`Couldn't write the job summary: ${w.message}`));
 }
 
+let ending: Ending = { kind: 'finished' };
 run()
-  .catch(fail)
-  .finally(() => reaction && reactEnd(reaction, done));
+  .catch((e) => {
+    ending = { kind: 'failed', error: e };
+    return fail(e);
+  })
+  .finally(() => Promise.all([finalize(ending), reaction && reactEnd(reaction, done)]));
+
+/**
+ * A cancel (or the job's time limit) sends SIGINT, then SIGTERM 7.5 s later, then kills the process
+ * 2.5 s after that. The cleanup gets 5 s, then the session stops and the step exits; anything still
+ * open by then, the post step closes.
+ */
+function cancel(): void {
+  const cleanup = Promise.all([finalize({ kind: 'cancelled', message: 'The workflow was cancelled before the review finished.' }), reaction && reactEnd(reaction, false)]);
+  Promise.race([cleanup, new Promise((r) => setTimeout(r, 5000))]).finally(() => {
+    stopAgents();
+    process.exit(1);
+  });
+}
+process.once('SIGINT', cancel);
+process.once('SIGTERM', cancel);

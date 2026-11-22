@@ -1,5 +1,6 @@
-import { beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ShaftFailure } from '../../utils/failure.util';
+import { parseState } from '../../utils/render.util';
 import type { Checklist } from '../api.service';
 
 const logs: string[] = [];
@@ -7,6 +8,8 @@ const warnings: string[] = [];
 vi.doMock('@actions/core', () => ({
   info: (s: string) => logs.push(s),
   warning: (s: string) => warnings.push(s),
+  getIDToken: async () => 'oidc',
+  saveState: () => {},
   group: (name: string, fn: () => Promise<unknown>) => {
     logs.push(`::group::${name}`);
     return fn();
@@ -21,6 +24,8 @@ const runs: { prompt: string; model: string; effort: string; passes?: unknown[];
 let usage: string[] = [];
 /** When set, the review fails with it. */
 let agentError: Error | undefined;
+/** What each attempt's reply changes, in order; by default it checked every checklist it ran, at 90% confidence. */
+let replies: object[] = [];
 vi.doMock('../agent.service', async (actual) => ({
   ...(await actual<typeof import('../agent.service')>()),
   // `steps` is what the reply's schema limits `step` to: unset for 1.5's fixed steps.
@@ -29,7 +34,7 @@ vi.doMock('../agent.service', async (actual) => ({
     const steps = format.schema === (await actual<typeof import('../agent.service')>()).SCHEMA ? undefined : (step.enum ?? []);
     runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes, steps });
     if (agentError) throw agentError;
-    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: ['correctness', 'tests'], not_checked: 'n' };
+    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: steps ?? ['correctness', 'tests'], not_checked: 'n', ...replies.shift() };
     return { reply: review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
   },
 }));
@@ -51,6 +56,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
   const written: string[] = [];
   const posted: string[] = [];
   const summaries: string[] = [];
+  const inline: string[] = [];
   const [listFiles, listCommits, listComments, listReviewComments] = [0, 1, 2, 3].map(() => async () => ({}));
   const lists = new Map<unknown, unknown[]>([
     [listFiles, files],
@@ -74,6 +80,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
     written,
     posted,
     summaries,
+    inline,
     paginate: async (fn: unknown) => lists.get(fn),
     rest: {
       pulls: {
@@ -81,6 +88,7 @@ function octokit(files: ReturnType<typeof file>[], comments: object[] = [], guid
         listFiles,
         listCommits,
         listReviewComments,
+        createReview: async ({ comments }: { comments: { body: string }[] }) => inline.push(...comments.map((c) => c.body)),
       },
       issues: { listComments, createComment: comment('create'), updateComment: comment('update') },
       checks: { create: check('create'), update: check('update') },
@@ -112,6 +120,7 @@ async function review(
     refuseChecks?: boolean | 'progress';
     checklists?: Checklist[];
     open?: string;
+    advisories?: boolean;
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
@@ -136,6 +145,7 @@ async function review(
     runUrl: 'https://github.com/o/r/actions/runs/9',
     cwd: '.',
     gates: extra.gates,
+    advisories: extra.advisories,
   });
   return { refs: fake.refs, prompt: runs.at(-1)?.prompt ?? '', run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
@@ -147,6 +157,7 @@ beforeEach(() => {
   usage = [];
   agentError = undefined;
   found = [];
+  replies = [];
 });
 
 test('buildPrompt fills every slot with the run\'s data and changes nothing else', () => {
@@ -201,17 +212,17 @@ test('the skip globs drop files from the diff, and the prompt and the summary co
   expect(summary).toContain("**Skipped:** 2 files matched `skip` and weren't reviewed.");
 });
 
-test('focus files are marked in the diff, and auto picks opus and high', async () => {
+test('focus files are marked in the diff, and auto starts at opus, low effort', async () => {
   const { prompt, run } = await review([file('src/core/engine.ts'), file('src/a.ts')], { focus: ['src/core/**'] });
   expect(prompt).toContain('diff --git a/src/core/engine.ts b/src/core/engine.ts (modified, focus)');
   expect(prompt).toContain('diff --git a/src/a.ts b/src/a.ts (modified)\n');
-  expect(run).toMatchObject({ model: 'opus', effort: 'high' });
+  expect(run).toMatchObject({ model: 'opus', effort: 'low' });
 });
 
 test('without focus files: no marking, and sonnet', async () => {
   const { prompt, run } = await review([file('src/a.ts')]);
   expect(prompt).not.toContain(', focus)');
-  expect(run).toMatchObject({ model: 'sonnet', effort: 'medium' });
+  expect(run).toMatchObject({ model: 'sonnet', effort: 'low' });
 });
 
 test("a deep review runs the dashboard's passes as its subagents", async () => {
@@ -220,23 +231,25 @@ test("a deep review runs the dashboard's passes as its subagents", async () => {
   expect(run.passes).toEqual(passes);
 });
 
-test('a failed review creates the summary with its card, message and the run link, and fails the review check', async () => {
+test('a review whose every rung fails creates the summary with its card, message and the run link, and fails the review check', async () => {
   agentError = new ShaftFailure('review_invalid_reply', "The model's reply didn't match the review format twice.");
   await expect(review([file('src/a.ts')], { dryRun: false })).rejects.toBe(agentError);
   expect(fake.written).toEqual([
     [
       '<!-- shaft:summary -->',
-      "![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",
+      "[![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)](https://shaft.axonpack.dev/docs/reference/codes#review_invalid_reply)",
       '',
       "The model's reply didn't match the review format twice.",
       '',
       '<https://github.com/o/r/actions/runs/9>',
     ].join('\n'),
   ]);
+  // A bad reply on Sonnet moves up to Opus, the code review's last rung, whose failure is the run's.
   expect(progress()).toEqual([
     STARTED,
     STEPS[0],
-    "create: ![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)",
+    'check update: Axon Shaft / review in_progress "Reviewing with Opus, effort low"',
+    "create: [![The model's reply didn't match the review format twice.](https://shaft.axonpack.dev/errors/review_invalid_reply.svg)](https://shaft.axonpack.dev/docs/reference/codes#review_invalid_reply)",
     'check update: Axon Shaft / review failure "The review failed" https://github.com/o/r/actions/runs/9',
   ]);
 });
@@ -246,7 +259,7 @@ const progress = () => fake.posted.filter((p) => !/Axon Shaft \/ (?!review)/.tes
 const SUMMARY_URL = 'https://github.com/o/r/pull/7#issuecomment-1';
 const STARTED = 'check create: Axon Shaft / review in_progress "Reviewing abc1234" https://github.com/o/r/actions/runs/9';
 /** The review check's update at the start of each step after the read. */
-const STEPS = ['check update: Axon Shaft / review in_progress "Reviewing with Sonnet, effort medium"', 'check update: Axon Shaft / review in_progress "Posting the review"'];
+const STEPS = ['check update: Axon Shaft / review in_progress "Reviewing with Sonnet, effort low"', 'check update: Axon Shaft / review in_progress "Posting the review"'];
 
 test("a first review creates no comment until the result, and the review check shows it's running", async () => {
   await review([file('src/a.ts')], { dryRun: false });
@@ -285,7 +298,7 @@ test('a dry run posts nothing and logs the review check', async () => {
   await review([file('src/a.ts')]);
   expect(fake.posted).toEqual([]);
   expect(logs).toContain('Would start the Axon Shaft / review check');
-  expect(logs).toContain('Would update the Axon Shaft / review check: Reviewing with Sonnet, effort medium');
+  expect(logs).toContain('Would update the Axon Shaft / review check: Reviewing with Sonnet, effort low');
   expect(logs).toContain('Would update the Axon Shaft / review check: Posting the review');
 });
 
@@ -361,7 +374,7 @@ test('each guide is cut at 8,000 characters and all of them at 30,000, saying so
 test("the footer and /v1/runs name the review's model, not the CLI's own helper model", async () => {
   usage = ['claude-haiku-5-5', 'claude-sonnet-5-5'];
   const { summary, outcome } = await review([file('src/a.ts')]);
-  expect(summary).toContain('<sub>Claude Sonnet 5.5, medium effort · ');
+  expect(summary).toContain('<sub>Claude Sonnet 5.5, low effort · ');
   expect(summary).not.toContain('haiku');
   expect(outcome.model).toBe('claude-sonnet-5-5');
 });
@@ -493,13 +506,13 @@ test('with checklists, only those whose paths match run: their steps after the d
     'Would post the Axon Shaft / correctness check: failure',
     'Would post the Axon Shaft / migrations check: skipped',
     'Would post the Axon Shaft / secrets check: skipped',
-    'Would post the Axon Shaft / own-1 check: skipped',
+    'Would post the Axon Shaft / own-1 check: success',
   ]);
   expect(outcome.output.checks).toEqual([
     { key: 'correctness', label: 'The correctness list', state: 'failed' },
     { key: 'migrations', label: 'The migrations list', state: 'not_checked', reason: 'No matching files changed' },
     { key: 'secrets', label: 'The secrets list', state: 'not_checked', reason: "This version of the action doesn't have this checklist's script yet" },
-    { key: 'own-1', label: 'The own-1 list', state: 'not_checked' },
+    { key: 'own-1', label: 'The own-1 list', state: 'passed' },
   ]);
   expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'] }]);
   expect(summary).toContain('<kbd>❌ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
@@ -579,8 +592,9 @@ test("a script+model checklist runs in the model, with its pre-step's facts afte
 });
 
 test('a script that throws leaves its checklist not checked, with the reason, never passed', async () => {
-  // osv.dev is down, and the fake GitHub client has no advisory API.
-  vi.stubGlobal('fetch', async () => new Response('', { status: 503 }));
+  // The API is older, so osv.dev is asked straight, and it's down; the fake GitHub client has no advisory API.
+  process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
+  vi.stubGlobal('fetch', async (url: string) => new Response('', { status: url.endsWith('/v1/packages/check') ? 404 : 503 }));
   const vulns = { ...checklist('vulnerabilities', ['**/*.lock'], 'script'), prestep: 'osv' };
   const { outcome } = await review([file('bun.lock')], { checklists: [vulns], open: OPEN });
   vi.unstubAllGlobals();
@@ -591,4 +605,79 @@ test('a script that throws leaves its checklist not checked, with the reason, ne
   ]);
   expect(warnings.some((w) => w.startsWith("The vulnerabilities list wasn't checked: osv.dev and GitHub's"))).toBe(true);
   expect(logs).not.toContain('Would post the Axon Shaft / vulnerabilities check: success');
+});
+
+describe('private draft advisories', () => {
+  const finding = { severity: 'blocking', step: 'security', file: 'src/a.ts', line: 1, title: 'Token sent in the URL', body: 'The session token goes in the query string.', suggestion: 'b2' };
+  const url = 'https://github.com/o/r/security/advisories/GHSA-1234-5678-9abc';
+  /** The fake API's answer to `POST /v1/advisories`. */
+  const advisoryApi = (res: () => Response) =>
+    vi.stubGlobal('fetch', async (path: string) => {
+      expect(path).toBe('https://api-shaft.axonpack.dev/v1/advisories');
+      return res();
+    });
+  beforeEach(() => {
+    process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
+    found = [finding];
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("on a public repo the inline comment, summary, state marker, check run and run report carry only the short note, and the log never has the finding's text", async () => {
+    advisoryApi(() => Response.json({ ghsa_id: 'GHSA-1234-5678-9abc', html_url: url, withhold: true }));
+    const { outcome } = await review([file('src/a.ts')], { dryRun: false, advisories: true });
+    const posted = [...fake.inline, ...fake.written, ...fake.summaries, JSON.stringify(outcome.output)].join('\n');
+    for (const secret of ['Token sent in the URL', 'query string', 'b2']) expect(posted).not.toContain(secret);
+    expect(fake.inline).toEqual([expect.stringContaining(`The details are in a [private draft security advisory](${url})`)]);
+    const summary = fake.written.at(-1)!;
+    expect(parseState(summary)!.findings).toEqual([expect.objectContaining({ title: 'Security issue, reported privately', severity: 'blocking' })]);
+    expect(summary).toContain(`[Security issue, reported privately](${url})`);
+    expect(fake.posted).toContain(`check create: Axon Shaft / security failure "Blocking findings" ${url}`);
+    expect(outcome.bySeverity.blocking).toBe(1);
+    expect(outcome.output.findings[0]).toMatchObject({ title: 'Security issue, reported privately', url });
+    expect(outcome.output.findings[0]).not.toHaveProperty('suggestion');
+    expect([...logs, ...warnings].join('\n')).not.toContain('Token sent');
+  });
+
+  test('a failed request posts the finding as today, warns, and adds one line to the summary', async () => {
+    advisoryApi(() => Response.json({ error: 'advisory_failed', message: 'Advisories are off for this repo.' }, { status: 403 }));
+    const { outcome } = await review([file('src/a.ts')], { dryRun: false, advisories: true });
+    expect(fake.inline[0]).toContain('The session token goes in the query string.');
+    expect(fake.written.at(-1)).toContain("**Draft advisories:** Couldn't open a private draft advisory for `");
+    expect(warnings).toEqual([expect.stringMatching(/^Couldn't open a draft advisory for \w+, so the finding is posted as it is: Advisories are off for this repo$/)]);
+    expect(outcome.output.findings[0]).toMatchObject({ title: 'Token sent in the URL' });
+  });
+
+  test('a dry run logs the draft it would open; with the setting off nothing is asked', async () => {
+    advisoryApi(() => expect.unreachable());
+    await review([file('src/a.ts')], { advisories: true });
+    expect(logs).toContain(`Would open a draft advisory for ${parseState(logs.find((l) => l.startsWith('--- summary')))!.findings[0]!.fp}`);
+    logs.length = 0;
+    await review([file('src/a.ts')], { dryRun: false });
+    expect(fake.inline[0]).toContain('The session token goes in the query string.');
+  });
+});
+
+test("a partial review below the last rung moves up one, says why in the footer and counts both rungs' tokens; the last rung's partial result stands", async () => {
+  replies = [{ checked: [], not_checked: 'The diff was too large.' }];
+  const { summary, outcome } = await review([file('src/a.ts'), file('README.md')], { checklists: CHECKLISTS, open: OPEN });
+  expect(runs.map((r) => r.model)).toEqual(['sonnet', 'opus']);
+  expect(summary).toContain('sonnet, low effort: partial review: 2 of 2 checklists not checked');
+  expect(outcome.tokens.input).toBe(240000);
+  expect(outcome.output.checks?.find((c) => c.key === 'correctness')?.state).toBe('passed');
+
+  // The model saying so, or a low confidence, does the same. Opus is the last rung, so its 50% is kept.
+  [runs.length, logs.length] = [0, 0];
+  replies = [{ not_checked: 'The diff was only partly reviewed.' }, { confidence: 50 }];
+  const low = await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN });
+  expect(runs.map((r) => r.model)).toEqual(['sonnet', 'opus']);
+  expect(low.summary).toContain('partial review: the model says it only partly reviewed the diff');
+  expect(low.outcome.output.confidence).toBe(50);
+  [runs.length, logs.length] = [0, 0];
+  replies = [{ confidence: 55 }];
+  expect((await review([file('src/a.ts')])).summary).toContain('sonnet, low effort: partial review: confidence 55%');
+  // One checklist of three not checked is a third, not more, so the review stands.
+  runs.length = 0;
+  replies = [{ checked: ['correctness', 'own-1'] }];
+  await review([file('src/a.ts'), file('README.md')], { checklists: [...CHECKLISTS, checklist('docs', ['**/*.md'])], open: OPEN });
+  expect(runs.map((r) => r.model)).toEqual(['sonnet']);
 });

@@ -71,6 +71,8 @@ A comment on the pull request's conversation tab doesn't carry the branch, so a 
 When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt.
 Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`.
 
+Before the session starts, the action downloads the Claude Code binary the Agent SDK runs: the npm package `@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, at the SDK version the release pins, fetched with `npm pack` into the runner's temp folder. It unpacks the tarball only when its sha512 matches the one the release recorded from its `bun.lock` at build time. If it doesn't match, or the release has no hash for the runner's platform, the step fails with `claude_binary_unverified` and the binary never runs. This is the only code the action downloads for itself.
+
 After the review, the action sends the run to the dashboard, where it has its own page. It sends:
 
 - the verdict, the model, the finding counts and the tokens used;
@@ -158,7 +160,7 @@ What counts as a command:
 - The model reads the pull request's head commit with the review's read-only tools and environment (see [What the review can do](#what-the-review-can-do)). It can't edit, commit or push.
 - The prompt has the question and the line it's on, the PR's title, body, commits and diff after `skip`, and the other comments of people inside the repo (see [What the review can do](#what-the-review-can-do)).
 - The answer cites `file:line` for its claims. It ends with the same footer as the summary comment and is cut at 20,000 characters.
-- With the model and effort on `auto`, it runs on `sonnet` at `medium` effort. With no turn limit set, the limit is 30.
+- With the model and effort on `auto`, Haiku first rates the question, and the answer starts on the model that rating gives (see [Model and effort on auto](#model-and-effort-on-auto)). With no turn limit set, the limit is 30.
 - The dashboard gets the run with the model, the tokens and the answer. A reply has no verdict.
 - When the model's session fails, the failure's card is posted where the question was asked, and the step fails.
 
@@ -166,17 +168,23 @@ What counts as a command:
 
 `/fix` and `/axonshaft <prompt>` run the project's Task job from the dashboard, with its prompt.
 
-- The request is the comment. A bare `/fix` asks for the open findings of the last review, from its summary comment. With no review yet, or nothing open in the last one, it replies with one line saying so and starts no session.
+- The request is the comment. A `/fix` with words after it also gets the last review's open findings, so "fix those" works.
+- A bare `/fix` fixes the open findings of the last review, from its summary comment. With no review yet, or nothing open in the last one, it replies with one line saying so and starts no session.
+  - A finding whose inline comment has a suggested change gets that change applied by the action, as GitHub's "Commit suggestions" batch would, with no model call. Every suggestion in a file goes where the review put it, even when an earlier one changes the line count. Two that overlap, or one whose lines aren't in the file, aren't applied: their findings go to the model, and the reply lists them under "Suggestions not applied". Only inline comments from `axonshaft[bot]` whose finding is in the summary's state count, and only while the comment is still on the pull request's head commit. A suggestion in anyone else's comment is never applied.
+  - The other findings go to the model with the review's whole comment on each, marked as data, and only the diff of the files they name.
+  - When every finding had a suggestion, no model runs: the action checks the change and pushes it, and the reply lists the suggestions it applied.
+  - The fix may change only the files the findings name. When it changes any other file, nothing is pushed, and the reply names the files.
+- A `/fix` with words, or `/axonshaft`, may change what runs on install and in CI only when the request asks for it. That covers a `package.json`'s scripts or dependencies, `.npmrc`, `.yarnrc`, `bunfig.toml`, a Makefile, a Dockerfile, `.husky/`, `.git-hooks/`, and lockfiles. The request has to name the file, or say "dependency" or "script" (or "lockfile", "Git hook"). A lockfile also passes when it goes with a dependency change the request asked for, in its own package or one below it; a version bump alone doesn't let it through. Otherwise nothing is pushed, and the reply lists the files and says to ask for them by name.
 - The model works on the pull request's head commit. It makes the smallest change that does what was asked and runs the repo's tests and lint.
 - After the session, the action commits the change as `axonshaft[bot]`, with one plain line saying what changed, and pushes it to the pull request's branch.
 - The push starts the repo's own CI on the pull request before anyone has read the change, and CI runs the changed code with whatever secrets its workflows get. Read the commit before you merge or deploy it, and keep secrets out of the workflows that run on pull requests.
-- Comment `/fix` or `/axonshaft` on the pull request's Conversation tab. GitHub runs a comment in a review thread from the pull request's merge commit, so the workflow there isn't the default branch's, and the API refuses the task.
+- Comment `/fix` or `/axonshaft` on the pull request's Conversation tab. GitHub runs a comment in a review thread from the pull request's merge commit, so the workflow there isn't the default branch's, and the API refuses the task. The action sends the comment's ID with its request, so the API can reply on that thread with the reason itself. The action never gets a token for that run, and logs the refusal as a notice.
 - The task runs only on a GitHub-hosted runner, a fresh machine for each job. On a self-hosted runner the session doesn't run: the reply and a notice say why, and the run ends with `self_hosted_unsupported`. Reviews and `/ask` still run there.
 - The checkout must not keep a token: set `persist-credentials: false` on `actions/checkout`, as the quick start does. When `.git/config` holds an `extraheader`, a credentials file or a password in a remote's URL, the session doesn't run: the reply warns about it, and the run ends with `credentials_in_checkout`.
 - The task needs a Linux runner. Its commands run in a [bubblewrap](https://github.com/containers/bubblewrap) sandbox, which the action installs from the runner's Ubuntu archive when it's missing (`sudo apt-get install bubblewrap`, 0.6 or later). When the sandbox can't start, for example on macOS or on a runner without `sudo` or user namespaces, the session doesn't run: the reply and a notice say why, and the run ends with `sandbox_unavailable`.
-- The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed or Failed.
+- The reply goes where the request was made. It says what changed and lists the changed files, the commit and each check with Passed, Failed or Skipped.
 - A request that only asks a question gets an answer, and nothing is committed.
-- With the model and effort on `auto`, it runs on `opus` at `high` effort.
+- With the model and effort on `auto`, it climbs the model ladder (see [Model and effort on auto](#model-and-effort-on-auto)). An attempt that ends in a failed check, an error, the turn limit, a reply that doesn't match the format, or no change for a `/fix`, moves up a model. The next model starts from a clean checkout of the pull request's head and is told what went wrong.
 - The dashboard gets the run with the model, the tokens and the reply.
 
 ### What a change is allowed to do
@@ -210,6 +218,7 @@ What counts as a command:
   - something that isn't a file or a link, such as a submodule.
 - A change to a `package.json`, a Makefile or a lock file is committed, and the reply lists those files under "Read before merging", because they decide what runs on install and in CI.
 - Before pushing, the action runs the checks again itself, with the same environment: the commands the model listed, or the install, `test` and `lint` when it listed none. When one fails, nothing is pushed, and the reply names it and shows the end of its output. Neither the session nor the checks may move HEAD off the pull request's head commit.
+- The action installs no tools. A check whose program isn't on the runner's `PATH`, such as `bun` on a workflow that never sets it up, is skipped, not failed: the fix is pushed, and the reply says which checks were skipped and that the repo's CI runs them on the push.
 - Only after the checks pass does the action ask the API for the push token (`POST /v1/push-token`), a token with Contents write and nothing else. The API reads the pull request from GitHub again, and refuses a fork's pull request, the default branch, Push mode Disabled and someone without write access.
 - The action pushes through GitHub's API, never with git: a blob for each file, a tree on the head commit's, the commit, and then the branch moves to it without force. No git process sees the token, and the action revokes it when the push is done, whether it worked or not.
 - When the push fails, for example because someone pushed to the branch during the run, the failure card goes in the reply and the step fails with `push_failed`.
@@ -233,36 +242,46 @@ What counts as a command:
 
 Everything else is set on the dashboard:
 
-| Setting | What it does |
-|---|---|
-| Model | The model the review runs on, or `auto`. |
-| Effort | The effort, or `auto`. |
-| Depth | A deep review adds subagents for the correctness, breakage and security checks. |
-| Nits | How nits are shown, including whether they get inline comments. |
-| Turn limit | The most turns the model may take. Left unset, the action picks it from the diff's size. See [the turn limit by size](#the-turn-limit-by-size). |
-| Time limit | How long the review may run. |
-| Review rules | The repo's own rules for the review. |
-| `skip` globs | Files to leave out of the review. |
-| `focus` globs | Files that get a closer look. |
-| Environment variables | Extra runner variables the model's environment gets, by name. See [what the review can do](#what-the-review-can-do). |
-| Merge gates | Up to 10 requirements every pull request must meet, in plain words. See [the merge gates check](#the-merge-gates-check). |
+| Setting | Default | What it does |
+|---|---|---|
+| Model | `auto` | The model the review runs on, or `auto`. |
+| Effort | `auto` | The effort, or `auto`. |
+| Depth | Standard | A deep review adds subagents for the correctness, breakage and security checks. |
+| Nits | In the summary | How nits are shown, including whether they get inline comments. |
+| Turn limit | 30, or less for a small diff | The most turns the model may take. Left unset, the action picks it from the diff's size. See [the turn limit by size](#the-turn-limit-by-size). |
+| Time limit | 15 minutes | How long the review may run. |
+| Review rules | None | The repo's own rules for the review. |
+| `skip` globs | `**/*.lock`, `**/package-lock.json`, `**/pnpm-lock.yaml`, `**/dist/**`, `**/*.min.js`, `**/*.snap` | Files to leave out of the review. |
+| `focus` globs | None | Files that get a closer look. |
+| Environment variables | None | Extra runner variables the model's environment gets, by name. See [what the review can do](#what-the-review-can-do). |
+| Merge gates | None | Up to 10 requirements every pull request must meet, in plain words. See [the merge gates check](#the-merge-gates-check). |
+| Push mode | Restricted | Where `/fix` and `/axonshaft` may push: Disabled, Restricted (only the pull request's own branch) or Enabled (any branch but the default one). See [what a change is allowed to do](#what-a-change-is-allowed-to-do). |
+| Monthly spending cap | No cap | The most a project or account spends in a month, in US dollars. At the cap nothing runs until the 1st (UTC), and the run ends with a `spending_cap` notice. |
+| Private draft advisories | On public repos | Open a private draft security advisory for each blocking security finding: off, or on public repos. See [private draft advisories](#private-draft-advisories). |
 
 ### Model and effort on auto
 
-With the model and effort on `auto`, the action picks both from the diff, after `skip`. The first row that matches wins:
+With the model and effort on `auto`, a run climbs a ladder of models, every one at `low` effort. It starts on the first rung, and moves up only when an attempt doesn't work. A run makes 3 attempts at most.
 
-| The diff | Model | Effort |
-|---|---|---|
-| Touches a `focus` path or a sensitive one: auth, crypto, payments, billing, workflows, migrations, or dependencies in `package.json` | `opus` | `high` |
-| Any diff on a deep review | `opus` | `high` |
-| Over 1,000 changed lines or over 30 files | `opus` | `medium` |
-| Only docs, comments, lockfiles or config | `haiku` | `low` |
-| Anything else | `sonnet` | `medium` |
+| Job | Models, in order |
+|---|---|
+| `/fix` or `/axonshaft`, when the repo's checks can run | `haiku`, `sonnet`, `opus` |
+| `/fix` or `/axonshaft`, when the checks' programs aren't on the runner | `sonnet`, `opus` |
+| `/ask` | `haiku`, `sonnet`, `opus` |
+| A review of only docs, comments, lockfiles or config | `haiku`, `sonnet` |
+| Any other review | `sonnet`, `opus` |
+| A review that touches a `focus` path or a sensitive one: auth, crypto, payments, billing, workflows, migrations, or dependencies in `package.json` | `opus` |
 
-- A model or effort set on the dashboard turns `auto` off for that one only.
-- On a deep review the subagents run on `sonnet` when the model is `auto`, and on the set model when it isn't.
-- If the Claude plan can't use the model `auto` picked, the review falls back to the next smaller one, and the footer's table has a Fallback row.
-- The footer shows the model, the effort and the tokens the run used, and its table adds why `auto` picked them (see [the summary comment](#the-summary-comment)).
+- An attempt doesn't work when its session fails, runs out of turns, or gives a reply that doesn't match the format. For a task it also doesn't work when a check that ran fails, when it changes files a bare `/fix` may not change, or when a `/fix` changes nothing. A review also doesn't work when it's partial: more than a third of the checklists it should run come back not checked, the model says it only partly reviewed the diff, or its confidence is under 60%. The last rung's partial review is posted as it is. On a lower rung a reply that doesn't match the format moves up a model instead of asking the same one again.
+- Each attempt is a new session, and a task's starts from a clean checkout. It gets the earlier attempt's failure, marked as data, and not its transcript.
+- Where the ladder starts:
+  - `/ask`, and `/fix` or `/axonshaft` with words: Haiku rates the request first, at low effort, from the comment, the open findings' titles and the pull request's size, with no diff and no file. `simple` starts at `haiku`, `normal` at `sonnet` and `hard` at `opus`, never below the job's first rung. When the rating fails, the run starts on the first rung.
+  - A bare `/fix`: at `sonnet` when a finding is blocking or from the security check, or there are more than 5, else at `haiku`. No model rates it.
+  - A review: from the table, and never below what its size asks for. Over 2,000 changed lines (after `skip`) it starts at `opus`, and over 400 never below `sonnet`.
+- Haiku is skipped when the prompt is over about 100,000 tokens.
+- A model or effort set on the dashboard runs as set: no rating and no ladder. A deep review runs `opus` at `high` effort, with its subagents on `sonnet` when the model is `auto` and on the set model when it isn't.
+- If the Claude plan can't use a model, the run falls back to the next smaller one, and the footer's table has a Fallback row.
+- The footer shows the model, the effort and the tokens the run used, the tokens of every attempt and the rating included. Its table adds why `auto` picked the ladder, the rating and its reason ("Triage"), and each model that didn't work and why ("Tried first"), such as "partial review: 5 of 7 checklists not checked". The dashboard gets the model that ran, with the ones tried before it in parentheses.
 
 ### The turn limit by size
 
@@ -273,6 +292,8 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 | Under 100 lines | 12 |
 | Under 500 lines | 20 |
 | 500 lines or more, or a deep review | 30 |
+
+A bare `/fix` of fewer than 4 findings for the model gets 12 turns, and of fewer than 8 gets 20. Any other task gets 30.
 
 - A limit set on the dashboard always wins.
 - The action knows the limit wasn't set when the Axon Shaft API marks it as its default. With an API too old to say so, the review uses the limit the API sent.
@@ -295,7 +316,7 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
    It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
 7. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
 8. A footer, one small line that opens into a table. The line gives the model by name, the effort, the tokens and the changed lines, such as `Claude Sonnet 5.5, medium effort · 62k tokens, 219 lines`. On an API key the cost follows the tokens (`62k tokens · $0.38, 219 lines`). With no token counts the tokens are left out, and a run with no model call reads `no model call · 219 lines`.
-   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
+   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the rating and the models tried first, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the permissions the app's installation hasn't approved yet, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
    Billed is cache-weighted: a cache read counts as 0.1 of an input token and a cache write as 1.25, so it can come out above the total when a run writes a lot of cache. A note under the table says so.
    The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
@@ -330,6 +351,14 @@ The action shows that a review is running without anything that emails people:
 
 The check run needs Checks (write) on the run's token. Without it the review still posts, the job log warns once, and the action skips the other check runs. If GitHub refuses a step's update, the job log warns once and the check gets no more step updates. The review carries on, and the check still gets its result at the end. A dry run logs the check, each step's title and the reaction, and posts none of them.
 
+### When a run is cancelled or stops early
+
+No check run stays in progress after the run ends, and the summary comment never stays on "Reviewing":
+
+- When the workflow is cancelled (a newer push with `cancel-in-progress: true`, someone pressing Cancel, or the job's `timeout-minutes`), GitHub stops the step. The action then closes each check run it left in progress as cancelled, with the summary "The workflow was cancelled before the review finished." The summary comment shows the `cancelled` card in place of "Reviewing", the 👀 on a `/review` comment becomes 😕, and the run is recorded on the dashboard with the `cancelled` code. This takes at most 5 seconds, then the Claude session stops.
+- If the review fails, a check run still in progress fails with the failure's card and message, and the summary comment shows the same card.
+- The action also has a post step that GitHub runs at the end of the job, after a cancel too. If the step was killed before it could clean up, the post step closes what's left the same way. After a normal run it does nothing.
+
 ### The merge gates check
 
 When the project has merge gates, the action also posts a check run named `Axon Shaft / gates` on the reviewed commit, with the gates' table as its summary.
@@ -353,18 +382,30 @@ The action also posts one check run per review check on the reviewed commit, nam
 
 - `Axon Shaft / rules` is posted only when the repo's own checks found something, as the card's chip is.
 - Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
-- The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run once its matching update ships. Until then it asks only when the project has merge gates, so on a project without gates the job log warns once and the review posts as usual.
+- The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run. Until an admin approves Checks (write) on the installation, the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.
 
-When the job has [checklists](#checklists), each checklist gets its own check run instead, named after its key in the job's order, such as `Axon Shaft / access-control`, or `Axon Shaft / own-1` for the project's own checklists. A checklist that didn't run is `skipped`, and its title says why: "No matching files changed", or, for a script checklist, that this version of the action doesn't have its script yet.
+When the job has [checklists](#checklists), each checklist gets its own check run instead, named after its key in the job's order, such as `Axon Shaft / access-control`, or `Axon Shaft / own-1` for the project's own checklists. A checklist that didn't run is `skipped`, and its title says why: "No matching files changed", "Only files it leaves out changed", or, for a script checklist, that this version of the action doesn't have its script yet.
 
 ### Inline comments
 
 - One inline comment per blocking or should-fix finding, on its lines in the diff. Nits get one too when the dashboard says to post them inline.
-- A finding that already has an inline comment isn't posted again on the next push.
+- A finding that already has an inline comment isn't posted again on the next push, even when the push moved it a line or two: a finding with the same file and title as one in the last review, at most 2 lines away, is that finding.
 - When a push fixes a finding, its thread is resolved.
 
 A dry run prints the same text to the job log.
+
+### Private draft advisories
+
+With "Private draft advisories" on for the repo, a blocking finding from the security check goes into a private draft security advisory on the repo, before the review posts anything. The Axon Shaft API opens the draft with its own token, so the action never holds Repository security advisories write. It asks for the first 3 of these findings on each review, and a later review of the same finding gets the draft it already has.
+
+- On a public repo the PR thread gets a short note in place of the details. The finding's title reads "Security issue, reported privately", and its text says the details are in a private draft security advisory that the repo's admins and security managers can open, with the link. The inline comment, the summary, the `Axon Shaft / security` check run and the run's page on the dashboard all show only the note, and the suggested change is dropped. The finding stays blocking, so the security check still fails.
+- On a private repo the finding keeps its text and links to its draft.
+- If the draft can't be opened (the API refuses, the AxonShaft app hasn't been approved for Repository security advisories write, or the call fails), the finding is posted as it would be without the setting. The job log warns, and the summary has a "Draft advisories" line naming the finding's fingerprint and the reason.
+- Publishing the advisory, requesting a CVE and setting its severity are up to the repo's maintainers on GitHub. Every draft starts at high severity.
+- A dry run logs `Would open a draft advisory for <fingerprint>` and opens none.
+
+Outside a dry run, the job log never shows a finding's text, since anyone can read it on a public repo. Its tool lines name only paths and patterns, and a reply that doesn't match the format is logged by its field names.
 
 ### The job log
 
@@ -377,7 +418,9 @@ The job log folds each step into its own group, with how long it took:
 5. Post the review
 
 The Review group lists each tool call the model made, such as `Read src/pay.ts` or `Grep retry\(`.
-A deep pass's calls carry its name first, such as `[security] Grep exec\(`. The run's page on the dashboard shows this log once the job ends.
+A deep pass's calls carry its name first, such as `[security] Grep exec\(`. A Bash call that fails gets one more line with the command and the first and last lines it printed, such as `Bash failed: socat -V: Exit code 127, bwrap: execvp socat: No such file or directory`. The run's page on the dashboard shows this log once the job ends.
+
+When the AxonShaft app's installation hasn't approved a permission the run wants, the Axon Shaft API mints the token without it and the log warns once for each, saying what to approve. The run carries on without whatever needs that permission, and the summary's footer table lists it under "Missing permissions".
 
 ## What the review can do
 
@@ -396,7 +439,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
   So the OIDC request token, the action's inputs, `GITHUB_TOKEN` and the GitHub token from the API are never there.
   The commands the model runs don't get the Claude token either.
 - The prompt has the PR's title, body, commits and diff, and only the comments of people inside the repo: its owners, members and collaborators, and anyone GitHub's permission check gives admin or write access, such as a teammate with access through an org team. The action asks that check once per commenter. Comments from anyone else are left out, and so are those of a commenter it couldn't check, with a warning in the job log.
-- Images are stripped from everything the model writes before it's posted, so an image URL can't carry data out.
+- In everything the model writes before it's posted, an image stays only when it loads from `github.com`, `*.githubusercontent.com` or `shaft.axonpack.dev`. Any other image becomes a plain link with its alt text, which loads nothing until someone clicks it, so an image URL can't carry data out. The action's own cards stay.
 - The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments `axonshaft[bot]` wrote, so a copy posted by someone else is ignored.
 - Before anything is posted, the action replaces the tokens it holds with `***`. It masks every token in the job log.
 
@@ -411,7 +454,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 
 The step fails with a message that says what to do. The job summary shows a card for the failure, the same message and, when there is one, a link to where to fix it.
 
-The card is an image of the failure's code from `https://shaft.axonpack.dev/errors/<code>.svg`. When the review itself fails, the PR's summary comment shows the same card, message and link.
+The card is an image of the failure's code from `https://shaft.axonpack.dev/errors/<code>.svg`, and it links to the code's entry in the docs, `https://shaft.axonpack.dev/docs/reference/codes#<code>`. When the review itself fails, the PR's summary comment shows the same card, message and link.
 
 ### Codes from the Axon Shaft API
 
@@ -432,8 +475,9 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `missing_id_token` | The workflow has no `permissions: id-token: write`, so the action can't sign in to the API. |
 | `api_unreachable` | The action couldn't reach the API, or the API took over 30 seconds to answer. |
 | `review_timed_out` | The review, reply or task ran past the time limit set on the dashboard. The link opens the dashboard. |
-| `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. Both replies are in the job log, and the link opens the run. |
+| `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. The job log names each reply's fields, without their text, and the link opens the run. |
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
+| `claude_binary_unverified` | The Claude Code binary downloaded from npm didn't match the sha512 the release records, or the release has no hash for the runner's platform, so it wasn't run. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
 | `self_hosted_unsupported` | A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran. |
 | `credentials_in_checkout` | A task's checkout kept a token in `.git/config`, so no session ran. Set `persist-credentials: false` on `actions/checkout`. |
@@ -441,19 +485,19 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 
 ### Runs that end with a notice
 
-These end with a notice, and the step passes:
+These end with a notice, and the step passes. A notice with a code ends with a link to the code's entry in the docs. The API's own reasons get a code only from an API that sends one; with an older API the notice has no link.
 
-- a fork's pull request on `pull_request`;
+- a fork's pull request on `pull_request` (`fork_pull_request`);
 - a job that's off for the event;
 - a fork's pull request the dashboard holds back;
-- a `/review`, `/ask`, `/fix` or `/axonshaft` from someone without write access;
-- a `/ask`, `/fix` or `/axonshaft` on an issue;
+- a `/review`, `/ask`, `/fix` or `/axonshaft` from someone without write access (`no_write_access`);
+- a `/review`, `/ask`, `/fix` or `/axonshaft` on an issue (`not_a_pull_request`);
 - a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
 - a bare `/fix` with nothing to fix (`nothing_to_fix`);
 - a `/fix` or `/axonshaft` on a self-hosted runner (`self_hosted_unsupported`);
 - a `/fix` or `/axonshaft` whose checkout kept a token in `.git/config` (`credentials_in_checkout`);
 - a `/fix` or `/axonshaft` on a runner that can't start the sandbox (`sandbox_unavailable`);
-- a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap.
+- a project or account at its monthly spending cap (`spending_cap`), until the 1st (UTC) or until an admin raises the cap. The job summary shows its card too.
 
 Any other error, such as GitHub's API failing, fails the step with that error's message.
 
@@ -484,16 +528,25 @@ The guides set the standards the review checks against, such as needing a test o
 An Axon Shaft API that sends the job's checklists also sends the prompt with its steps left open. The action then decides which checklists run on this pull request:
 
 - A checklist runs when a changed file, after `skip`, matches one of its `paths`. `**` matches any change, including files under folders such as `.github/`.
-- A script checklist runs a script built into the action in place of the model. The script reads the diff, the pull request's description, the guides and files in the checkout. It never runs the repo's code, and only `osv` calls the network. Its findings are posted like the model's, inline and in the summary, and set its check run. A blocking or should-fix finding from a script raises the review's verdict. When only script checklists run, no model is called. The action has these scripts so far:
+- A checklist the API sends with `exclude` globs, as a community checklist can, never looks at the changed files that match them. When every file it would cover matches one, it's skipped. Otherwise its step tells the model to leave those files out.
+- A script checklist runs a script built into the action in place of the model. The script reads the diff, the pull request's description, the guides and files in the checkout. It never runs the repo's code, and only `osv`, `licences` and `code-quality` call the network. Its findings are posted like the model's, inline and in the summary, and set its check run. A blocking or should-fix finding from a script raises the review's verdict. When only script checklists run, no model is called. The action has these scripts so far:
   - `secrets` (Secrets): keys and tokens in a known format on added lines, such as AWS, GitHub, Anthropic, OpenAI, Stripe, Slack, Google and npm keys, and private keys. A finding names the kind of key and the line, never the value. Blocking.
   - `pr-meta` (Pull request basics): each section of `.github/pull_request_template.md` that the description leaves out or leaves empty, no linked issue when the template asks for one, and a title that isn't a Conventional Commit when a guide asks for them. Nits.
   - `env-vars` (Config and env vars): an env var read in an added line that no `.env.*` example file or Markdown doc in the repo names. Names the platform sets, such as `NODE_ENV`, `CI` and `GITHUB_*`, are left out. Should fix.
   - `schema-pairs` (Schema and migration in step): a database schema file changed with no migration in the pull request, or a migration with no schema change in a repo that has a schema file. Blocking.
-  - `osv` (Known vulnerabilities): each package version a lockfile adds or changes (from `deps-diff` below) is checked against the advisories on osv.dev. A finding names the advisory (its `GHSA-` ID when it has one), the package, its version, the versions that fix it and the line in the lockfile. Each advisory ID links to its page: GitHub's advisory page for a `GHSA-` ID, else the record on osv.dev. The finding's row in the summary and on its check run links to its most severe advisory, and the check run's details link goes there too. Blocking for an advisory rated high or critical, or a known malicious package; should fix for anything lower or unrated.
-    - Sent to osv.dev, in one `POST /v1/querybatch` (one per 1,000 versions): the ecosystem, name and version of each public package the pull request adds or changes. Then one `GET /v1/vulns/<id>` for each advisory found, to get its rating and fixed versions.
-    - Never sent: scoped packages (`@scope/name`), packages from a private registry, git or a URL, any npm package when the repo's `.npmrc`, `.yarnrc`, `.yarnrc.yml` or `bunfig.toml` sets a default registry other than npm's, any `requirements*.txt` package when the file names an index other than PyPI, Go modules under the repo's own owner in `go.mod`, versions the pull request removes or leaves as they were, and anything about the repo or who runs it. The `User-Agent` names only the action.
-    - When osv.dev fails or takes longer than 10 seconds, the action asks GitHub's advisory database instead (`GET /advisories?affects=<name>@<version>`), with the run's GitHub token, one call per version, for at most 50 versions. When both fail, the checklist is skipped with the reason, and never passes. Every call times out after 10 seconds, and the whole check after 60.
+  - `osv` (Known vulnerabilities): each package version a lockfile adds or changes (from `deps-diff` below) is checked against the advisories on osv.dev, which the Axon Shaft API looks up. A finding names the advisory (its `GHSA-` ID when it has one), the package, its version, the versions that fix it and the line in the lockfile. Each advisory ID links to its page: GitHub's advisory page for a `GHSA-` ID, else the record on osv.dev. The finding's row in the summary and on its check run links to its most severe advisory, and the check run's details link goes there too. Blocking for an advisory rated high or critical, or a known malicious package; should fix for anything lower or unrated.
+    - Sent to the Axon Shaft API, in one `POST /v1/packages/check` (one per 1,000 versions), with the run's OIDC token: the ecosystem, name and version of each public package the pull request adds or changes, each once. The API asks osv.dev, with GitHub's advisory database as its fallback, and keeps each version's answer for a day. A version it couldn't check counts as unchecked: when some are and nothing was found, the checklist is skipped. When the API refuses, the checklist is skipped with the API's reason, and never passes.
+    - With an Axon Shaft API older than `POST /v1/packages/check` (it answers `404`, or `403` without a JSON error), the action asks osv.dev itself, as 1.9 did: one `POST /v1/querybatch` per 1,000 versions with the same names and versions, then one `GET /v1/vulns/<id>` for each advisory found, to get its rating and fixed versions.
+    - Never sent: scoped packages (`@scope/name`), packages from a private registry, git or a URL, any npm package when the repo's `.npmrc`, `.yarnrc`, `.yarnrc.yml` or `bunfig.toml` sets a default registry other than npm's, any `requirements*.txt` package when the file names an index other than PyPI, Go modules under the repo's own owner in `go.mod`, versions the pull request removes or leaves as they were, and anything about the repo or who runs it. On osv.dev the `User-Agent` names only the action.
+    - On an older API, when osv.dev fails or takes longer than 10 seconds, the action asks GitHub's advisory database instead (`GET /advisories?affects=<name>@<version>`), with the run's GitHub token, one call per version, for at most 50 versions. When both fail, the checklist is skipped with the reason, and never passes. Every call times out after 10 seconds, and the whole check after 60.
     - To stop sending anything, turn off Known vulnerabilities in the job on the dashboard. There's no separate setting yet.
+  - `licences` (Licences): the licence of each public npm, PyPI or crates.io package a lockfile adds (from `deps-diff` below; upgrades of a package the repo already had are left out). The action sends the Axon Shaft API (`POST /v1/packages/check`) only the ecosystem, name and version of each, with the same rules for what is never sent as `osv`. The API reads the licence the registry declares and says whether it's on the deny list: strong copyleft (GPL, AGPL, SSPL or OSL), where a licence that offers a choice is denied only when every choice is. Blocking for a denied licence; should fix for a package whose registry declares none. Go modules aren't checked, since their registry declares no licence.
+    - With an API older than `POST /v1/packages/check`, or when the API refuses, the checklist is skipped with the reason, and never passes. When some packages went unchecked and nothing was found, it's skipped too.
+    - To stop sending anything, turn off Licences in the job on the dashboard.
+  - `code-quality` (GitHub Code Quality findings): GitHub Code Quality's open findings on the lines the pull request changes. The action asks the Axon Shaft API for them (`POST /v1/code-quality`, with the run's OIDC token and an empty body), and the API reads them from GitHub with the AxonShaft app's Code quality (read) permission. Nothing from the checkout or the diff is sent. A finding counts when its first line falls inside a hunk of the base file, and it's reported at that hunk's first line in the pull request. GitHub's `error` findings are should fix, and the rest are nits. The finding's text is GitHub's message, then its number, such as "Finding #12 on the default branch, under the repo's Security and quality tab, Code quality." GitHub gives no page for a finding, so it has no link.
+    - Code Quality's findings are the default branch's, so a pull request into another branch skips the checklist and says so.
+    - When the API refuses (Code Quality isn't on for the repo, or the installation hasn't approved Code quality (read)), the checklist is skipped with the API's reason, and never passes.
+    - It's in no template, so add it to the job on the dashboard to use it. Code Quality is a paid GitHub feature for organization repos on GitHub Team and Enterprise Cloud.
 - A script checklist whose script the action doesn't have yet is skipped. So is one whose script can't do its check, with the reason on its check run.
 - A `script+model` checklist runs in the model like any other checklist, and its pre-step adds facts for the model after the steps, under "Facts from the pre-steps". Each pre-step runs once, however many checklists use it, and its facts are cut at about 4,000 tokens. When a pre-step fails, its facts say why and the checklist still runs. The action has these pre-steps so far:
   - `deps-diff` (Dependencies, Supply chain): each package a lockfile adds, removes or changes, with its versions before and after and its line in the lockfile. It compares the base branch's copy, read through the GitHub API, with the checkout's, and never runs a package manager. It reads `package-lock.json` and `npm-shrinkwrap.json` (npm 7 and later), `bun.lock`, `yarn.lock` (Yarn 1 and 2+), `pnpm-lock.yaml` (pnpm 8 and later), the pinned `==` lines of `requirements*.txt`, `poetry.lock`, `uv.lock`, `Cargo.lock` and `go.sum`. A version that doesn't come from the public registry is marked as such.
@@ -513,6 +566,13 @@ An Axon Shaft API that sends the job's checklists also sends the prompt with its
   - `locale-keys` (Translations): the keys each changed JSON locale file adds, against the base branch's copy, and which of them each other locale lacks. Locale files sit under a `locales`, `locale`, `i18n`, `lang`, `langs`, `translations` or `messages` folder, named by locale (`en.json`) or in a folder per locale (`en/common.json`).
   - `raw-values` (Theme and design tokens): hex, `rgb()` and `hsl()` colours, pixel sizes and React Native sizes such as `marginTop: 8` on added lines of UI and style files, and the repo's theme and token files. Lines in the theme and token files themselves are left out.
   - `native-changes` (Native and store): the native files the pull request changes (`ios/`, `android/`, `app.json`, `app.config.*`, `eas.json`, podspecs, entitlements and privacy manifests), the React Native, Expo and Capacitor packages its `package.json` files add, remove or change, and each app config's `runtimeVersion` and `version` before and after.
+  - Five pre-steps run a pinned linter (below) and hand the model its report:
+    - `actionlint` (GitHub workflows): each third-party action an added line in a workflow or `action.yml` uses without pinning it to a commit SHA (`actions/*`, local and `docker://` actions left out), each added `permissions: write-all`, then actionlint's report on the changed workflows, with the repo's `.github/actionlint.yaml` and without shellcheck or pyflakes. When actionlint can't run, the scan still comes back, with the reason.
+    - `hadolint` (Containers): hadolint's report on the changed Dockerfiles, with the repo's `.hadolint.yaml`. Compose files are left to the model.
+    - `tflint` (Infrastructure as code): tflint's report on each folder with a changed `.tf` or `.tfvars` file, with its built-in Terraform rules only. The repo's `.tflint.hcl` and plugins are never read, since a plugin is a program, and modules aren't followed. Kubernetes, Helm and CloudFormation files are left to the model.
+    - `migration-lint` (Database migrations): squawk's report on the changed SQL files, with the repo's `.squawk.toml`.
+    - `contract-diff` (HTTP and schema contracts): oasdiff's breaking changes between the base branch's copy of each changed `openapi.*` file and the pull request's (10 files at most), and `buf breaking` on every `.proto` file and buf config in the checkout against the same tree with the base branch's copies of the changed ones. GraphQL schemas are left to the model.
+- The pinned linters: actionlint 1.7.12, hadolint 2.15.1, tflint 0.66.0, squawk 2.71.0, oasdiff 1.37.0 and buf 1.75.0, in `src/consts/tools.const.ts`. Each is downloaded once a run into `RUNNER_TEMP`, only from that project's own GitHub release, and unpacked and run only once its sha256 matches the one this release records: the hash the project publishes beside its release (squawk publishes none, so its hash is of the file as this release downloaded it). The API never names a tool, a version, a URL or a hash. The linter runs in the bubblewrap sandbox with no network, on copies of the changed files in an empty folder it can only read, with the runner's allowed environment, for 60 seconds and 5 MB of output at most. They run only on Linux runners on x64 or arm64. When a linter can't be installed (another platform, no sandbox, a failed download or a hash that doesn't match), its facts say why, and the checklist runs on the model alone.
 - The run's data comes first in the prompt and the steps come last, numbered from 1: the steps that always run first, the step of each checklist that runs, then the job's own instructions and the steps that always run last. Everything before the steps is the same whichever checklists run.
 - A finding's `step` can only name a checklist that runs.
 - When no checklist runs, no model is called. The summary comment says so, with a chip for each checklist, and each check run is skipped. A project with merge gates still gets a review, because only the model can judge the gates.
@@ -527,8 +587,10 @@ bun install
 bun run lint
 bun run typecheck
 bun run test
-bun run build   # writes dist/index.js, which is committed
+bun run build   # writes dist/index.js and dist/post.js, which are committed
 ```
+
+Before the bundle, the build writes `src/consts/claude-binary.const.ts`: the sha512 `bun.lock` records for each platform's Claude Code binary package, which the action checks its download against. It also writes `dist/meta.json`, which is committed too: the action's version, inputs and outputs, the codes it reports with what each means, its pre-step script keys, the guide files it reads and their size caps, and the lockfiles it parses. The Axon Shaft docs are generated from a copy of it.
 
 The sandbox tests that start bubblewrap run only on Linux, and skip elsewhere with the reason. To run them from macOS, use a Linux container with bubblewrap and git, as a user other than root. It must be `--privileged`, because Docker's masked `/proc` stops bubblewrap from mounting its own:
 
@@ -546,7 +608,7 @@ How the code is laid out and how files are named: [CONVENTIONS.md](CONVENTIONS.m
 Versions are kept with [Changesets](https://github.com/changesets/changesets), and the action ships from git tags.
 
 1. A PR that changes something users would notice adds a changeset. Run `bun run changeset`, pick the bump, and describe the change in a line or two.
-2. Each push to `main` with changesets pending opens or refreshes the Version Packages PR. It raises the version in `package.json`, adds the changes to `CHANGELOG.md` and rebuilds `dist/index.js`.
+2. Each push to `main` with changesets pending opens or refreshes the Version Packages PR. It raises the version in `package.json`, adds the changes to `CHANGELOG.md` and rebuilds `dist/index.js` and `dist/post.js`.
 3. Merging that PR releases the version, for example `2.1.3`. The release workflow tags the merge commit `v2.1.3`, moves the `v2` tag to the same commit, and creates a GitHub Release with that version's changelog.
 
 Workflows that use `axonpack/shaft-actions@v1` get every 1.x release. To stay on one version, use `@v1.1.0`. A run on a pinned version that's older than the newest v1 release gets a line about it under the summary card, and the project's overview on the dashboard shows the same to admins.
