@@ -90,6 +90,7 @@
     "env-vars",
     "schema-pairs",
     "osv",
+    "licences",
     "code-quality"
   ],
   "facts": [

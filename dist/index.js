@@ -59416,12 +59416,30 @@ var envVars = ({ files, checkout }) => {
   }));
 };
 
+// src/services/prestep/packages-check.service.ts
+var packageKey = (p) => `${p.ecosystem}:${p.name}@${p.version}`;
+var BATCH = 1000;
+async function checkPackages(pins, check) {
+  const packages = [...new Map(pins.map((p) => [packageKey(p), { ecosystem: p.ecosystem, name: p.name, version: p.version }])).values()];
+  const found = new Map;
+  for (let i = 0;i < packages.length; i += BATCH) {
+    const answer = await callNewApi("/v1/packages/check", { packages: packages.slice(i, i + BATCH), check: [check] });
+    if (answer === undefined)
+      return;
+    if (!Array.isArray(answer?.[check]))
+      throw new Error("The Axon Shaft API sent an incomplete answer");
+    for (const v of answer[check])
+      found.set(packageKey(v), v);
+  }
+  return found;
+}
+
 // src/services/prestep/osv.service.ts
 var OSV = "https://api.osv.dev/v1";
 var USER_AGENT = "axon-shaft-action";
 var CALL_MS = 1e4;
 var TOTAL_MS = 60000;
-var BATCH = 1000;
+var BATCH2 = 1000;
 var GITHUB_MAX = 50;
 var GITHUB_ECOSYSTEM = { npm: "npm", PyPI: "pip", Go: "go", "crates.io": "rust" };
 var RANK = { critical: 4, high: 3, moderate: 2, medium: 2, low: 1 };
@@ -59450,8 +59468,8 @@ function fromOsvRecord(v, name) {
 }
 async function fromOsv(pins, signal) {
   const ids = [];
-  for (let i = 0;i < pins.length; i += BATCH) {
-    const queries = pins.slice(i, i + BATCH).map((p) => ({ package: { name: p.name, ecosystem: p.ecosystem }, version: p.version }));
+  for (let i = 0;i < pins.length; i += BATCH2) {
+    const queries = pins.slice(i, i + BATCH2).map((p) => ({ package: { name: p.name, ecosystem: p.ecosystem }, version: p.version }));
     const { results } = await getJson(`${OSV}/querybatch`, signal(), { queries });
     for (const r of results)
       ids.push((r.vulns ?? []).map((v) => v.id));
@@ -59480,22 +59498,6 @@ function fromGitHub(octokit, pins, signal) {
       })
     }));
   }));
-}
-var key = (p) => `${p.ecosystem}:${p.name}@${p.version}`;
-async function fromApi(pins) {
-  const packages = [...new Map(pins.map((p) => [key(p), { ecosystem: p.ecosystem, name: p.name, version: p.version }])).values()];
-  const found = new Map;
-  for (let i = 0;i < packages.length; i += BATCH) {
-    const answer = await callNewApi("/v1/packages/check", { packages: packages.slice(i, i + BATCH), check: ["vulnerabilities"] });
-    if (answer === undefined)
-      return;
-    if (!Array.isArray(answer?.vulnerabilities))
-      throw new Error("The Axon Shaft API sent an incomplete answer");
-    for (const v of answer.vulnerabilities)
-      if (Array.isArray(v.advisories))
-        found.set(key(v), v.advisories);
-  }
-  return pins.map((p) => found.get(key(p)));
 }
 async function direct(octokit, pins) {
   const total = AbortSignal.timeout(TOTAL_MS);
@@ -59538,13 +59540,48 @@ var osv = async (input) => {
   const pins = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) => changes.flatMap((c) => c.to.filter((p) => p.public && !p.name.startsWith("@")).map((p) => ({ ...p, file, ecosystem }))));
   if (!pins.length)
     return [];
-  const api = await fromApi(pins);
-  const found = api ?? await direct(input.octokit, pins);
+  const api = await checkPackages(pins, "vulnerabilities");
+  const found = api ? pins.map((p) => api.get(packageKey(p))?.advisories) : await direct(input.octokit, pins);
   const checked = pins.filter((_, i) => found[i]).length;
   if (checked < pins.length && !found.some((a) => a?.length)) {
     throw new Error(`${api ? "The Axon Shaft API" : "GitHub's advisory database"} checked only ${checked} of the ${pins.length} versions, finding nothing.`);
   }
   return pins.flatMap((p, i) => found[i]?.length ? [finding(p, found[i])] : []);
+};
+
+// src/services/prestep/licences.service.ts
+var DECLARED = ["npm", "PyPI", "crates.io"];
+var licences = async (input) => {
+  const pins = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) => DECLARED.includes(ecosystem) ? changes.flatMap((c) => c.kind === "added" ? c.to.filter((p) => p.public && !p.name.startsWith("@")).map((p) => ({ ...p, file, ecosystem })) : []) : []);
+  if (!pins.length)
+    return [];
+  const api = await checkPackages(pins, "licences");
+  if (!api)
+    throw new Error("The Axon Shaft API doesn't look up licences yet, so no package was checked.");
+  const found = pins.flatMap((p) => {
+    const l = api.get(packageKey(p));
+    if (!l || !l.denied && l.licence !== "unknown")
+      return [];
+    return [
+      l.denied ? {
+        severity: "blocking",
+        file: p.file,
+        line: p.line,
+        title: `${p.name} ${p.version} is licensed ${l.licence}`,
+        body: `\`${p.name}\` ${p.version} declares the licence \`${l.licence}\`, which is strong copyleft and on the deny list. Pick another package, or say in the pull request why it's fine here.`
+      } : {
+        severity: "should-fix",
+        file: p.file,
+        line: p.line,
+        title: `${p.name} ${p.version} declares no licence`,
+        body: `\`${p.name}\` ${p.version} declares no licence on ${p.ecosystem}, so it isn't clear the project may use it. Check the package's own licence file, or pick another package.`
+      }
+    ];
+  });
+  const checked = pins.filter((p) => api.has(packageKey(p))).length;
+  if (checked < pins.length && !found.length)
+    throw new Error(`The Axon Shaft API checked only ${checked} of the ${pins.length} licences, finding nothing.`);
+  return found;
 };
 
 // src/services/prestep/pr-meta.service.ts
@@ -60364,7 +60401,7 @@ var nativeChanges = async ({ files, checkout, base }) => {
 };
 
 // src/services/prestep/prestep.service.ts
-var SCRIPTS = { secrets: secrets2, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, "code-quality": codeQuality };
+var SCRIPTS = { secrets: secrets2, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, licences, "code-quality": codeQuality };
 var FACTS = {
   "deps-diff": depsDiffFacts,
   changeset,

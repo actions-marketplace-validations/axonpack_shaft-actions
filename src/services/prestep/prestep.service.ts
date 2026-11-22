@@ -6,6 +6,7 @@ import type { Finding } from '../../utils/render.util';
 import { depsDiffFacts } from './deps-diff.service';
 import { envVars } from './env-vars.service';
 import { osv } from './osv.service';
+import { licences } from './licences.service';
 import { prMeta } from './pr-meta.service';
 import { schemaPairs } from './schema-pairs.service';
 import { secrets } from './secrets.service';
@@ -28,7 +29,7 @@ import { rawValues } from './raw-values.service';
 import { nativeChanges } from './native-changes.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
-export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv, 'code-quality': codeQuality };
+export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv, licences, 'code-quality': codeQuality };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */
 export const FACTS: Record<string, Facts> = {
