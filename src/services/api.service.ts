@@ -153,6 +153,16 @@ export async function callApi(path: string, body: unknown): Promise<unknown> {
 }
 
 /**
+ * Like `callApi`, but undefined when the API is older than `path`: its 404, or the 403 its guard gives
+ * a path it doesn't know, neither with the JSON error every route of the API sends.
+ */
+export async function callNewApi(path: string, body: unknown): Promise<unknown> {
+  const res = await post(path, body);
+  if ((res.status === 403 || res.status === 404) && typeof (await res.clone().json().catch(() => undefined))?.error !== 'string') return undefined;
+  return answer(res);
+}
+
+/**
  * Whether to run, and this repo's GitHub token, Claude token, settings and job from the Axon Shaft API.
  * Both tokens are masked. It also sends this build's version and the ref the workflow runs it at
  * (`v1`, `v1.5.0`, a branch or a SHA), so the API can say when a newer release is out.

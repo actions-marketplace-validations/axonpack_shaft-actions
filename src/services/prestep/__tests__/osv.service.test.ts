@@ -3,20 +3,26 @@ import type { ScriptInput } from '../../../types/prestep.type';
 import { changed, input } from './fixtures/input';
 import { lockInput } from './fixtures/lockfile';
 
-vi.mock('@actions/core', () => ({ warning: () => {} }));
+vi.mock('@actions/core', () => ({ warning: () => {}, getIDToken: async () => 'oidc' }));
 const { osv } = await import('../osv.service');
 
+const API = 'https://api-shaft.axonpack.dev/v1/packages/check';
 /** osv.dev's records by ID, and the IDs each `name@version` matches. */
 let records: Record<string, object> = {};
 let matches: Record<string, string[]> = {};
 let osvDown = false;
-/** Every request the fake osv.dev got: the method and URL, and the body of a POST. */
+/** The Axon Shaft API's answer to `POST /v1/packages/check`; by default an older API's, which has no such route. */
+let api: (body: any) => Response;
+const olderApi = () => new Response('', { status: 403 });
+/** Every request osv.dev or the API got: the method and URL, and the body of a POST. */
 const sent: string[] = [];
 
 beforeEach(() => {
-  [records, matches, osvDown, sent.length] = [{}, {}, false, 0];
+  [records, matches, osvDown, sent.length, api] = [{}, {}, false, 0, olderApi];
+  process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     sent.push(`${init.method} ${url}${init.body ? ` ${init.body}` : ''}`);
+    if (url === API) return api(JSON.parse(String(init.body)));
     expect((init.headers as Record<string, string>)['user-agent']).toBe('axon-shaft-action');
     if (osvDown) return new Response('', { status: 503 });
     if (url.endsWith('/querybatch')) {
@@ -61,7 +67,9 @@ test('one batch query for the public versions added or changed: a vulnerable one
     '`lodash` 4.17.21 has a published advisory:\n- [GHSA-35jh-r3h4-6jhm](https://github.com/advisories/GHSA-35jh-r3h4-6jhm) (high): A flaw in lodash. Fixed in 4.17.22.\nUpgrade to a fixed version, or say in the pull request why this one is safe here.',
   );
   expect(found[0]!.url).toBe('https://github.com/advisories/GHSA-35jh-r3h4-6jhm');
-  expect(sent).toEqual([
+  // The older API has no POST /v1/packages/check, so osv.dev is asked straight.
+  expect(sent[0]).toBe(`POST ${API} {"packages":[{"ecosystem":"npm","name":"lodash","version":"4.17.21"},{"ecosystem":"npm","name":"express","version":"4.18.2"}],"check":["vulnerabilities"]}`);
+  expect(sent.slice(1)).toEqual([
     'POST https://api.osv.dev/v1/querybatch {"queries":[{"package":{"name":"lodash","ecosystem":"npm"},"version":"4.17.21"},{"package":{"name":"express","ecosystem":"npm"},"version":"4.18.2"}]}',
     'GET https://api.osv.dev/v1/vulns/GHSA-35jh-r3h4-6jhm',
   ]);
@@ -143,4 +151,34 @@ test('when both fail, or the fallback checks only some versions and finds nothin
   );
   const many = input([changed('requirements.txt', [])], { 'requirements.txt': Array.from({ length: 60 }, (_, i) => `p${i}==1.0.0`).join('\n') }, github({}).extra);
   await expect(osv(many)).rejects.toThrow("GitHub's advisory database checked only 50 of the 60 versions, finding nothing.");
+});
+
+test('the Axon Shaft API answers: it gets only each public version once, osv.dev is never asked, and the findings read as before', async () => {
+  const advisory = { id: 'GHSA-35jh-r3h4-6jhm', url: 'https://github.com/advisories/GHSA-35jh-r3h4-6jhm', severity: 'high', summary: 'A flaw in lodash', fixed: ['4.17.22'] };
+  api = ({ packages }) => Response.json({ vulnerabilities: packages.map((p: any) => ({ ...p, advisories: p.name === 'lodash' ? [advisory] : [] })), licences: [] });
+  const found = await osv(lockInput('package-lock.json'));
+  expect(sent).toEqual([
+    `POST ${API} {"packages":[{"ecosystem":"npm","name":"lodash","version":"4.17.21"},{"ecosystem":"npm","name":"express","version":"4.18.2"}],"check":["vulnerabilities"]}`,
+  ]);
+  expect(show(found)).toEqual(['blocking package-lock.json:23 lodash 4.17.21 has a known vulnerability (GHSA-35jh-r3h4-6jhm)']);
+  expect(found[0]!.body).toBe(
+    '`lodash` 4.17.21 has a published advisory:\n- [GHSA-35jh-r3h4-6jhm](https://github.com/advisories/GHSA-35jh-r3h4-6jhm) (high): A flaw in lodash. Fixed in 4.17.22.\nUpgrade to a fixed version, or say in the pull request why this one is safe here.',
+  );
+  // The scoped, private and unchanged packages of a Bun lockfile never reach the API either.
+  sent.length = 0;
+  await osv(lockInput('bun.lock'));
+  for (const name of ['@acme/ui', 'internal-kit', 'tiny', 'left-pad', 'minimist']) expect(sent.join('\n')).not.toContain(name);
+});
+
+test("the API's refusal skips the checklist, versions it left out with nothing found throw, and an older API's 404 falls back to osv.dev", async () => {
+  api = () => Response.json({ error: 'packages_check_failed', message: "osv.dev and GitHub's advisory database both failed." }, { status: 502 });
+  await expect(osv(lockInput('package-lock.json'))).rejects.toThrow("osv.dev and GitHub's advisory database both failed.");
+  api = ({ packages }) => Response.json({ vulnerabilities: [{ ...packages[0], advisories: [] }], licences: [] });
+  await expect(osv(lockInput('package-lock.json'))).rejects.toThrow('The Axon Shaft API checked only 1 of the 2 versions, finding nothing.');
+  expect(sent.every((s) => s.startsWith(`POST ${API}`))).toBe(true);
+  api = () => new Response('Not Found', { status: 404 });
+  matches = { 'lodash@4.17.21': ['GHSA-x'] };
+  records = { 'GHSA-x': record('GHSA-x', 'lodash', 'LOW') };
+  expect(show(await osv(lockInput('package-lock.json')))).toEqual(['should-fix package-lock.json:23 lodash 4.17.21 has a known vulnerability (GHSA-x)']);
+  expect(sent.at(-2)).toContain('POST https://api.osv.dev/v1/querybatch');
 });

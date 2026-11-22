@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import type { Octokit } from '../../types/octokit.type';
 import type { NetworkScript } from '../../types/prestep.type';
 import type { Ecosystem, Pin } from '../../utils/lockfile.util';
+import { callNewApi } from '../api.service';
 import { depsDiff } from './deps-diff.service';
 
 const OSV = 'https://api.osv.dev/v1';
@@ -9,7 +10,7 @@ const OSV = 'https://api.osv.dev/v1';
 const USER_AGENT = 'axon-shaft-action';
 const CALL_MS = 10_000;
 const TOTAL_MS = 60_000;
-/** osv.dev's limit on one `querybatch`. */
+/** osv.dev's limit on one `querybatch`, and the API's on one `POST /v1/packages/check`. */
 const BATCH = 1000;
 /** GitHub's advisory API takes one package a call, so the fallback checks at most this many. */
 const GITHUB_MAX = 50;
@@ -87,6 +88,45 @@ function fromGitHub(octokit: Octokit, pins: Checked[], signal: Signal): Promise<
   );
 }
 
+const key = (p: { ecosystem: string; name: string; version: string }) => `${p.ecosystem}:${p.name}@${p.version}`;
+
+/**
+ * Each version's advisories from the Axon Shaft API, which asks osv.dev (GitHub's advisory database as
+ * its fallback) and keeps answers a day. It gets only the ecosystem, name and version of each, 1,000 a
+ * call. Undefined for a version it didn't check, and undefined in all when the API is older than
+ * `POST /v1/packages/check`. Its refusal throws.
+ */
+async function fromApi(pins: Checked[]): Promise<(Advisory[] | undefined)[] | undefined> {
+  const packages = [...new Map(pins.map((p) => [key(p), { ecosystem: p.ecosystem, name: p.name, version: p.version }])).values()];
+  const found = new Map<string, Advisory[]>();
+  for (let i = 0; i < packages.length; i += BATCH) {
+    const answer = (await callNewApi('/v1/packages/check', { packages: packages.slice(i, i + BATCH), check: ['vulnerabilities'] })) as
+      | { vulnerabilities?: { ecosystem: string; name: string; version: string; advisories: Advisory[] }[] }
+      | undefined;
+    if (answer === undefined) return undefined;
+    if (!Array.isArray(answer?.vulnerabilities)) throw new Error('The Axon Shaft API sent an incomplete answer');
+    for (const v of answer.vulnerabilities) if (Array.isArray(v.advisories)) found.set(key(v), v.advisories);
+  }
+  return pins.map((p) => found.get(key(p)));
+}
+
+/** Today's lookup without the API, for an API older than `POST /v1/packages/check`: osv.dev, then GitHub's advisory database. */
+async function direct(octokit: Octokit, pins: Checked[]): Promise<Advisory[][]> {
+  const total = AbortSignal.timeout(TOTAL_MS);
+  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
+  try {
+    return await fromOsv(pins, signal);
+  } catch (e) {
+    const why = (e as Error).message;
+    core.warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
+    try {
+      return await fromGitHub(octokit, pins.slice(0, GITHUB_MAX), signal);
+    } catch (e2) {
+      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${(e2 as Error).message}), so no package was checked.`);
+    }
+  }
+}
+
 /**
  * A package version's advisories as one finding: blocking when any is high or critical, and linked to
  * the most severe one's page. Records that alias each other are merged.
@@ -114,33 +154,23 @@ function finding(p: Checked, found: Advisory[]) {
 }
 
 /**
- * Advisories for each version a lockfile adds or changes, from osv.dev, or from GitHub's advisory
- * database when osv.dev fails. Only public packages are sent: never a scoped (`@x/y`) package, a
- * private registry's, git or URL package, or a version the pull request leaves as it was. When
- * neither source answers, this throws, so the checklist is skipped and never passes.
+ * Advisories for each version a lockfile adds or changes, from the Axon Shaft API, or straight from
+ * osv.dev and GitHub's advisory database on an older API. Only public packages are sent: never a
+ * scoped (`@x/y`) package, a private registry's, git or URL package, or a version the pull request
+ * leaves as it was. When no source answers, or some versions went unchecked and nothing was found,
+ * this throws, so the checklist is skipped and never passes.
  */
 export const osv: NetworkScript = async (input) => {
   const pins: Checked[] = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) =>
     changes.flatMap((c) => c.to.filter((p) => p.public && !p.name.startsWith('@')).map((p) => ({ ...p, file, ecosystem }))),
   );
   if (!pins.length) return [];
-  const total = AbortSignal.timeout(TOTAL_MS);
-  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
-  let found: Advisory[][];
-  try {
-    found = await fromOsv(pins, signal);
-  } catch (e) {
-    const why = (e as Error).message;
-    core.warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
-    try {
-      found = await fromGitHub(input.octokit, pins.slice(0, GITHUB_MAX), signal);
-    } catch (e2) {
-      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${(e2 as Error).message}), so no package was checked.`);
-    }
-    // Unchecked versions with nothing found would read as a pass.
-    if (pins.length > GITHUB_MAX && !found.flat().length) {
-      throw new Error(`osv.dev failed (${why}), and GitHub's advisory database checked only ${GITHUB_MAX} of the ${pins.length} versions, finding nothing.`);
-    }
+  const api = await fromApi(pins);
+  const found: (Advisory[] | undefined)[] = api ?? (await direct(input.octokit, pins));
+  // Unchecked versions with nothing found would read as a pass.
+  const checked = pins.filter((_, i) => found[i]).length;
+  if (checked < pins.length && !found.some((a) => a?.length)) {
+    throw new Error(`${api ? 'The Axon Shaft API' : "GitHub's advisory database"} checked only ${checked} of the ${pins.length} versions, finding nothing.`);
   }
   return pins.flatMap((p, i) => (found[i]?.length ? [finding(p, found[i])] : []));
 };

@@ -589,8 +589,9 @@ test("a script+model checklist runs in the model, with its pre-step's facts afte
 });
 
 test('a script that throws leaves its checklist not checked, with the reason, never passed', async () => {
-  // osv.dev is down, and the fake GitHub client has no advisory API.
-  vi.stubGlobal('fetch', async () => new Response('', { status: 503 }));
+  // The API is older, so osv.dev is asked straight, and it's down; the fake GitHub client has no advisory API.
+  process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
+  vi.stubGlobal('fetch', async (url: string) => new Response('', { status: url.endsWith('/v1/packages/check') ? 404 : 503 }));
   const vulns = { ...checklist('vulnerabilities', ['**/*.lock'], 'script'), prestep: 'osv' };
   const { outcome } = await review([file('bun.lock')], { checklists: [vulns], open: OPEN });
   vi.unstubAllGlobals();

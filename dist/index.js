@@ -58688,6 +58688,14 @@ async function answer(res) {
 async function callApi(path, body) {
   return answer(await post(path, body));
 }
+async function callNewApi(path, body) {
+  const res = await post(path, body);
+  if ((res.status === 403 || res.status === 404) && typeof (await res.clone().json().catch(() => {
+    return;
+  }))?.error !== "string")
+    return;
+  return answer(res);
+}
 async function fetchGrant(request) {
   const grant = await answer(await post("/v1/token", { ...request, action: { version: ACTION_VERSION, ref: process.env.GITHUB_ACTION_REF } }));
   if (grant?.run === false) {
@@ -59473,6 +59481,37 @@ function fromGitHub(octokit, pins, signal) {
     }));
   }));
 }
+var key = (p) => `${p.ecosystem}:${p.name}@${p.version}`;
+async function fromApi(pins) {
+  const packages = [...new Map(pins.map((p) => [key(p), { ecosystem: p.ecosystem, name: p.name, version: p.version }])).values()];
+  const found = new Map;
+  for (let i = 0;i < packages.length; i += BATCH) {
+    const answer = await callNewApi("/v1/packages/check", { packages: packages.slice(i, i + BATCH), check: ["vulnerabilities"] });
+    if (answer === undefined)
+      return;
+    if (!Array.isArray(answer?.vulnerabilities))
+      throw new Error("The Axon Shaft API sent an incomplete answer");
+    for (const v of answer.vulnerabilities)
+      if (Array.isArray(v.advisories))
+        found.set(key(v), v.advisories);
+  }
+  return pins.map((p) => found.get(key(p)));
+}
+async function direct(octokit, pins) {
+  const total = AbortSignal.timeout(TOTAL_MS);
+  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
+  try {
+    return await fromOsv(pins, signal);
+  } catch (e) {
+    const why = e.message;
+    warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
+    try {
+      return await fromGitHub(octokit, pins.slice(0, GITHUB_MAX), signal);
+    } catch (e2) {
+      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${e2.message}), so no package was checked.`);
+    }
+  }
+}
 function finding(p, found) {
   const byId = new Map;
   for (const a of found) {
@@ -59499,22 +59538,11 @@ var osv = async (input) => {
   const pins = (await depsDiff(input)).flatMap(({ file, ecosystem, changes }) => changes.flatMap((c) => c.to.filter((p) => p.public && !p.name.startsWith("@")).map((p) => ({ ...p, file, ecosystem }))));
   if (!pins.length)
     return [];
-  const total = AbortSignal.timeout(TOTAL_MS);
-  const signal = () => AbortSignal.any([total, AbortSignal.timeout(CALL_MS)]);
-  let found;
-  try {
-    found = await fromOsv(pins, signal);
-  } catch (e) {
-    const why = e.message;
-    warning(`osv.dev failed (${why}), so GitHub's advisory database is asked instead.`);
-    try {
-      found = await fromGitHub(input.octokit, pins.slice(0, GITHUB_MAX), signal);
-    } catch (e2) {
-      throw new Error(`osv.dev and GitHub's advisory database both failed (${why}; ${e2.message}), so no package was checked.`);
-    }
-    if (pins.length > GITHUB_MAX && !found.flat().length) {
-      throw new Error(`osv.dev failed (${why}), and GitHub's advisory database checked only ${GITHUB_MAX} of the ${pins.length} versions, finding nothing.`);
-    }
+  const api = await fromApi(pins);
+  const found = api ?? await direct(input.octokit, pins);
+  const checked = pins.filter((_, i) => found[i]).length;
+  if (checked < pins.length && !found.some((a) => a?.length)) {
+    throw new Error(`${api ? "The Axon Shaft API" : "GitHub's advisory database"} checked only ${checked} of the ${pins.length} versions, finding nothing.`);
   }
   return pins.flatMap((p, i) => found[i]?.length ? [finding(p, found[i])] : []);
 };
