@@ -1,5 +1,18 @@
 # shaft
 
+## 1.10.0
+
+### Minor Changes
+
+- 3103b45: - **Package lookups through the Axon Shaft API**: the `osv` script (Known vulnerabilities) sends `POST /v1/packages/check` the ecosystem, name and version of the public packages a pull request adds or changes, and the API asks osv.dev and GitHub's advisory database. It sends nothing else. With an older API, the action asks osv.dev itself, as 1.9 did.
+  - **Licences checklist**: a new `licences` script checks the licence each new public npm, PyPI or crates.io package declares, through the same API call. A strong copyleft licence (GPL, AGPL, SSPL, OSL) is blocking, and no declared licence is should-fix. It's skipped on an older API.
+- 4d9ef46: - **Pinned linters for five checklists**: GitHub workflows gets actionlint's report and a scan for unpinned actions and `permissions: write-all`, Containers hadolint's, Infrastructure as code tflint's, Database migrations squawk's, and HTTP and schema contracts oasdiff's and `buf breaking`'s. Each linter is pinned to one release, downloaded only from that project's GitHub release, checked against the sha256 this release records before it runs, and run in the sandbox with no network. When it can't run, the checklist runs on the model alone and the facts say why.
+
+### Patch Changes
+
+- d2b2d1d: - **Partial reviews move up the ladder**: on `auto`, a review that leaves more than a third of its checklists not checked, says it only partly reviewed the diff, or rates its confidence under 60% moves up a model, as a failed attempt does. The last model's partial review is posted as it is. The footer's Tried first row says why, such as "partial review: 5 of 7 checklists not checked".
+  - **Big reviews start higher**: over 2,000 changed lines after `skip`, a review starts at Opus, and over 400 lines it never starts below Sonnet.
+
 ## 1.9.0
 
 ### Minor Changes
