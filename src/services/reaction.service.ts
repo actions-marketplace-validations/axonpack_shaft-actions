@@ -52,14 +52,10 @@ export async function reactStart(octokit: Octokit, event: Event, dryRun: boolean
   return id === undefined ? undefined : { ...r, id };
 }
 
-/**
- * On a comment, swaps the 👀 for 🚀 when the run did its job, or 😕 when it failed or did nothing. On
- * the pull request it only takes the 👀 off, since the summary comment and the checks carry the result.
- * If removing 👀 fails, it stays.
- */
+/** Swaps the 👀 for 🚀 when the run did its job, or 😕 when it failed or did nothing. If removing 👀 fails, it stays. */
 export async function reactEnd(r: Reaction, done: boolean): Promise<void> {
   const [content, emoji] = done ? (['rocket', '🚀'] as const) : (['confused', '😕'] as const);
-  if (r.dryRun) return core.info(r.comment ? `Would swap 👀 for ${emoji} on ${where(r)}` : `Would remove 👀 from ${where(r)}`);
+  if (r.dryRun) return core.info(`Would swap 👀 for ${emoji} on ${where(r)}`);
   const ids = { owner: r.owner, repo: r.repo, reaction_id: r.id! };
   await (!r.comment
     ? r.octokit.rest.reactions.deleteForIssue({ ...ids, issue_number: r.pr! })
@@ -67,5 +63,5 @@ export async function reactEnd(r: Reaction, done: boolean): Promise<void> {
       ? r.octokit.rest.reactions.deleteForPullRequestComment({ ...ids, comment_id: r.comment.id })
       : r.octokit.rest.reactions.deleteForIssueComment({ ...ids, comment_id: r.comment.id })
   ).catch(warn(r, 'remove 👀'));
-  if (r.comment) await add(r, content).catch(warn(r, `add ${emoji}`));
+  await add(r, content).catch(warn(r, `add ${emoji}`));
 }

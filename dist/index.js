@@ -61561,11 +61561,10 @@ async function reactStart(octokit, event, dryRun, pr) {
 async function reactEnd(r, done) {
   const [content, emoji] = done ? ["rocket", "\uD83D\uDE80"] : ["confused", "\uD83D\uDE15"];
   if (r.dryRun)
-    return info(r.comment ? `Would swap \uD83D\uDC40 for ${emoji} on ${where2(r)}` : `Would remove \uD83D\uDC40 from ${where2(r)}`);
+    return info(`Would swap \uD83D\uDC40 for ${emoji} on ${where2(r)}`);
   const ids = { owner: r.owner, repo: r.repo, reaction_id: r.id };
   await (!r.comment ? r.octokit.rest.reactions.deleteForIssue({ ...ids, issue_number: r.pr }) : r.comment.review ? r.octokit.rest.reactions.deleteForPullRequestComment({ ...ids, comment_id: r.comment.id }) : r.octokit.rest.reactions.deleteForIssueComment({ ...ids, comment_id: r.comment.id })).catch(warn(r, "remove \uD83D\uDC40"));
-  if (r.comment)
-    await add(r, content).catch(warn(r, `add ${emoji}`));
+  await add(r, content).catch(warn(r, `add ${emoji}`));
 }
 
 // src/services/task.service.ts

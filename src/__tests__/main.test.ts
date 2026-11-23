@@ -264,15 +264,15 @@ test("pull_request sends the event, fork: false and the pull request, and review
     pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat', base: 'main', association: 'MEMBER', bot: false, labels: [] },
   });
   expect(checkedOut).toEqual([]);
-  // The 👀 goes on the pull request and comes off at the end, with nothing in its place.
-  await vi.waitFor(() => expect(reactions).toEqual(['eyes on 12', 'removed 77 from 12']));
+  // The 👀 goes on the pull request, swapped for 🚀 once the review is posted.
+  await vi.waitFor(() => expect(reactions).toEqual(['eyes on 12', 'removed 77 from 12', 'rocket on 12']));
 });
 
-test('a failed review on a pull request event takes its 👀 off too', async () => {
+test('a failed review on a pull request event swaps its 👀 for 😕', async () => {
   api(Response.json(grant));
   reviewError = () => new Error('Not Found');
   await main();
-  await vi.waitFor(() => expect(reactions).toEqual(['eyes on 12', 'removed 77 from 12']));
+  await vi.waitFor(() => expect(reactions).toEqual(['eyes on 12', 'removed 77 from 12', 'confused on 12']));
 });
 
 test("pull_request_target is a review too: a fork's PR sends fork: true, and its head commit is checked out with the granted token", async () => {
