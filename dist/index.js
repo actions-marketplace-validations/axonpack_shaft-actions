@@ -58809,6 +58809,11 @@ ${section}`;
   return `${rest.trimEnd()}
 ${stateLine(state)}`;
 }
+function verdictAfter(verdict, left) {
+  const byFindings = left.some((p) => p.severity === "blocking") ? "blocking" : left.some((p) => p.severity === "should-fix") ? "needs-changes" : "looks-good";
+  const rank = (v) => VERDICTS.indexOf(v);
+  return rank(verdict) >= rank(byFindings) ? verdict : byFindings;
+}
 
 // src/services/finalize.service.ts
 var STATE = "shaft";
@@ -60979,14 +60984,9 @@ ${prior.findings.map((f) => `- ${f.fp} ${f.severity} \`${f.file}:${f.line}\` ${f
   });
 }
 async function resolveThreads(octokit, ctx, fps, bot) {
-  const data = await octokit.graphql("query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{body author{__typename login}}}}}}}}", { owner: ctx.owner, repo: ctx.repo, n: ctx.pr.number });
-  for (const t of data.repository.pullRequest.reviewThreads.nodes) {
-    const first = t.comments.nodes[0];
-    const author = first?.author && (first.author.__typename === "Bot" ? `${first.author.login}[bot]` : first.author.login);
-    const fp = author === bot ? /<!-- shaft:finding (\w+) -->\s*$/.exec(first.body ?? "")?.[1] : undefined;
-    if (!t.isResolved && fp && fps.includes(fp)) {
+  for (const t of await reviewThreads(octokit, ctx, bot)) {
+    if (!t.resolved && t.fp && fps.includes(t.fp))
       await octokit.graphql("mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}", { id: t.id });
-    }
   }
 }
 async function reviewPullRequest(o) {
@@ -61033,7 +61033,14 @@ async function postReview(ctx, o, canCheck, progress) {
   const { octokit } = o;
   const sha = ctx.pr.headSha;
   const clean = (text) => redact(text, o.secrets);
-  const prior = parseState(ctx.summary?.body);
+  let prior = parseState(ctx.summary?.body);
+  if (prior && !o.dryRun) {
+    const read = prior;
+    prior = await reviewThreads(octokit, ctx, o.bot).then((threads) => threadDismissals(read, threads, o.bot, (login) => hasWriteAccess(octokit, ctx.owner, ctx.repo, login))).catch((e) => {
+      warning(`Reading the review threads failed, so resolved threads count as before: ${e.message}`);
+      return read;
+    });
+  }
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
   const planned = Array.isArray(o.checklists) && typeof o.prompt.open === "string" ? planChecklists(o.checklists, files, Object.keys(SCRIPTS)) : undefined;
@@ -61170,7 +61177,11 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   const review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
-  const placed = place(review.findings, files, o.nits, prior?.findings);
+  const dismissed = prior?.dismissed ?? [];
+  const all = place(review.findings, files, o.nits, [...prior?.findings ?? [], ...dismissed]);
+  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp));
+  if (placed.length < all.length)
+    review.verdict = verdictAfter(review.verdict, placed);
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
@@ -61221,7 +61232,7 @@ ${c.body}`);
       tokens: result.tokens,
       costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined
     }
-  });
+  }, dismissed);
   if (o.dryRun)
     info(`--- summary comment
 ${clean(body)}`);
@@ -61265,7 +61276,10 @@ ${clean(body)}`);
       ...p.url && p.url.length <= 500 ? { url: p.url } : {},
       inline: p.inline
     })),
-    fixed: fixed.length
+    fixed: fixed.length,
+    ...dismissed.length && {
+      dismissed: dismissed.slice(0, 200).map((d) => ({ severity: d.severity, file: cut(d.file, 500), line: Math.max(1, d.line), title: cut(clean(d.title), 300), by: cut(d.by, 39), reason: cut(clean(d.reason), 300) }))
+    }
   };
   return {
     output,
@@ -61446,6 +61460,18 @@ async function reviewThreads(octokit, ctx, bot) {
   });
 }
 var setResolved = (octokit, id, resolved) => octokit.graphql(`mutation($id:ID!){${resolved ? "resolveReviewThread" : "unresolveReviewThread"}(input:{threadId:$id}){thread{id}}}`, { id });
+async function threadDismissals(state, threads, bot, canWrite) {
+  let next = state;
+  for (const t of threads) {
+    if (!t.fp)
+      continue;
+    if (!t.resolved && next.dismissed?.some((d) => d.fp === t.fp))
+      next = setDismissal(next, t.fp) ?? next;
+    else if (t.resolved && t.resolvedBy && t.resolvedBy !== bot && next.findings.some((f) => f.fp === t.fp) && await canWrite(t.resolvedBy))
+      next = setDismissal(next, t.fp, t.resolvedBy) ?? next;
+  }
+  return next;
+}
 function checksAfter(state, steps) {
   return [...new Set(steps)].map((key) => {
     const left = state.findings.filter((f) => f.step === key);
