@@ -58395,10 +58395,13 @@ function flaggedLines(flagged, events, names) {
     users.set(e.user_id, { ...u, strikes: u.strikes + 1 });
   }
   return [...users.values()].map((u) => {
+    const rule = events.find((e) => e.user_id === u.user_id && e.severity === "strike")?.rule;
+    const named = rule ? `: ${names(rule)}` : "";
+    if ("exempt" in u && u.exempt)
+      return `⚠️ @${u.login} has ${u.strikes} guardrail strike${u.strikes === 1 ? "" : "s"}${named}. Admins and maintainers aren't blocked.`;
     if (u.strikes >= 3)
       return `@${u.login} is blocked on this account after 3 strikes. An admin can review and clear them on the dashboard.`;
-    const rule = events.find((e) => e.user_id === u.user_id && e.severity === "strike")?.rule;
-    return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${rule ? `: ${names(rule)}` : ""}. A third strike stops Axon Shaft from running for them on this account.`;
+    return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${named}. A third strike stops Axon Shaft from running for them on this account.`;
   });
 }
 

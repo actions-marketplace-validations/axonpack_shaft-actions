@@ -60,7 +60,8 @@ export function scanOutput<T>(reply: T, canary: string): { reply: T; leak: boole
 }
 
 /** A user the API says has active strikes, from the grant. */
-export type Flagged = { user_id: number; login: string; strikes: number };
+/** `exempt`: an admin or maintainer, never blocked; missing from an older API means false. */
+export type Flagged = { user_id: number; login: string; strikes: number; exempt?: boolean };
 
 /**
  * One summary line for each user with strikes: the API's count plus this run's strike, and the rule
@@ -73,8 +74,10 @@ export function flaggedLines(flagged: Flagged[], events: { user_id: number; logi
     users.set(e.user_id, { ...u, strikes: u.strikes + 1 });
   }
   return [...users.values()].map((u) => {
-    if (u.strikes >= 3) return `@${u.login} is blocked on this account after 3 strikes. An admin can review and clear them on the dashboard.`;
     const rule = events.find((e) => e.user_id === u.user_id && e.severity === 'strike')?.rule;
-    return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${rule ? `: ${names(rule)}` : ''}. A third strike stops Axon Shaft from running for them on this account.`;
+    const named = rule ? `: ${names(rule)}` : '';
+    if ('exempt' in u && u.exempt) return `⚠️ @${u.login} has ${u.strikes} guardrail strike${u.strikes === 1 ? '' : 's'}${named}. Admins and maintainers aren't blocked.`;
+    if (u.strikes >= 3) return `@${u.login} is blocked on this account after 3 strikes. An admin can review and clear them on the dashboard.`;
+    return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${named}. A third strike stops Axon Shaft from running for them on this account.`;
   });
 }

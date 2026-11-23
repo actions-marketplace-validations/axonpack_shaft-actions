@@ -37,3 +37,12 @@ test('flaggedLines adds this run’s strike to the API’s count, names its rule
     '@bo is blocked on this account after 3 strikes. An admin can review and clear them on the dashboard.',
   ]);
 });
+
+test('flaggedLines shows an exempt admin’s count with no threat, however many strikes', () => {
+  const names = (r: string) => `rule ${r}`;
+  expect(flaggedLines([{ user_id: 1, login: 'own', strikes: 4, exempt: true }, { user_id: 2, login: 'mod', strikes: 0, exempt: true }, { user_id: 3, login: 'ana', strikes: 1, exempt: false }], [{ user_id: 2, login: 'mod', rule: 'spoofing.tags', severity: 'strike' }], names)).toEqual([
+    "⚠️ @own has 4 guardrail strikes. Admins and maintainers aren't blocked.",
+    "⚠️ @mod has 1 guardrail strike: rule spoofing.tags. Admins and maintainers aren't blocked.",
+    '⚠️ @ana is flagged (1 of 3). A third strike stops Axon Shaft from running for them on this account.',
+  ]);
+});
