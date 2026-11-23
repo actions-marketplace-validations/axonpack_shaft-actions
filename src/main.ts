@@ -189,6 +189,7 @@ async function run(): Promise<void> {
     advisories: settings.advisories === true,
     ignore: ignoresOf(settings.ignore),
     repoConfig: repoConfigOf(settings.repoConfig),
+    commands: globs(settings.commands),
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
   });
   core.setOutput('verdict', out.verdict);

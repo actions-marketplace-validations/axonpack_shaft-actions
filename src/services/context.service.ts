@@ -22,8 +22,11 @@ export type Comment = {
 export type Context = {
   owner: string;
   repo: string;
-  /** `fork`: the head branch lives in another repo, or one that was deleted. `defaultBranch` is the base repo's. */
-  pr: { number: number; title: string; body: string; author: string; headSha: string; base: string; head: string; fork: boolean; defaultBranch: string };
+  /**
+   * `fork`: the head branch lives in another repo, or one that was deleted. `defaultBranch` is the base repo's.
+   * `conflicts`: GitHub says it can't merge into the base; unset while GitHub is still working it out.
+   */
+  pr: { number: number; title: string; body: string; author: string; headSha: string; base: string; head: string; fork: boolean; defaultBranch: string; conflicts?: boolean };
   commits: string[];
   files: (ChangedFile & { status: string })[];
   /** Issue comments, without our own summary. */
@@ -123,6 +126,7 @@ export async function collectContext(
       head: pr.head.ref,
       fork: pr.head.repo?.full_name !== pr.base.repo.full_name,
       defaultBranch: pr.base.repo.default_branch,
+      conflicts: pr.mergeable === false,
     },
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),

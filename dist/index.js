@@ -57949,6 +57949,7 @@ function prose(text) {
   return s;
 }
 var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+var either = (words) => words.length > 1 ? `${words.slice(0, -1).join(", ")} or ${words.at(-1)}` : words[0] ?? "";
 function inlineBody(f) {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
   if (f.suggestion)
@@ -58173,6 +58174,8 @@ function renderSummary(raw, placed, prior, f, dismissed = []) {
 
 `)));
   }
+  if (f.commands?.length)
+    out.push("", `**Follow-up commands:** comment ${either(f.commands.map((c) => `\`/${c}\``))} and Axon Shaft pushes one commit for it.`);
   out.push("", footer(f));
   const state = {
     sha: f.sha,
@@ -59126,7 +59129,8 @@ async function collectContext(octokit, owner, repo, number, bot) {
       base: pr.base.ref,
       head: pr.head.ref,
       fork: pr.head.repo?.full_name !== pr.base.repo.full_name,
-      defaultBranch: pr.base.repo.default_branch
+      defaultBranch: pr.base.repo.default_branch,
+      conflicts: pr.mergeable === false
     },
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),
@@ -61252,6 +61256,7 @@ ${c.body}`);
     workflowEditUrl: o.workflowEditUrl,
     ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     repoConfig: o.repoConfig,
+    commands: o.commands?.filter((c) => c !== "resolve" || ctx.pr.conflicts),
     ...models && {
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
       effort: choice.effort,
@@ -62332,6 +62337,7 @@ ${grant.comment}`);
     advisories: settings.advisories === true,
     ignore: ignoresOf(settings.ignore),
     repoConfig: repoConfigOf(settings.repoConfig),
+    commands: globs(settings.commands),
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch)
   });
   setOutput("verdict", out.verdict);
