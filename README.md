@@ -368,6 +368,14 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
 
 The card's last line gives the kind of change, the model's confidence and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · 85% confidence · reviewed a1b2c3d`.
 
+### What a push reviews again
+
+The summary's hidden state line keeps a hash of each reviewed file's diff, taken without the hunks' line numbers, so a rebase that leaves the change as it was keeps the same hash. It also keeps a hash of the job's settings and the action's version, the checklists the review checked, its verdict and its merge gates. The next run compares them:
+
+- Same diff and settings (a rerun, or a rebase onto a newer base): no model call and no scripts. The summary keeps its review, with one line on top saying nothing changed since the last review, and the check runs, the merge gates check and the run on the dashboard carry its results to the new commit.
+- Some files changed, with checklists: only the checklists whose `paths` match a file added, changed or removed since the last review run again. The others keep their findings and their check runs' results, and the model doesn't see those findings. A carried finding outside the diff says it was found by an earlier review. When no checklist matches the changed files, the whole review runs.
+- Anything else gets a full review: new settings, a new action version, the first review, a summary written before 1.11, a file with no patch (binary or too large), merge gates the last review didn't record, or a pull request with more than 300 files, whose state keeps no hashes.
+
 ### Progress while the review runs
 
 The action shows that a review is running without anything that emails people:

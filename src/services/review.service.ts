@@ -29,9 +29,11 @@ import { step } from './step.service';
 import { reviewThreads, threadDismissals } from './dismiss.service';
 import { hasWriteAccess } from './route.service';
 import { dedupe } from '../utils/dedupe.util';
-import { type Ignore, ignored, verdictAfter } from '../utils/dismiss.util';
+import { changedSince, configHash, diffHashes, nothingChangedNote } from '../utils/incremental.util';
+import { type Ignore, ignored, verdictAfter, withDismissed } from '../utils/dismiss.util';
 import {
   type CheckItem,
+  type Finding,
   checkStates,
   failedSummary,
   idleSummary,
@@ -252,9 +254,16 @@ async function postReview(
   // Only the checklists whose paths match a changed file run; the others get a skipped check run.
   const planned = Array.isArray(o.checklists) && typeof o.prompt.open === 'string' ? planChecklists(o.checklists, files, Object.keys(SCRIPTS)) : undefined;
   const fired = planned?.filter((c) => !c.skip);
+  // What the next push builds on, and the files changed since the review this one builds on (none: nothing changed).
+  const memo = { files: diffHashes(files), config: configHash([o.prompt, o.checklists, o.nits, o.ignore, o.gates, o.focus, o.skip, o.depth, o.model, o.effort, o.checks]) };
+  const changed = changedSince(prior, memo.files, memo.config);
+  // On a push, only the checklists whose paths the changed files touch run again; the rest keep the last review's findings.
+  const rerun = changed?.length && planned ? planChecklists(o.checklists!, changed.map((filename) => ({ filename })), Object.keys(SCRIPTS)).filter((c) => !c.skip).map((c) => c.key) : undefined;
+  const carried = rerun?.length ? (fired?.filter((c) => !rerun.includes(c.key)).map((c) => c.key) ?? []) : [];
+  const running = fired?.filter((c) => !carried.includes(c.key));
   // Script checklists' findings are their result: they never reach the model.
-  const scripted = fired?.filter((c) => c.mode === 'script') ?? [];
-  const modelled = fired?.filter((c) => c.mode !== 'script');
+  const scripted = running?.filter((c) => c.mode === 'script') ?? [];
+  const modelled = running?.filter((c) => c.mode !== 'script');
   // What the footer says about the run, whichever way it goes.
   const facts = {
     sha,
@@ -322,6 +331,49 @@ async function postReview(
     };
   }
 
+  // The same diff as the last review, after a rerun or a rebase: its result carries over with no model call.
+  if (changed?.length === 0 && ctx.summary && (!o.gates?.length || prior!.gates)) {
+    const kept: State = { ...prior!, sha, ...memo };
+    const placed = kept.findings.map((f): Placed => ({ ...f, step: f.step ?? '', body: '', inline: true }));
+    const headline = 'Nothing changed since the last review, so no model was called.';
+    const review: Review = { verdict: verdictAfter(kept.verdict ?? 'looks-good', placed) as Review['verdict'], type: '', confidence: 0, headline, claim: '', impact: '', scope: '', findings: [], resolved: [], checked: kept.checked ?? [], not_checked: '' };
+    const body = withDismissed(nothingChangedNote(ctx.summary.body, sha), kept);
+    if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
+    else await writeSummary(body);
+    const gates = o.gates?.length ? gateResults(o.gates, kept.gates) : undefined;
+    if (gates && o.dryRun) core.info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
+    else if (gates && canCheck) await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
+    const states = checkStates(review, placed, o.checks, planned);
+    await postChecks(states, placed);
+    const url = o.dryRun ? '' : (summary?.html_url ?? '');
+    const count = (s: Placed['severity']) => placed.filter((p) => p.severity === s).length;
+    return {
+      verdict: review.verdict,
+      findings: placed.filter((p) => p.severity !== 'nit').length,
+      summaryUrl: url,
+      model: 'none',
+      effort: 'none',
+      tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      costUsd: 0,
+      bySeverity: { blocking: count('blocking'), should_fix: count('should-fix'), nit: count('nit') },
+      output: {
+        headline,
+        claim: '',
+        impact: '',
+        scope: '',
+        not_checked: '',
+        type: '',
+        confidence: 0,
+        comment_url: url,
+        checks: states.slice(0, 40),
+        passes: [],
+        findings: placed.slice(0, 200).map((p) => ({ severity: p.severity, check: p.step, file: p.file, line: Math.max(1, p.line), title: p.title, body: '', inline: true })),
+        fixed: 0,
+      },
+    };
+  }
+  if (carried.length) core.info(`Only ${rerun!.join(', ')} run again; ${carried.join(', ')} keep the last review's findings`);
+
   // What the scripts read. Each base-branch file is fetched once, however many scripts ask for it.
   const reads = new Map<string, Promise<string | undefined>>();
   const input: ScriptInput = {
@@ -339,7 +391,7 @@ async function postReview(
   let result: AgentResult<Review>;
   if (useModel) {
     // With checklists the run's data comes first and the steps last, so the part before them reads the same whatever runs.
-    const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+    const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => !carried.includes(f.step ?? '')) }, { template: modelled ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
     const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
 
     rungs = ladder({ ...pickInput, promptChars: prompt.length });
@@ -398,16 +450,22 @@ async function postReview(
     : scriptFindings.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
       ? 'needs-changes'
       : reply.verdict;
-  const review: Review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
+  const review: Review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key), ...carried.filter((k) => prior!.checked!.includes(k))] };
   await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 
   // A dismissed finding (by fingerprint, or a line or two away) isn't posted, counted or checked again.
   // Nor is one the repo config file's `ignore` matches, which the summary only counts.
   const dismissed = prior?.dismissed ?? [];
-  const all = place(review.findings, files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
+  // A carried finding goes through `place` again, so it keeps its fingerprint and only its first inline comment.
+  const kept = (prior?.findings ?? []).filter((f) => carried.includes(f.step ?? '')).map((f): Finding => ({ ...f, step: f.step!, body: 'Found by an earlier review. Its checklist had nothing new to check on this push.' }));
+  const all = place([...review.findings, ...kept], files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
   const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length) review.verdict = verdictAfter(review.verdict, placed) as Review['verdict'];
+  // A carried finding raises the verdict as a script's does.
+  const old = placed.filter((p) => carried.includes(p.step));
+  if (old.some((p) => p.severity === 'blocking')) review.verdict = 'blocking';
+  else if (old.some((p) => p.severity === 'should-fix') && review.verdict === 'looks-good') review.verdict = 'needs-changes';
   // Before anything is posted, so a withheld finding's details never reach the PR.
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
@@ -447,6 +505,7 @@ async function postReview(
     prior,
     {
     ...facts,
+    memo,
     advisories,
     checks: o.checks,
     checklists: planned,

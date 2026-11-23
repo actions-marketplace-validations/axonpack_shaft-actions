@@ -654,7 +654,8 @@ describe('private draft advisories', () => {
   test("on a public repo the inline comment, summary, state marker, check run and run report carry only the short note, and the log never has the finding's text", async () => {
     advisoryApi(() => Response.json({ ghsa_id: 'GHSA-1234-5678-9abc', html_url: url, withhold: true }));
     const { outcome } = await review([file('src/a.ts')], { dryRun: false, advisories: true });
-    const posted = [...fake.inline, ...fake.written, ...fake.summaries, JSON.stringify(outcome.output)].join('\n');
+    // The state's hex hashes could hold `b2` by chance.
+    const posted = [...fake.inline, ...fake.written, ...fake.summaries, JSON.stringify(outcome.output)].join('\n').replace(/"files":\{[^}]*\},"config":"\w+"/g, '');
     for (const secret of ['Token sent in the URL', 'query string', 'b2']) expect(posted).not.toContain(secret);
     expect(fake.inline).toEqual([expect.stringContaining(`The details are in a [private draft security advisory](${url})`)]);
     const summary = fake.written.at(-1)!;
@@ -709,4 +710,58 @@ test("a partial review below the last rung moves up one, says why in the footer 
   replies = [{ checked: ['correctness', 'own-1'] }];
   await review([file('src/a.ts'), file('README.md')], { checklists: [...CHECKLISTS, checklist('docs', ['**/*.md'])], open: OPEN });
   expect(runs.map((r) => r.model)).toEqual(['sonnet']);
+});
+
+describe('incremental review', () => {
+  /** The summary a first review wrote, as the bot's comment the next run reads. */
+  const asComment = (summary: string) => [{ id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body: summary.replace('--- summary comment\n', '') }];
+  const BUG = { severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' };
+
+  test('a rebase with the same diff on a new base changes nothing: no model call, the findings and checks carry over', async () => {
+    found = [BUG];
+    replies = [{ verdict: 'blocking' }];
+    const first = await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN });
+    expect(parseState(first.summary)).toMatchObject({ files: { 'src/a.ts': expect.any(String) }, checked: ['correctness'], verdict: 'blocking' });
+    logs.length = 0;
+    const before = runs.length;
+    const { outcome, summary } = await review([file('src/a.ts', '@@ -40 +40 @@\n-a\n+b')], { checklists: CHECKLISTS, open: OPEN, comments: asComment(first.summary) });
+    expect(runs.length).toBe(before);
+    expect(outcome).toMatchObject({ verdict: 'blocking', model: 'none', costUsd: 0, bySeverity: { blocking: 1, should_fix: 0, nit: 0 } });
+    expect(summary).toContain("Nothing changed since the last review, so `abc1234` got no model call.");
+    expect(summary).toContain('Wrong sum');
+    expect(parseState(summary)!.findings).toEqual(parseState(first.summary)!.findings);
+    expect(willPost()).toContain('Would post the Axon Shaft / correctness check: failure');
+  });
+
+  test('a summary from an older action, without file hashes, gets a full review', async () => {
+    const body = `<!-- shaft:summary -->\nold\n${stateLine({ sha: 'fed9876', findings: [] })}`;
+    const before = runs.length;
+    await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN, comments: [{ id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body }] });
+    expect(runs.length).toBe(before + 1);
+  });
+
+  test('changed settings, or a changed file, mean a model call', async () => {
+    const first = await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN });
+    const before = runs.length;
+    await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN, focus: ['src/**'], comments: asComment(first.summary) });
+    await review([file('src/a.ts', '@@ -1 +1 @@\n-a\n+c')], { checklists: CHECKLISTS, open: OPEN, comments: asComment(first.summary) });
+    expect(runs.length).toBe(before + 2);
+  });
+
+  test('a push re-runs only the checklists whose paths it touches; the others keep their findings and checks', async () => {
+    found = [BUG];
+    const first = await review([file('src/a.ts'), file('README.md')], { checklists: CHECKLISTS, open: OPEN });
+    found = [];
+    logs.length = 0;
+    const { run, outcome, summary } = await review([file('src/a.ts'), file('README.md', '@@ -1 +1 @@\n-a\n+changed')], { checklists: CHECKLISTS, open: OPEN, comments: asComment(first.summary) });
+    expect(run.steps).toEqual(['own-1']);
+    expect(run.prompt).not.toContain('Wrong sum');
+    expect(outcome.verdict).toBe('blocking');
+    expect(summary).toContain('Wrong sum');
+    expect(outcome.output.checks.slice(0, 1).concat(outcome.output.checks.slice(3))).toEqual([
+      { key: 'correctness', label: 'The correctness list', state: 'failed' },
+      { key: 'own-1', label: 'The own-1 list', state: 'passed' },
+    ]);
+    expect(parseState(summary)).toMatchObject({ checked: ['own-1', 'correctness'] });
+  });
 });

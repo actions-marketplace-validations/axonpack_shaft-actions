@@ -62,8 +62,22 @@ export type Review = {
 export type StateFinding = { fp: string; file: string; line: number; severity: Severity; title: string; step?: string };
 /** A finding someone with write access dismissed on this pull request, with who and why (`reason` may be empty). */
 export type Dismissed = StateFinding & { by: string; reason: string };
-/** `dismissed` stays out of `findings`, from the review that found them on. */
-export type State = { sha: string; findings: StateFinding[]; dismissed?: Dismissed[] };
+/**
+ * `dismissed` stays out of `findings`, from the review that found them on. An action from 1.11 on
+ * also keeps what lets the next push build on this review (`incremental.util`): each file's diff
+ * hash, the settings' hash, the checklists it checked, its verdict and its gates. A state without
+ * them gets a full review.
+ */
+export type State = {
+  sha: string;
+  findings: StateFinding[];
+  dismissed?: Dismissed[];
+  files?: Record<string, string>;
+  config?: string;
+  checked?: string[];
+  verdict?: Review['verdict'];
+  gates?: Gate[];
+};
 
 /** A finding after our code decided where it goes. */
 export type Placed = Finding & { fp: string; inline: boolean };
@@ -249,6 +263,8 @@ export type Footer = {
   skipped?: number;
   /** The catalog checks the project keeps on, from the Axon Shaft API; the others show as off. */
   checks?: string[];
+  /** The diff hashes and settings' hash for the state line, so the next push can build on this review. */
+  memo?: { files?: Record<string, string>; config: string };
   /** The job's checklists, when the API sends them: the card shows these in place of the checks. */
   checklists?: { key: string; name: string; skip?: string }[];
   /** A newer v1 release than this run's, when the API says the run is pinned to an older one. */
@@ -524,6 +540,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
     sha: f.sha,
     findings: placed.map(({ fp, file, line, severity, title, step }) => ({ fp, file, line, severity, title, step })),
     ...(dismissed.length && { dismissed }),
+    ...(f.memo?.files && { files: f.memo.files, config: f.memo.config, checked: raw.checked, verdict: raw.verdict, ...(raw.gates && { gates: raw.gates }) }),
   };
   // GitHub caps a comment at 65,536 characters; the state line must survive.
   return `${out.join('\n').slice(0, 60_000)}\n${stateLine(state)}`;

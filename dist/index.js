@@ -58176,7 +58176,8 @@ function renderSummary(raw, placed, prior, f, dismissed = []) {
   const state = {
     sha: f.sha,
     findings: placed.map(({ fp, file, line, severity, title, step }) => ({ fp, file, line, severity, title, step })),
-    ...dismissed.length && { dismissed }
+    ...dismissed.length && { dismissed },
+    ...f.memo?.files && { files: f.memo.files, config: f.memo.config, checked: raw.checked, verdict: raw.verdict, ...raw.gates && { gates: raw.gates } }
   };
   return `${out.join(`
 `).slice(0, 60000)}
@@ -60991,6 +60992,32 @@ Also found by \`${f.step}\`.` };
   return kept;
 }
 
+// src/utils/incremental.util.ts
+import { createHash as createHash4 } from "node:crypto";
+var hash = (text, n) => createHash4("sha256").update(text).digest("hex").slice(0, n);
+var HASHED_FILES_MAX = 300;
+var diffHash = (patch) => patch === undefined ? undefined : hash(patch.replace(/^@@ [^@]* @@/gm, "@@"), 10);
+function diffHashes(files) {
+  if (files.length > HASHED_FILES_MAX)
+    return;
+  return Object.fromEntries(files.flatMap((f) => diffHash(f.patch) ? [[f.filename, diffHash(f.patch)]] : []));
+}
+var configHash = (settings) => hash(JSON.stringify([ACTION_VERSION, settings]), 10);
+function changedSince(prior, hashes, config) {
+  if (!prior?.files || !prior.checked || prior.config !== config || !hashes)
+    return;
+  const was = prior.files;
+  return [...new Set([...Object.keys(hashes), ...Object.keys(was)])].filter((f) => hashes[f] !== was[f] || !(f in hashes));
+}
+var NOTE = /^Nothing changed since the last review[^\n]*\n\n/m;
+function nothingChangedNote(body, sha) {
+  const rest = body.replace(NOTE, "").slice(SUMMARY_MARKER.length).replace(/^\n/, "");
+  return `${SUMMARY_MARKER}
+Nothing changed since the last review, so \`${sha.slice(0, 7)}\` got no model call. The review below still holds.
+
+${rest}`;
+}
+
 // src/services/review.service.ts
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
 function chosenModels(used, choice, deep) {
@@ -61105,8 +61132,13 @@ async function postReview(ctx, o, canCheck, progress) {
   const skipped = ctx.files.length - files.length;
   const planned = Array.isArray(o.checklists) && typeof o.prompt.open === "string" ? planChecklists(o.checklists, files, Object.keys(SCRIPTS)) : undefined;
   const fired = planned?.filter((c) => !c.skip);
-  const scripted = fired?.filter((c) => c.mode === "script") ?? [];
-  const modelled = fired?.filter((c) => c.mode !== "script");
+  const memo = { files: diffHashes(files), config: configHash([o.prompt, o.checklists, o.nits, o.ignore, o.gates, o.focus, o.skip, o.depth, o.model, o.effort, o.checks]) };
+  const changed = changedSince(prior, memo.files, memo.config);
+  const rerun = changed?.length && planned ? planChecklists(o.checklists, changed.map((filename) => ({ filename })), Object.keys(SCRIPTS)).filter((c) => !c.skip).map((c) => c.key) : undefined;
+  const carried = rerun?.length ? fired?.filter((c) => !rerun.includes(c.key)).map((c) => c.key) ?? [] : [];
+  const running = fired?.filter((c) => !carried.includes(c.key));
+  const scripted = running?.filter((c) => c.mode === "script") ?? [];
+  const modelled = running?.filter((c) => c.mode !== "script");
   const facts = {
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
@@ -61174,6 +61206,53 @@ ${clean(body)}`);
       }
     };
   }
+  if (changed?.length === 0 && ctx.summary && (!o.gates?.length || prior.gates)) {
+    const kept = { ...prior, sha, ...memo };
+    const placed = kept.findings.map((f) => ({ ...f, step: f.step ?? "", body: "", inline: true }));
+    const headline = "Nothing changed since the last review, so no model was called.";
+    const review = { verdict: verdictAfter(kept.verdict ?? "looks-good", placed), type: "", confidence: 0, headline, claim: "", impact: "", scope: "", findings: [], resolved: [], checked: kept.checked ?? [], not_checked: "" };
+    const body = withDismissed(nothingChangedNote(ctx.summary.body, sha), kept);
+    if (o.dryRun)
+      info(`--- summary comment
+${clean(body)}`);
+    else
+      await writeSummary(body);
+    const gates = o.gates?.length ? gateResults(o.gates, kept.gates) : undefined;
+    if (gates && o.dryRun)
+      info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
+    else if (gates && canCheck)
+      await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
+    const states = checkStates(review, placed, o.checks, planned);
+    await postChecks(states, placed);
+    const url = o.dryRun ? "" : summary?.html_url ?? "";
+    const count = (s) => placed.filter((p) => p.severity === s).length;
+    return {
+      verdict: review.verdict,
+      findings: placed.filter((p) => p.severity !== "nit").length,
+      summaryUrl: url,
+      model: "none",
+      effort: "none",
+      tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      costUsd: 0,
+      bySeverity: { blocking: count("blocking"), should_fix: count("should-fix"), nit: count("nit") },
+      output: {
+        headline,
+        claim: "",
+        impact: "",
+        scope: "",
+        not_checked: "",
+        type: "",
+        confidence: 0,
+        comment_url: url,
+        checks: states.slice(0, 40),
+        passes: [],
+        findings: placed.slice(0, 200).map((p) => ({ severity: p.severity, check: p.step, file: p.file, line: Math.max(1, p.line), title: p.title, body: "", inline: true })),
+        fixed: 0
+      }
+    };
+  }
+  if (carried.length)
+    info(`Only ${rerun.join(", ")} run again; ${carried.join(", ")} keep the last review's findings`);
   const reads = new Map;
   const input = {
     files,
@@ -61187,7 +61266,7 @@ ${clean(body)}`);
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
   let result;
   if (useModel) {
-    const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+    const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => !carried.includes(f.step ?? "")) }, { template: modelled ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
     const prompt = modelled ? `${pack}
 ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
     rungs = ladder({ ...pickInput, promptChars: prompt.length });
@@ -61231,14 +61310,20 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
   const { reply } = result;
   const verdict = scriptFindings.some((f) => f.severity === "blocking") ? "blocking" : scriptFindings.some((f) => f.severity === "should-fix") && reply.verdict === "looks-good" ? "needs-changes" : reply.verdict;
-  const review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
+  const review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key), ...carried.filter((k) => prior.checked.includes(k))] };
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const dismissed = prior?.dismissed ?? [];
-  const all = place(review.findings, files, o.nits, [...prior?.findings ?? [], ...dismissed]);
+  const kept = (prior?.findings ?? []).filter((f) => carried.includes(f.step ?? "")).map((f) => ({ ...f, step: f.step, body: "Found by an earlier review. Its checklist had nothing new to check on this push." }));
+  const all = place([...review.findings, ...kept], files, o.nits, [...prior?.findings ?? [], ...dismissed]);
   const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length)
     review.verdict = verdictAfter(review.verdict, placed);
+  const old = placed.filter((p) => carried.includes(p.step));
+  if (old.some((p) => p.severity === "blocking"))
+    review.verdict = "blocking";
+  else if (old.some((p) => p.severity === "should-fix") && review.verdict === "looks-good")
+    review.verdict = "needs-changes";
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
   const comments = fresh.map((p) => {
@@ -61275,6 +61360,7 @@ ${c.body}`);
   const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : undefined;
   const body = renderSummary(review, placed, prior, {
     ...facts,
+    memo,
     advisories,
     checks: o.checks,
     checklists: planned,
