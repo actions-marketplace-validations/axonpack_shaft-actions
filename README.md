@@ -483,7 +483,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 
 ### Guardrails
 
-The limits above hold even when the model is fooled. The guardrails add a check on what people write, so an attempt is caught and tied to the person who made it.
+The limits above hold even when the model is fooled. The guardrails also check what people write, and tie each attempt they catch to the person who made it.
 
 - Before the model runs, the action checks the PR's title, description and commit messages, the comments that reach the prompt, and a `/ask` or `/fix` command against fixed rules: asks to ignore earlier instructions, to print the environment or tokens, `/proc/self/environ`, fake role or tool tags such as `<tool_result>`, invisible or direction-changing characters, and instructions hidden in HTML comments. Diff lines are checked only for hidden characters, fake tags and lines that tell an AI reviewer what to conclude, since code may mention a system prompt for real reasons. Quoted lines (`> `) are never judged.
 - A text that clearly breaks a rule is replaced in the prompt with `[removed by guardrail: <rule>]`, and the rest of the PR is still reviewed. A command that does is refused before any model runs (`guardrail_blocked`).
@@ -493,7 +493,7 @@ The limits above hold even when the model is fooled. The guardrails add a check 
 - The model never reads `.env` files, `.pem` keys, SSH keys, `.npmrc`, `.pypirc` or `.netrc`.
 - A change from `/fix` isn't pushed when its new lines pipe a download into a shell, send the whole environment out, send a variable to a hard-coded host, or add a long encoded blob (`guardrail_blocked`).
 - A clear hit is a strike against the person who wrote the text: the PR's author for its text and diff, the commenter for a comment or command, and whoever started a `/fix` for its push. A run gives at most one strike per person. Anything else is a warning. The action sends each event to the API with a redacted excerpt of at most 200 characters, and the API keeps the count.
-- When someone has strikes, the summary says so, for example `⚠️ @login is flagged (2 of 3): <rule>`. It never quotes their text. After 3 strikes the API stops runs for that person on the account (`user_blocked`) until an admin clears them on the dashboard.
+- When someone has strikes, the summary flags them, for example `⚠️ @login is flagged (2 of 3): <rule>`. It never quotes their text. After 3 strikes the API stops runs for that person on the account (`user_blocked`) until an admin clears them on the dashboard.
 
 <details>
 <summary>Runner variables the model's environment always gets</summary>
