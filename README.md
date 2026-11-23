@@ -350,7 +350,7 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
 
 #### The card
 
-The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. On a later push, the comment switches to `reviewing.svg` while the review runs. GitHub sends no email when a comment is edited. Under it are the headline and these chips:
+The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. The comment is written only when the review is done: the first review creates it, and a later push edits it in place, which GitHub sends no email for. While a review runs, the comment stays as the last review left it. Under it are the headline and these chips:
 
 - **Findings**: the number of blocking, should-fix and nit findings, and how many earlier findings this push fixed.
 - **Checks**: one chip per check:
@@ -381,10 +381,10 @@ The check run needs Checks (write) on the run's token. Without it the review sti
 
 ### When a run is cancelled or stops early
 
-No check run stays in progress after the run ends, and the summary comment never stays on "Reviewing":
+No check run stays in progress after the run ends:
 
-- When the workflow is cancelled (a newer push with `cancel-in-progress: true`, someone pressing Cancel, or the job's `timeout-minutes`), GitHub stops the step. The action then closes each check run it left in progress as cancelled, with the summary "The workflow was cancelled before the review finished." The summary comment shows the `cancelled` card in place of "Reviewing", the 👀 on a `/review` comment becomes 😕, and the run is recorded on the dashboard with the `cancelled` code. This takes at most 5 seconds, then the Claude session stops.
-- If the review fails, a check run still in progress fails with the failure's card and message, and the summary comment shows the same card.
+- When the workflow is cancelled (a newer push with `cancel-in-progress: true`, someone pressing Cancel, or the job's `timeout-minutes`), GitHub stops the step. The action then closes each check run it left in progress as cancelled, with the summary "The workflow was cancelled before the review finished." The summary comment keeps the last review's result, the 👀 on a `/review` comment becomes 😕 (or comes off the pull request), and the run is recorded on the dashboard with the `cancelled` code. This takes at most 5 seconds, then the Claude session stops.
+- If the review fails, a check run still in progress fails with the failure's card and message. When the model's run fails, the summary comment shows the same card.
 - The action also has a post step that GitHub runs at the end of the job, after a cancel too. If the step was killed before it could clean up, the post step closes what's left the same way. After a normal run it does nothing.
 
 ### The merge gates check

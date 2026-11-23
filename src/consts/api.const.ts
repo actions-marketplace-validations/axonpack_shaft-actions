@@ -19,5 +19,5 @@ export const CODES_URL = 'https://shaft.axonpack.dev/docs/reference/codes';
 
 /** Each failure code's card is `<ERROR_CARDS_URL>/<code>.svg`. */
 export const ERROR_CARDS_URL = 'https://shaft.axonpack.dev/errors';
-/** The summary comment's status card: `<STATUS_CARDS_URL>/<status>.svg`, `reviewing` or a verdict. */
+/** The summary comment's status card: `<STATUS_CARDS_URL>/<status>.svg`, a verdict. */
 export const STATUS_CARDS_URL = 'https://shaft.axonpack.dev/status';

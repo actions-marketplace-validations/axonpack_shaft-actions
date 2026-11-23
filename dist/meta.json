@@ -53,7 +53,7 @@
     },
     "cancelled": {
       "kind": "notice",
-      "message": "The workflow was cancelled before the review finished. Its check runs end as cancelled, and the summary comment shows this card in place of \"Reviewing\"."
+      "message": "The workflow was cancelled before the review finished. Its check runs end as cancelled."
     },
     "nothing_to_fix": {
       "kind": "notice",

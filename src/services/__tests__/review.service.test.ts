@@ -284,12 +284,11 @@ test('a refused progress update warns once, skips the later ones, and the review
   expect(warnings[0]).toContain("Couldn't post the Axon Shaft / review check");
 });
 
-test('a later review edits its summary to Reviewing at the start, which emails no one', async () => {
+test('a later review leaves its summary as it was until the result, then edits it', async () => {
   const summary = { id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body: '<!-- shaft:summary -->\nold' };
   await review([file('src/a.ts')], { dryRun: false, comments: [summary] });
   expect(progress()).toEqual([
     STARTED,
-    'update: ![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)',
     ...STEPS,
     expect.stringMatching(/^update: > \[!TIP\]/),
     `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`,

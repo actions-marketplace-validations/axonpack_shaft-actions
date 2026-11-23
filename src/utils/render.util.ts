@@ -443,10 +443,6 @@ function walkthrough(w: Walkthrough): string {
   return details('Walkthrough', ['| Area | Files | What changed |', '|---|---|---|', ...rows, ...diagram].join('\n'));
 }
 
-export function startSummary(sha: string, prior?: State): string {
-  return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
-}
-
 /** The summary when none of the job's checklists ran: one chip each, and no model was asked. */
 export function idleSummary(states: CheckItem[], prior: State | undefined, f: Footer): string {
   return [

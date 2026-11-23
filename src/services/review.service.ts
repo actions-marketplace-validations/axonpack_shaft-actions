@@ -24,7 +24,6 @@ import {
   REVIEW_CHECK,
   type ReviewStep,
 } from './check-runs.service';
-import { trackComment } from './finalize.service';
 import { climb, modelLabel, NotWorked, partialReview, type Tried, withSpent } from './ladder.service';
 import { step } from './step.service';
 import { reviewThreads, threadDismissals } from './dismiss.service';
@@ -43,7 +42,6 @@ import {
   renderSummary,
   type Review,
   type State,
-  startSummary,
   unposted,
 } from '../utils/render.util';
 import { diffText, fillSlots, trustedComments } from '../utils/prompt.util';
@@ -274,15 +272,13 @@ async function postReview(
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
 
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
-  const writeSummary = async (body: string, reviewing = false) => {
+  const writeSummary = async (body: string) => {
     if (o.dryRun) return;
     const req = { owner: ctx.owner, repo: ctx.repo, body: clean(body) };
     const { data } = summary
       ? await octokit.rest.issues.updateComment({ ...req, comment_id: summary.id })
       : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
-    // A run that ends while it says "Reviewing" swaps it for its failure or cancelled card.
-    trackComment(data.id, reviewing, prior);
   };
   const postChecks = async (states: CheckItem[], placed: Placed[]) => {
     if (!o.dryRun) return canCheck ? postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean) : undefined;
@@ -344,8 +340,6 @@ async function postReview(
     const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
     const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
 
-    // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
-    if (summary) await writeSummary(startSummary(sha, prior), true);
     rungs = ladder({ ...pickInput, promptChars: prompt.length });
     try {
       const climbed = await step('Review', () =>

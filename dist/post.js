@@ -23724,14 +23724,6 @@ function failureMarkdown(f) {
 }
 
 // src/utils/render.util.ts
-var SUMMARY_MARKER = "<!-- shaft:summary -->";
-function stateLine(state) {
-  return `<!-- shaft:state ${JSON.stringify(state).replace(/>/g, "\\u003e")} -->`;
-}
-function failedSummary(failure, prior) {
-  return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ""].filter(Boolean).join(`
-`);
-}
 function redact(text, secrets) {
   return secrets.filter((s) => s.length >= 8).reduce((t, s) => t.split(s).join("***"), text);
 }
@@ -23776,10 +23768,6 @@ function trackCheck(id, name) {
     delete open2.checks[id];
   save();
 }
-function trackComment(id, reviewing, prior) {
-  open2.comment = reviewing ? { id, prior } : undefined;
-  save();
-}
 function resume() {
   try {
     const saved = getState(STATE);
@@ -23794,7 +23782,7 @@ function finalize(e) {
   return closing ??= close(e).catch((err) => warning(`Couldn't close what the run left open: ${err.message}`));
 }
 async function close(e) {
-  const { token, owner, repo, runUrl, started, comment } = open2;
+  const { token, owner, repo, runUrl, started } = open2;
   const report = e.kind === "cancelled" && started !== undefined && !open2.finalized;
   open2.finalized = true;
   save();
@@ -23802,17 +23790,13 @@ async function close(e) {
   const end = e.kind === "cancelled" ? { conclusion: "cancelled", title: "Cancelled", summary: e.message } : e.kind === "failed" ? { conclusion: "failure", title: "The review failed", summary: failureMarkdown(failure) } : { conclusion: "neutral", title: "Finished without a result", summary: "Axon Shaft finished without a result for this check." };
   const clean = (s) => redact(s, secrets);
   const jobs = [];
-  if (token && owner && repo && (comment || Object.keys(open2.checks).length)) {
+  if (token && owner && repo && Object.keys(open2.checks).length) {
     const gh = getOctokit(token);
     for (const [id, name] of Object.entries(open2.checks)) {
       if (e.kind === "finished")
         warning(`The ${name} check was still in progress when the run finished, so it's closed as neutral.`);
       const output = { title: end.title, summary: clean(end.summary) };
       jobs.push(gh.rest.checks.update({ owner, repo, check_run_id: Number(id), status: "completed", conclusion: end.conclusion, output }).then(() => trackCheck(Number(id))));
-    }
-    if (comment) {
-      const body = clean(failedSummary(failure, comment.prior));
-      jobs.push(gh.rest.issues.updateComment({ owner, repo, comment_id: comment.id, body }).then(() => trackComment(comment.id, false)));
     }
   }
   if (report)

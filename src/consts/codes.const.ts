@@ -24,7 +24,7 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
   },
   cancelled: {
     kind: 'notice',
-    message: 'The workflow was cancelled before the review finished. Its check runs end as cancelled, and the summary comment shows this card in place of "Reviewing".',
+    message: 'The workflow was cancelled before the review finished. Its check runs end as cancelled.',
   },
   nothing_to_fix: { kind: 'notice', message: "A bare `/fix` had nothing to fix: the last review has no open findings, or there's no review yet." },
   nothing_to_resolve: { kind: 'notice', message: '`/resolve` had nothing to do: the pull request already has everything from its base branch.' },

@@ -19,7 +19,6 @@ import {
   type Review,
   renderSummary,
   stateLine,
-  startSummary,
   unposted,
   workflowEditUrl,
 } from '../render.util';
@@ -341,12 +340,6 @@ test('the state line survives a title with --> in it', () => {
   expect(stateLine(state)).not.toContain('x -->');
   expect(parseState(`text\n${stateLine(state)}`)).toEqual(state);
   expect(parseState('<!-- shaft:state {broken -->')).toBeUndefined();
-});
-
-test('the start text keeps the previous state', () => {
-  const prior = { sha: 'abc', findings: [] };
-  expect(parseState(startSummary('a1b2c3d4e5', prior))).toEqual(prior);
-  expect(startSummary('a1b2c3d4e5')).toBe('<!-- shaft:summary -->\n![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)\nReviewing `a1b2c3d`…');
 });
 
 test('redact replaces every secret', () => {

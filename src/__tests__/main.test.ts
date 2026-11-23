@@ -579,17 +579,16 @@ test('a review failure goes to the job summary too', async () => {
   );
 });
 
-test('a review that fails mid-way closes the check runs it left open as failed, and swaps "Reviewing" for the failure card', async () => {
+test('a review that fails mid-way closes the check runs it left open as failed', async () => {
   api(Response.json(grant));
   during = async (t) => {
     t.trackCheck(5, 'Axon Shaft / review');
     t.trackCheck(6, 'Axon Shaft / gates');
     t.trackCheck(6);
-    t.trackComment(8, true);
   };
   reviewError = (F) => new F('review_timed_out', 'The review ran past its 15-minute time limit.');
   await main();
-  await vi.waitFor(() => expect(closed).toHaveLength(2));
+  await vi.waitFor(() => expect(closed).toHaveLength(1));
   // Only the run still in progress: the one already completed is left alone.
   expect(closed[0]).toEqual({
     owner: 'acme',
@@ -599,17 +598,15 @@ test('a review that fails mid-way closes the check runs it left open as failed, 
     conclusion: 'failure',
     output: { title: 'The review failed', summary: expect.stringContaining('errors/review_timed_out.svg') },
   });
-  expect(closed[1]).toMatchObject({ comment_id: 8, body: expect.stringContaining('The review ran past its 15-minute time limit.') });
 });
 
-test('a cancel closes the open check runs as cancelled, swaps "Reviewing" for the cancelled card, reports the run and exits', async () => {
+test('a cancel closes the open check runs as cancelled, reports the run and exits', async () => {
   const exit = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
   api(Response.json(grant));
   let inReview!: () => void;
   const started = new Promise<void>((r) => (inReview = r));
   during = async (t) => {
     t.trackCheck(5, 'Axon Shaft / review');
-    t.trackComment(8, true);
     inReview();
     await new Promise(() => {}); // the session still running
   };
@@ -623,7 +620,6 @@ test('a cancel closes the open check runs as cancelled, swaps "Reviewing" for th
     conclusion: 'cancelled',
     output: { title: 'Cancelled', summary: 'The workflow was cancelled before the review finished.' },
   });
-  expect(closed[1]).toMatchObject({ comment_id: 8, body: expect.stringContaining('errors/cancelled.svg') });
   expect(reported).toEqual({ error: { code: 'cancelled', message: 'The workflow was cancelled before the review finished.' }, duration_ms: expect.any(Number) });
 });
 

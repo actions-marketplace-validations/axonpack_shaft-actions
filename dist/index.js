@@ -58100,10 +58100,6 @@ function walkthrough(w) {
   return details("Walkthrough", ["| Area | Files | What changed |", "|---|---|---|", ...rows, ...diagram].join(`
 `));
 }
-function startSummary(sha, prior) {
-  return [SUMMARY_MARKER, statusCard("reviewing", "Reviewing"), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ""].filter(Boolean).join(`
-`);
-}
 function idleSummary(states, prior, f) {
   return [
     SUMMARY_MARKER,
@@ -58862,15 +58858,11 @@ function trackCheck(id, name) {
     delete open2.checks[id];
   save();
 }
-function trackComment(id, reviewing, prior) {
-  open2.comment = reviewing ? { id, prior } : undefined;
-  save();
-}
 function finalize(e) {
   return closing ??= close(e).catch((err) => warning(`Couldn't close what the run left open: ${err.message}`));
 }
 async function close(e) {
-  const { token, owner, repo, runUrl, started, comment } = open2;
+  const { token, owner, repo, runUrl, started } = open2;
   const report = e.kind === "cancelled" && started !== undefined && !open2.finalized;
   open2.finalized = true;
   save();
@@ -58878,17 +58870,13 @@ async function close(e) {
   const end = e.kind === "cancelled" ? { conclusion: "cancelled", title: "Cancelled", summary: e.message } : e.kind === "failed" ? { conclusion: "failure", title: "The review failed", summary: failureMarkdown(failure) } : { conclusion: "neutral", title: "Finished without a result", summary: "Axon Shaft finished without a result for this check." };
   const clean = (s) => redact(s, secrets);
   const jobs = [];
-  if (token && owner && repo && (comment || Object.keys(open2.checks).length)) {
+  if (token && owner && repo && Object.keys(open2.checks).length) {
     const gh = getOctokit(token);
     for (const [id, name] of Object.entries(open2.checks)) {
       if (e.kind === "finished")
         warning(`The ${name} check was still in progress when the run finished, so it's closed as neutral.`);
       const output = { title: end.title, summary: clean(end.summary) };
       jobs.push(gh.rest.checks.update({ owner, repo, check_run_id: Number(id), status: "completed", conclusion: end.conclusion, output }).then(() => trackCheck(Number(id))));
-    }
-    if (comment) {
-      const body = clean(failedSummary(failure, comment.prior));
-      jobs.push(gh.rest.issues.updateComment({ owner, repo, comment_id: comment.id, body }).then(() => trackComment(comment.id, false)));
     }
   }
   if (report)
@@ -61095,13 +61083,12 @@ async function postReview(ctx, o, canCheck, progress) {
   const { passes } = o.prompt;
   info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
-  const writeSummary = async (body, reviewing = false) => {
+  const writeSummary = async (body) => {
     if (o.dryRun)
       return;
     const req = { owner: ctx.owner, repo: ctx.repo, body: clean(body) };
     const { data } = summary ? await octokit.rest.issues.updateComment({ ...req, comment_id: summary.id }) : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
-    trackComment(data.id, reviewing, prior);
   };
   const postChecks = async (states, placed) => {
     if (!o.dryRun)
@@ -61162,8 +61149,6 @@ ${clean(body)}`);
     const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
     const prompt = modelled ? `${pack}
 ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
-    if (summary)
-      await writeSummary(startSummary(sha, prior), true);
     rungs = ladder({ ...pickInput, promptChars: prompt.length });
     try {
       const climbed = await step("Review", () => climb(rungs, async (c, last) => {
