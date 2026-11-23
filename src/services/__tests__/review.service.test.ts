@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ShaftFailure } from '../../utils/failure.util';
-import { parseState } from '../../utils/render.util';
+import { parseState, stateLine } from '../../utils/render.util';
 import type { Checklist } from '../api.service';
 
 const logs: string[] = [];
@@ -121,6 +121,7 @@ async function review(
     checklists?: Checklist[];
     open?: string;
     advisories?: boolean;
+    ignore?: { checklist?: string; path?: string; title?: string }[];
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
@@ -146,6 +147,7 @@ async function review(
     cwd: '.',
     gates: extra.gates,
     advisories: extra.advisories,
+    ignore: extra.ignore,
   });
   return { refs: fake.refs, prompt: runs.at(-1)?.prompt ?? '', run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
@@ -425,6 +427,34 @@ test("a fixed finding resolves only the bot's own thread, never one a stranger s
   const ctx = { owner: 'o', repo: 'r', pr: { number: 7 } } as any;
   await resolveThreads(octokit as any, ctx, ['abc123'], 'axonshaft[bot]');
   expect(resolved).toEqual(['ours']);
+});
+
+test("a dismissed finding found again a line away isn't posted or counted: it shows under Dismissed, and the verdict drops", async () => {
+  const d = { fp: 'ddd444', file: 'src/a.ts', line: 2, severity: 'blocking', title: 'Wrong sum', step: 'correctness', by: 'maintainer', reason: 'on purpose' };
+  const body = `<!-- shaft:summary -->\nold\n${stateLine({ sha: 'fed9876', findings: [], dismissed: [d as any] })}`;
+  found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' }];
+  replies = [{ verdict: 'blocking' }];
+  const { summary, outcome } = await review([file('src/a.ts')], { comments: [{ id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body }] });
+  expect(logs.filter((l) => l.startsWith('--- inline'))).toEqual([]);
+  expect(outcome.verdict).toBe('looks-good');
+  expect(outcome.bySeverity.blocking).toBe(0);
+  expect(summary).toContain('| 🔴 | `src/a.ts:2` | Wrong sum | maintainer | on purpose |');
+  expect(parseState(summary)).toMatchObject({ findings: [], dismissed: [d] });
+  expect(outcome.output.dismissed).toEqual([{ severity: 'blocking', file: 'src/a.ts', line: 2, title: 'Wrong sum', by: 'maintainer', reason: 'on purpose' }]);
+  expect(outcome.output.checks.find((c) => c.key === 'correctness')?.state).toBe('passed');
+});
+
+test("a finding the repo config file's ignore matches isn't posted, counted or checked, and the summary counts it", async () => {
+  found = [
+    { severity: 'blocking', step: 'correctness', file: 'legacy/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' },
+    { severity: 'should-fix', step: 'standards', file: 'src/a.ts', line: 1, title: 'Name it', body: 'Short name.' },
+  ];
+  replies = [{ verdict: 'blocking' }];
+  const { summary, outcome } = await review([file('legacy/a.ts'), file('src/a.ts')], { ignore: [{ path: 'legacy/**' }] });
+  expect(outcome.verdict).toBe('needs-changes');
+  expect(outcome.bySeverity.blocking).toBe(0);
+  expect(summary).toContain("**Ignored:** 1 finding matched `ignore` in the repo's config file.");
+  expect(parseState(summary)?.findings.map((f) => f.file)).toEqual(['src/a.ts']);
 });
 
 test('the outcome has the card for the dashboard, and each step is a group in the log', async () => {

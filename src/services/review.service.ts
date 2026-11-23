@@ -27,6 +27,9 @@ import {
 import { trackComment } from './finalize.service';
 import { climb, modelLabel, NotWorked, partialReview, type Tried, withSpent } from './ladder.service';
 import { step } from './step.service';
+import { reviewThreads, threadDismissals } from './dismiss.service';
+import { hasWriteAccess } from './route.service';
+import { type Ignore, ignored, verdictAfter } from '../utils/dismiss.util';
 import {
   type CheckItem,
   checkStates,
@@ -79,6 +82,10 @@ export type ReviewOptions = {
   workflowEditUrl?: string;
   /** Open a private draft advisory for each blocking security finding (the API's `settings.advisories`). */
   advisories?: boolean;
+  /** Repo-wide ignores from the repo's `.github/axonshaft.yml`: a finding that matches one is left out like a dismissed one. */
+  ignore?: Ignore[];
+  /** Why the API left the repo's config file out, for a warning in the summary. */
+  repoConfig?: { path: string; problems: string[] };
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
   cwd: string;
@@ -170,19 +177,8 @@ export function buildPrompt(ctx: Context, prior: State | undefined, o: { templat
  * stays open.
  */
 export async function resolveThreads(octokit: Octokit, ctx: Context, fps: string[], bot: string): Promise<void> {
-  // ponytail: the first 100 threads; page through them if a PR ever has more
-  const data: any = await octokit.graphql(
-    'query($owner:String!,$repo:String!,$n:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{body author{__typename login}}}}}}}}',
-    { owner: ctx.owner, repo: ctx.repo, n: ctx.pr.number },
-  );
-  for (const t of data.repository.pullRequest.reviewThreads.nodes) {
-    const first = t.comments.nodes[0];
-    // GraphQL names a bot without the `[bot]` that REST adds.
-    const author = first?.author && (first.author.__typename === 'Bot' ? `${first.author.login}[bot]` : first.author.login);
-    const fp = author === bot ? /<!-- shaft:finding (\w+) -->\s*$/.exec(first.body ?? '')?.[1] : undefined;
-    if (!t.isResolved && fp && fps.includes(fp)) {
-      await octokit.graphql('mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}', { id: t.id });
-    }
+  for (const t of await reviewThreads(octokit, ctx, bot)) {
+    if (!t.resolved && t.fp && fps.includes(t.fp)) await octokit.graphql('mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}', { id: t.id });
   }
 }
 
@@ -238,7 +234,17 @@ async function postReview(
   const { octokit } = o;
   const sha = ctx.pr.headSha;
   const clean = (text: string) => redact(text, o.secrets);
-  const prior = parseState(ctx.summary?.body);
+  let prior = parseState(ctx.summary?.body);
+  // A thread someone resolved since the last review dismisses its finding; one reopened brings it back.
+  if (prior && !o.dryRun) {
+    const read = prior;
+    prior = await reviewThreads(octokit, ctx, o.bot)
+      .then((threads) => threadDismissals(read, threads, o.bot, (login) => hasWriteAccess(octokit, ctx.owner, ctx.repo, login)))
+      .catch((e: Error) => {
+        core.warning(`Reading the review threads failed, so resolved threads count as before: ${e.message}`);
+        return read;
+      });
+  }
   const files = ctx.files.filter((f) => !matches(f.filename, o.skip));
   const skipped = ctx.files.length - files.length;
   // Only the checklists whose paths match a changed file run; the others get a skipped check run.
@@ -398,7 +404,12 @@ async function postReview(
   await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 
-  const placed = place(review.findings, files, o.nits, prior?.findings);
+  // A dismissed finding (by fingerprint, or a line or two away) isn't posted, counted or checked again.
+  // Nor is one the repo config file's `ignore` matches, which the summary only counts.
+  const dismissed = prior?.dismissed ?? [];
+  const all = place(review.findings, files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
+  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
+  if (placed.length < all.length) review.verdict = verdictAfter(review.verdict, placed) as Review['verdict'];
   // Before anything is posted, so a withheld finding's details never reach the PR.
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
@@ -432,13 +443,19 @@ async function postReview(
   }
 
   const models = useModel ? chosenModels(result.models, choice, !!choice.subagentModel && passes.length > 0) : undefined;
-  const body = renderSummary(review, placed, prior, {
+  const body = renderSummary(
+    review,
+    placed,
+    prior,
+    {
     ...facts,
     advisories,
     checks: o.checks,
     checklists: planned,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
+    ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    repoConfig: o.repoConfig,
     ...(models && {
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
       effort: choice.effort,
@@ -449,7 +466,9 @@ async function postReview(
       // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
       costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
     }),
-  });
+    },
+    dismissed,
+  );
   if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
   else await writeSummary(body);
 
@@ -495,6 +514,9 @@ async function postReview(
       inline: p.inline,
     })),
     fixed: fixed.length,
+    ...(dismissed.length && {
+      dismissed: dismissed.slice(0, 200).map((d) => ({ severity: d.severity, file: cut(d.file, 500), line: Math.max(1, d.line), title: cut(clean(d.title), 300), by: cut(d.by, 39), reason: cut(clean(d.reason), 300) })),
+    }),
   };
   return {
     output,

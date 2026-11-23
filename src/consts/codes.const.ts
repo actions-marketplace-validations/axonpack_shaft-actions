@@ -38,5 +38,9 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     message: "A fork's pull request ran the workflow on `pull_request`, where GitHub gives it no OIDC token. Run the workflow on `pull_request_target` to review it.",
   },
   not_a_pull_request: { kind: 'notice', message: '`/review`, `/ask`, `/fix` and `/axonshaft` work on a pull request, and this comment was on an issue.' },
+  not_a_finding: {
+    kind: 'notice',
+    message: "`/dismiss` or `/undismiss` wasn't a reply in the thread of a finding from the last review, or the finding was already as asked, so nothing changed.",
+  },
   no_write_access: { kind: 'notice', message: 'The commenter has no write access to the repo. Only people with write access can start a run.' },
 };

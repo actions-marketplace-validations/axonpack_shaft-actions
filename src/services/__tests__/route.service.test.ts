@@ -88,6 +88,21 @@ test('/ask on a line: a reply under the first comment of its thread, at the line
   });
 });
 
+test("/dismiss and /undismiss in a finding's thread: no model, the reason after the command; anywhere else a notice", () => {
+  const says = (body: string, c: object = {}) => route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body, in_reply_to_id: 600, ...c } });
+  expect(says('/dismiss  the API checks this first\nthanks')).toEqual({
+    mode: 'dismiss',
+    number: 12,
+    actor: 'maintainer',
+    ask: { id: 601, text: '/dismiss  the API checks this first\nthanks', path: 'src/retry.ts', line: 42, thread: 600 },
+    undo: false,
+    reason: 'the API checks this first',
+  });
+  expect(says('/undismiss')).toMatchObject({ mode: 'dismiss', undo: true, reason: '' });
+  expect(says('/dismissal')).toMatchObject({ mode: 'skip' });
+  expect(route('issue_comment', { ...comment, comment: { ...comment.comment, body: '/dismiss no' } })).toMatchObject({ mode: 'skip', code: 'not_a_finding' });
+});
+
 test('a comment without the mention, an edit, or a bot comment exits quietly', () => {
   expect(quiet(route('issue_comment', { ...comment, comment: { ...comment.comment, body: 'thanks!' } }))).toBe(true);
   expect(quiet(route('issue_comment', { ...comment, action: 'edited' }))).toBe(true);
