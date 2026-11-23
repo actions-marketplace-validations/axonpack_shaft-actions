@@ -63,7 +63,12 @@ vi.doMock('@actions/github', () => ({
       issues: { listComments: {}, createComment: async (p: unknown) => posted.push(p), updateComment: async (p: Record<string, unknown>) => closed.push(p) },
       checks: { update: async (p: Record<string, unknown>) => closed.push(p) },
       repos: { getCollaboratorPermissionLevel: async () => ({ data: { permission } }) },
-      reactions: { createForIssueComment: react, deleteForIssueComment: unreact },
+      reactions: {
+        createForIssueComment: react,
+        deleteForIssueComment: unreact,
+        createForIssue: async ({ issue_number, content }: { issue_number: number; content: string }) => react({ comment_id: issue_number, content }),
+        deleteForIssue: async ({ issue_number, reaction_id }: { issue_number: number; reaction_id: number }) => unreact({ comment_id: issue_number, reaction_id }),
+      },
     },
   }),
 }));
@@ -259,7 +264,15 @@ test("pull_request sends the event, fork: false and the pull request, and review
     pull_request: { number: 12, title: 'Retry failed uploads', branch: 'retry-uploads', author: 'octocat', base: 'main', association: 'MEMBER', bot: false, labels: [] },
   });
   expect(checkedOut).toEqual([]);
-  expect(reactions).toEqual([]);
+  // The 👀 goes on the pull request and comes off at the end, with nothing in its place.
+  await vi.waitFor(() => expect(reactions).toEqual(['eyes on 12', 'removed 77 from 12']));
+});
+
+test('a failed review on a pull request event takes its 👀 off too', async () => {
+  api(Response.json(grant));
+  reviewError = () => new Error('Not Found');
+  await main();
+  await vi.waitFor(() => expect(reactions).toEqual(['eyes on 12', 'removed 77 from 12']));
 });
 
 test("pull_request_target is a review too: a fork's PR sends fork: true, and its head commit is checked out with the granted token", async () => {

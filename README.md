@@ -169,7 +169,7 @@ Reply `/dismiss` on a finding's inline comment when you've decided not to fix it
 - 👀 when the run starts. For `/review`, `/fix`, `/ask` and `/axonshaft`, it comes after the write access check, so a comment from someone without write access gets no reaction. `/help` gets it from anyone.
 - When the run ends, the 👀 is replaced with 🚀 if the run did its job (for `/ask`, once the answer is posted), or 😕 if it failed or did nothing, such as a command that isn't built yet or a run the API stopped.
 
-GitHub has no reactions on a review's body, so a command in a review gets none, and neither does a pull request event. If GitHub refuses a reaction, the job log warns and the run carries on; if removing the 👀 fails, it stays next to the new one. A dry run logs the reactions and adds none.
+GitHub has no reactions on a review's body, so a command in a review gets none. A review started by a pull request event gets its 👀 on the pull request instead; see [Progress while the review runs](#progress-while-the-review-runs). If GitHub refuses a reaction, the job log warns and the run carries on; if removing the 👀 fails, it stays next to the new one. A dry run logs the reactions and adds none.
 
 What counts as a command:
 
@@ -375,7 +375,7 @@ The action shows that a review is running without anything that emails people:
 - A check run named `Axon Shaft / review` on the reviewed commit. It's in progress while the review runs. It then passes, with a link to the summary comment, or fails, with the failure's message and a link to the run.
 
   The check is updated once at the start of each step. Its title is the current step, such as "Reviewing with Sonnet, effort medium" or "Posting the review". Its summary lists the steps, with ✓ on the ones done and the current one in bold, and says how far into the review that step started.
-- An 👀 reaction on the `/review` comment, when a comment started the review. Every command gets one; see [Reactions on the comment](#reactions-on-the-comment).
+- An 👀 reaction on the `/review` comment when a comment started the review (every command gets one; see [Reactions on the comment](#reactions-on-the-comment)). Otherwise the 👀 goes on the pull request itself and comes off when the run ends, whether it finished, failed or was cancelled.
 
 The check run needs Checks (write) on the run's token. Without it the review still posts, the job log warns once, and the action skips the other check runs. If GitHub refuses a step's update, the job log warns once and the check gets no more step updates. The review carries on, and the check still gets its result at the end. A dry run logs the check, each step's title and the reaction, and posts none of them.
 

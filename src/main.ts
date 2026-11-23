@@ -37,7 +37,7 @@ const repoConfigOf = (v: unknown) => {
 
 /** Set once the API has opened the run's row: a failure after that is reported to it, so the dashboard shows it. */
 let reportFailure: ((e: unknown) => Promise<void>) | undefined;
-/** The 👀 on the comment that started the run, swapped at the end for 🚀 when `done` is set, or 😕. */
+/** The 👀 on the comment that started the run (swapped at the end for 🚀 when `done` is set, or 😕), or on the pull request. */
 let reaction: Reaction | undefined;
 let done = false;
 
@@ -106,7 +106,8 @@ async function run(): Promise<void> {
           : `nothing was changed. Only people with write access can start a change with ${r.mode === 'task' && r.follow ? `/${r.follow}` : '/fix or /axonshaft'}`;
     return core.notice(noticeText(`${r.actor} has no write access, so ${what}.`, 'no_write_access'));
   }
-  reaction = await reactStart(octokit, context, dryRun);
+  // A review no comment started gets its 👀 on the pull request, taken off when the run ends.
+  reaction = await reactStart(octokit, context, dryRun, r.mode === 'review' ? r.number : undefined);
   // The project's own variables pass to the model's commands and the checks, so their values are
   // masked in the log and taken out of anything posted, like the tokens.
   const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);

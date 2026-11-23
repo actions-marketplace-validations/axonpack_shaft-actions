@@ -61551,34 +61551,36 @@ function triggerComment(eventName, payload) {
     return;
   return { id, review: eventName === "pull_request_review_comment" };
 }
-var warn = (what) => (e) => {
-  warning(`Couldn't ${what} on the comment that started the run: ${e.message}`);
+var where2 = (r) => r.comment ? "the comment that started the run" : "the pull request";
+var warn = (r, what) => (e) => {
+  warning(`Couldn't ${what} on ${where2(r)}: ${e.message}`);
   return;
 };
 async function add(r, content) {
-  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, content };
-  const { data } = await (r.comment.review ? r.octokit.rest.reactions.createForPullRequestReviewComment(req) : r.octokit.rest.reactions.createForIssueComment(req));
+  const base = { owner: r.owner, repo: r.repo, content };
+  const { data } = await (!r.comment ? r.octokit.rest.reactions.createForIssue({ ...base, issue_number: r.pr }) : r.comment.review ? r.octokit.rest.reactions.createForPullRequestReviewComment({ ...base, comment_id: r.comment.id }) : r.octokit.rest.reactions.createForIssueComment({ ...base, comment_id: r.comment.id }));
   return data.id;
 }
-async function reactStart(octokit, event, dryRun) {
+async function reactStart(octokit, event, dryRun, pr) {
   const comment = triggerComment(event.eventName, event.payload);
-  if (!comment)
+  if (!comment && pr === undefined)
     return;
-  const r = { octokit, owner: event.repo.owner, repo: event.repo.repo, comment, dryRun };
+  const r = { octokit, owner: event.repo.owner, repo: event.repo.repo, comment, pr: comment ? undefined : pr, dryRun };
   if (dryRun) {
-    info("Would react \uD83D\uDC40 to the comment that started the run");
+    info(`Would react \uD83D\uDC40 to ${where2(r)}`);
     return r;
   }
-  const id = await add(r, "eyes").catch(warn("add \uD83D\uDC40"));
+  const id = await add(r, "eyes").catch(warn(r, "add \uD83D\uDC40"));
   return id === undefined ? undefined : { ...r, id };
 }
 async function reactEnd(r, done) {
   const [content, emoji] = done ? ["rocket", "\uD83D\uDE80"] : ["confused", "\uD83D\uDE15"];
   if (r.dryRun)
-    return info(`Would swap \uD83D\uDC40 for ${emoji} on the comment that started the run`);
-  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, reaction_id: r.id };
-  await (r.comment.review ? r.octokit.rest.reactions.deleteForPullRequestComment(req) : r.octokit.rest.reactions.deleteForIssueComment(req)).catch(warn("remove \uD83D\uDC40"));
-  await add(r, content).catch(warn(`add ${emoji}`));
+    return info(r.comment ? `Would swap \uD83D\uDC40 for ${emoji} on ${where2(r)}` : `Would remove \uD83D\uDC40 from ${where2(r)}`);
+  const ids = { owner: r.owner, repo: r.repo, reaction_id: r.id };
+  await (!r.comment ? r.octokit.rest.reactions.deleteForIssue({ ...ids, issue_number: r.pr }) : r.comment.review ? r.octokit.rest.reactions.deleteForPullRequestComment({ ...ids, comment_id: r.comment.id }) : r.octokit.rest.reactions.deleteForIssueComment({ ...ids, comment_id: r.comment.id })).catch(warn(r, "remove \uD83D\uDC40"));
+  if (r.comment)
+    await add(r, content).catch(warn(r, `add ${emoji}`));
 }
 
 // src/services/task.service.ts
@@ -62261,7 +62263,7 @@ ${grant.comment}`);
     const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : r.mode === "reply" ? "the question wasn't answered. Only people with write access can ask with /ask" : `nothing was changed. Only people with write access can start a change with ${r.mode === "task" && r.follow ? `/${r.follow}` : "/fix or /axonshaft"}`;
     return notice(noticeText(`${r.actor} has no write access, so ${what}.`, "no_write_access"));
   }
-  reaction = await reactStart(octokit, context2, dryRun);
+  reaction = await reactStart(octokit, context2, dryRun, r.mode === "review" ? r.number : undefined);
   const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
   for (const v of envValues)
     setSecret(v);
