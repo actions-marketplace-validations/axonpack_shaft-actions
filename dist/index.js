@@ -58139,6 +58139,10 @@ function renderSummary(raw, placed, prior, f, dismissed = []) {
     const links = [f.workflowEditUrl && `[Update the workflow](${f.workflowEditUrl})`, `[Update from the dashboard](${f.dashboardRunUrl ?? DASHBOARD_URL})`];
     out.push("", "> [!NOTE]", `> Axon Shaft [v${version}](${url}) is out. This run used v${ACTION_VERSION}.`, `> ${links.filter(Boolean).join(" · ")}`);
   }
+  if (f.repoConfig) {
+    const { path, problems } = f.repoConfig;
+    out.push("", "> [!WARNING]", `> \`${path}\` on the default branch has problems, so this review used the dashboard's settings and none of the file's.`, ...problems.map((p) => `> - ${html(prose(p)).replace(/\s+/g, " ")}`));
+  }
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== "not_met").length;
     out.push("", `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, "", gatesTable(raw.gates));
@@ -58158,6 +58162,8 @@ function renderSummary(raw, placed, prior, f, dismissed = []) {
     out.push("", `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(", ")})`);
   if (dismissed.length)
     out.push("", dismissedSection(dismissed));
+  if (f.ignored)
+    out.push("", `**Ignored:** ${plural(f.ignored, "finding")} matched \`ignore\` in the repo's config file.`);
   if (f.skipped)
     out.push("", `**Skipped:** ${plural(f.skipped, "file")} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length)
@@ -58777,6 +58783,7 @@ function savedCredentials(cwd) {
 }
 
 // src/utils/dismiss.util.ts
+import { matchesGlob } from "node:path";
 function setDismissal(state, fp, by, reason = "") {
   const dismissed = state.dismissed ?? [];
   if (by) {
@@ -58814,6 +58821,16 @@ function verdictAfter(verdict, left) {
   const rank = (v) => VERDICTS.indexOf(v);
   return rank(verdict) >= rank(byFindings) ? verdict : byFindings;
 }
+function ignoresOf(v) {
+  if (!Array.isArray(v))
+    return [];
+  const str = (x) => typeof x === "string" && x ? x : undefined;
+  return v.flatMap((i) => {
+    const e = { checklist: str(i?.checklist), path: str(i?.path), title: str(i?.title) };
+    return e.checklist || e.path || e.title ? [e] : [];
+  });
+}
+var ignored = (p, ignore) => ignore.some((i) => (!i.checklist || i.checklist === p.step) && (!i.path || matchesGlob(p.file, i.path)) && (!i.title || p.title.toLowerCase().includes(i.title.toLowerCase())));
 
 // src/services/finalize.service.ts
 var STATE = "shaft";
@@ -59131,7 +59148,7 @@ var FIX_HAIKU_MAX = 5;
 var HAIKU_MAX_PROMPT_TOKENS = 1e5;
 
 // src/utils/auto-pick.util.ts
-import { matchesGlob } from "node:path";
+import { matchesGlob as matchesGlob2 } from "node:path";
 var DEFAULT_MAX_TURNS = 30;
 var TURNS_BY_LINES = [
   [100, 12],
@@ -59146,7 +59163,7 @@ var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]
 var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
 var CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
 var COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
-var matches = (file, globs) => globs.some((g) => matchesGlob(file, g));
+var matches = (file, globs) => globs.some((g) => matchesGlob2(file, g));
 function isSensitive(f) {
   if (/(^|\/)package\.json$/.test(f.filename))
     return f.patch === undefined || /ependencies"/.test(f.patch);
@@ -61179,7 +61196,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   startGroup("Post the review");
   const dismissed = prior?.dismissed ?? [];
   const all = place(review.findings, files, o.nits, [...prior?.findings ?? [], ...dismissed]);
-  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp));
+  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length)
     review.verdict = verdictAfter(review.verdict, placed);
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
@@ -61223,6 +61240,8 @@ ${c.body}`);
     checklists: planned,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
+    ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    repoConfig: o.repoConfig,
     ...models && {
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
       effort: choice.effort,
@@ -62103,6 +62122,10 @@ function positive(name, value) {
   throw new ShaftFailure("api_error", `The Axon Shaft API sent ${name} "${value}", which isn't a positive number. Check the repo's settings on the dashboard.`, DASHBOARD_URL);
 }
 var globs = (v) => Array.isArray(v) ? v.filter((g) => typeof g === "string") : [];
+var repoConfigOf = (v) => {
+  const c = v;
+  return typeof c?.path === "string" ? { path: c.path, problems: globs(c.problems).slice(0, 5) } : undefined;
+};
 var reportFailure;
 var reaction;
 var done = false;
@@ -62225,6 +62248,8 @@ ${grant.comment}`);
     latestAction: grant.latest_action,
     missingPermissions: missing,
     advisories: settings.advisories === true,
+    ignore: ignoresOf(settings.ignore),
+    repoConfig: repoConfigOf(settings.repoConfig),
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch)
   });
   setOutput("verdict", out.verdict);

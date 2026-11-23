@@ -466,3 +466,13 @@ test('modelName: the family and version read as a name; any other ID stays as wr
   expect(modelName('claude-haiku-4-5-20251001')).toBe('Claude Haiku 4.5');
   for (const id of ['sonnet', 'claude-sonnet-x', 'gpt-x']) expect(modelName(id)).toBe(id);
 });
+
+test("a repo config file the API left out gets a WARNING with its problems, and ignored findings are counted", () => {
+  const repoConfig = { path: '.github/axonshaft.yml', problems: ['model: Unexpected <property>', "It isn't valid YAML:\nline 2"] };
+  const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, { ...info, repoConfig, ignored: 2 });
+  expect(body).toContain(
+    "> [!WARNING]\n> `.github/axonshaft.yml` on the default branch has problems, so this review used the dashboard's settings and none of the file's.\n> - model: Unexpected &lt;property&gt;\n> - It isn't valid YAML: line 2\n",
+  );
+  expect(body).toContain("**Ignored:** 2 findings matched `ignore` in the repo's config file.");
+  expect(renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info)).not.toContain('[!WARNING]');
+});

@@ -272,6 +272,8 @@ Everything else is set on the dashboard:
 | Monthly spending cap | No cap | The most a project or account spends in a month, in US dollars. At the cap nothing runs until the 1st (UTC), and the run ends with a `spending_cap` notice. |
 | Private draft advisories | On public repos | Open a private draft security advisory for each blocking security finding: off, or on public repos. See [private draft advisories](#private-draft-advisories). |
 
+A repo can also keep some of these in `.github/axonshaft.yml` on its default branch: `skip`, the skip labels, checklists on or off, the review rules, the nit level, the merge gates, and `ignore`, a list of findings to leave out repo-wide by checklist, path glob or text in the title. The API reads the file, never from the pull request's head, and sends what it sets in place of the dashboard's values, so the action needs nothing of its own. A finding that matches an `ignore` entry isn't posted and doesn't count toward the verdict or a check run, like a dismissed one, and the summary says how many were left out. When the file has problems, the API sends the dashboard's settings and the problems, and the summary shows them in a `WARNING` under the card.
+
 ### Model and effort on auto
 
 With the model and effort on `auto`, a run climbs a ladder of models, every one at `low` effort. It starts on the first rung, and moves up only when an attempt doesn't work. A run makes 3 attempts at most.
@@ -319,12 +321,13 @@ A bare `/fix` of fewer than 4 findings for the model gets 12 turns, and of fewer
 Axon Shaft keeps one summary comment on the PR and edits it on every push. The first review creates it only once the result is ready, so GitHub emails people on the PR once, about the result. A review that fails also creates it, to show the failure. From the top, it holds:
 
 1. A card in a GitHub alert, colored by verdict: red (`CAUTION`) for blocking, amber (`WARNING`) for needs changes, green (`TIP`) for looks good. See [the card](#the-card) below.
+   When the repo's `.github/axonshaft.yml` has problems, a `WARNING` under the card lists them and says the review used the dashboard's settings.
    When the workflow pins an older v1 release (such as `@v1.5.0`) and a newer one is out, a `NOTE` under the card names the new version, linked to its release, and the version the run used. Under that, "Update the workflow" opens the workflow file in GitHub's editor, on the branch the run read it from (the default branch when the run came from a tag or a pull request's merge ref), and "Update from the dashboard" opens the run's page there. With no workflow path to go on, only the dashboard link shows. A run on `@v1`, a branch or a SHA never gets the note.
 2. "Merge gates", when the project has any: each gate with ✓ (met), ✗ (not met) or – (doesn't apply), and the review's reason.
 3. A table of blocking and should-fix findings. Each location links to the lines at the reviewed commit.
    A finding with an inline comment says "inline". A finding outside the diff has its text in the table, and its suggested change, if any, in a fold below.
 4. The nits, folded.
-5. The earlier findings this push fixed, and how many files `skip` left out, one line each when there are any.
+5. The earlier findings this push fixed, how many findings the repo's `ignore` entries left out, and how many files `skip` left out, one line each when there are any.
 6. "Walkthrough", folded, for a pull request that changes three or more files: a table of the changed files grouped by area, with one line on what changed in each, and a Mermaid flow diagram when the pull request changes how its parts call each other.
    It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
 7. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.

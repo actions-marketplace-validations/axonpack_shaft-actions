@@ -29,7 +29,7 @@ import { climb, modelLabel, NotWorked, partialReview, type Tried, withSpent } fr
 import { step } from './step.service';
 import { reviewThreads, threadDismissals } from './dismiss.service';
 import { hasWriteAccess } from './route.service';
-import { verdictAfter } from '../utils/dismiss.util';
+import { type Ignore, ignored, verdictAfter } from '../utils/dismiss.util';
 import {
   type CheckItem,
   checkStates,
@@ -82,6 +82,10 @@ export type ReviewOptions = {
   workflowEditUrl?: string;
   /** Open a private draft advisory for each blocking security finding (the API's `settings.advisories`). */
   advisories?: boolean;
+  /** Repo-wide ignores from the repo's `.github/axonshaft.yml`: a finding that matches one is left out like a dismissed one. */
+  ignore?: Ignore[];
+  /** Why the API left the repo's config file out, for a warning in the summary. */
+  repoConfig?: { path: string; problems: string[] };
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
   cwd: string;
@@ -401,9 +405,10 @@ async function postReview(
   core.startGroup('Post the review');
 
   // A dismissed finding (by fingerprint, or a line or two away) isn't posted, counted or checked again.
+  // Nor is one the repo config file's `ignore` matches, which the summary only counts.
   const dismissed = prior?.dismissed ?? [];
   const all = place(review.findings, files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
-  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp));
+  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length) review.verdict = verdictAfter(review.verdict, placed) as Review['verdict'];
   // Before anything is posted, so a withheld finding's details never reach the PR.
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
@@ -449,6 +454,8 @@ async function postReview(
     checklists: planned,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
+    ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    repoConfig: o.repoConfig,
     ...(models && {
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
       effort: choice.effort,

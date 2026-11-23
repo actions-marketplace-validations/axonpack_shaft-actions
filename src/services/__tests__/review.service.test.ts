@@ -121,6 +121,7 @@ async function review(
     checklists?: Checklist[];
     open?: string;
     advisories?: boolean;
+    ignore?: { checklist?: string; path?: string; title?: string }[];
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
@@ -146,6 +147,7 @@ async function review(
     cwd: '.',
     gates: extra.gates,
     advisories: extra.advisories,
+    ignore: extra.ignore,
   });
   return { refs: fake.refs, prompt: runs.at(-1)?.prompt ?? '', run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
@@ -440,6 +442,19 @@ test("a dismissed finding found again a line away isn't posted or counted: it sh
   expect(parseState(summary)).toMatchObject({ findings: [], dismissed: [d] });
   expect(outcome.output.dismissed).toEqual([{ severity: 'blocking', file: 'src/a.ts', line: 2, title: 'Wrong sum', by: 'maintainer', reason: 'on purpose' }]);
   expect(outcome.output.checks.find((c) => c.key === 'correctness')?.state).toBe('passed');
+});
+
+test("a finding the repo config file's ignore matches isn't posted, counted or checked, and the summary counts it", async () => {
+  found = [
+    { severity: 'blocking', step: 'correctness', file: 'legacy/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' },
+    { severity: 'should-fix', step: 'standards', file: 'src/a.ts', line: 1, title: 'Name it', body: 'Short name.' },
+  ];
+  replies = [{ verdict: 'blocking' }];
+  const { summary, outcome } = await review([file('legacy/a.ts'), file('src/a.ts')], { ignore: [{ path: 'legacy/**' }] });
+  expect(outcome.verdict).toBe('needs-changes');
+  expect(outcome.bySeverity.blocking).toBe(0);
+  expect(summary).toContain("**Ignored:** 1 finding matched `ignore` in the repo's config file.");
+  expect(parseState(summary)?.findings.map((f) => f.file)).toEqual(['src/a.ts']);
 });
 
 test('the outcome has the card for the dashboard, and each step is a group in the log', async () => {

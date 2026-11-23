@@ -255,6 +255,10 @@ export type Footer = {
   workflowEditUrl?: string;
   /** Why a private draft advisory couldn't be opened, for one line in the summary. */
   advisories?: string;
+  /** Findings left out by the repo config file's `ignore`. */
+  ignored?: number;
+  /** The repo config file the API left out, and why. */
+  repoConfig?: { path: string; problems: string[] };
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];
 };
@@ -480,6 +484,10 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
     const links = [f.workflowEditUrl && `[Update the workflow](${f.workflowEditUrl})`, `[Update from the dashboard](${f.dashboardRunUrl ?? DASHBOARD_URL})`];
     out.push('', '> [!NOTE]', `> Axon Shaft [v${version}](${url}) is out. This run used v${ACTION_VERSION}.`, `> ${links.filter(Boolean).join(' · ')}`);
   }
+  if (f.repoConfig) {
+    const { path, problems } = f.repoConfig;
+    out.push('', '> [!WARNING]', `> \`${path}\` on the default branch has problems, so this review used the dashboard's settings and none of the file's.`, ...problems.map((p) => `> - ${html(prose(p)).replace(/\s+/g, ' ')}`));
+  }
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== 'not_met').length;
     out.push('', `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, '', gatesTable(raw.gates));
@@ -497,6 +505,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (dismissed.length) out.push('', dismissedSection(dismissed));
+  if (f.ignored) out.push('', `**Ignored:** ${plural(f.ignored, 'finding')} matched \`ignore\` in the repo's config file.`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
   // A run with no model call has no claim to show.

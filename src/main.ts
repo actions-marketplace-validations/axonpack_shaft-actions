@@ -5,6 +5,7 @@ import { stopAgents, type Tokens } from './services/agent.service';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
 import { dismissFinding } from './services/dismiss.service';
+import { ignoresOf } from './utils/dismiss.util';
 import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
@@ -28,6 +29,11 @@ function positive(name: string, value: unknown): number {
 }
 
 const globs = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : []);
+/** The API's report of a repo config file it left out: its path and problems, as text only. */
+const repoConfigOf = (v: unknown) => {
+  const c = v as { path?: unknown; problems?: unknown } | undefined;
+  return typeof c?.path === 'string' ? { path: c.path, problems: globs(c.problems).slice(0, 5) } : undefined;
+};
 
 /** Set once the API has opened the run's row: a failure after that is reported to it, so the dashboard shows it. */
 let reportFailure: ((e: unknown) => Promise<void>) | undefined;
@@ -174,6 +180,8 @@ async function run(): Promise<void> {
     latestAction: grant.latest_action,
     missingPermissions: missing,
     advisories: settings.advisories === true,
+    ignore: ignoresOf(settings.ignore),
+    repoConfig: repoConfigOf(settings.repoConfig),
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
   });
   core.setOutput('verdict', out.verdict);

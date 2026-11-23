@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { setDismissal, verdictAfter, withDismissed } from '../dismiss.util';
+import { ignored, ignoresOf, setDismissal, verdictAfter, withDismissed } from '../dismiss.util';
 import { parseState, type State, stateLine } from '../render.util';
 
 const a = { fp: 'aaa111', file: 'src/a.ts', line: 3, severity: 'blocking' as const, title: 'Wrong sum', step: 'correctness' };
@@ -33,4 +33,17 @@ test('with a finding dismissed the verdict follows what is left, never above the
   expect(verdictAfter('blocking', [{ severity: 'should-fix' }])).toBe('needs-changes');
   expect(verdictAfter('blocking', [{ severity: 'blocking' }])).toBe('blocking');
   expect(verdictAfter('looks-good', [{ severity: 'blocking' }])).toBe('looks-good');
+});
+
+test("a repo-wide ignore matches a finding only on every field it sets, and the API's entries are kept as strings", () => {
+  const ignore = ignoresOf([{ path: 'legacy/**' }, { checklist: 'standards', title: 'NAME' }, {}, { path: 3 }, 'x', null]);
+  expect(ignore).toEqual([
+    { checklist: undefined, path: 'legacy/**', title: undefined },
+    { checklist: 'standards', path: undefined, title: 'NAME' },
+  ]);
+  expect(ignored({ ...a, file: 'legacy/old.ts' }, ignore)).toBe(true);
+  expect(ignored(a, ignore)).toBe(false);
+  expect(ignored(b, ignore)).toBe(true);
+  expect(ignored({ ...b, step: 'docs' }, ignore)).toBe(false);
+  expect(ignoresOf(undefined)).toEqual([]);
 });
