@@ -9,6 +9,8 @@ import type { ClaudeToken, GrantJob, MissingPermission, RunOutput } from './api.
 import { type AgentResult, REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
 import { openAdvisories } from './advisory.service';
 import { checkoutFiles } from './checkout.service';
+import { type LightResult, lightPass } from './light-pass.service';
+import { LIGHT_PASS } from '../consts/ladder.const';
 import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
 import { baseFile, type Context, collectContext } from './context.service';
 import {
@@ -130,6 +132,10 @@ export function chosenModels(used: string[], choice: Choice, deep: boolean): { m
   const subagents = deep && choice.subagentModel ? [named(choice.subagentModel) ?? choice.subagentModel] : [];
   return { main, fellBack: !picked && fallbacks.length > 0, subagents };
 }
+
+/** The light pass's model as the run reported it, or its alias when it reported none. */
+const lightModel = (l: LightResult) => l.spent.models.find((m) => m.includes(LIGHT_PASS.model)) ?? LIGHT_PASS.model;
+const subtract = (a: Tokens, b: Tokens): Tokens => ({ input: a.input - b.input, output: a.output - b.output, cache_read: a.cache_read - b.cache_read, cache_write: a.cache_write - b.cache_write });
 
 /** The guides as prompt text: each cut at `GUIDE_CAP.file`, and all of them at `GUIDE_CAP.total`. */
 export function guidesText(guides: Context['guides']): string {
@@ -389,12 +395,22 @@ async function postReview(
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
 
   let result: AgentResult<Review>;
+  // The checklists marked `light` run first on Haiku, when the main pass has work of its own; if that pass doesn't work, the main pass runs them.
+  const lightRun = modelled && o.depth !== 'deep' ? modelled.filter((c) => c.model === 'light') : [];
+  let light: LightResult | undefined;
+  let steps = modelled;
+  if (useModel && lightRun.length && (lightRun.length < modelled!.length || o.gates?.length)) {
+    await progress('Review', 'Running the light checklists with Haiku');
+    light = await step('Light pass', () => lightPass(lightRun, { ...ctx, files }, prior, input, { ...o, skipped }));
+    if (light.out) steps = modelled!.filter((c) => c.model !== 'light');
+  }
+  const lightKeys = light?.out ? lightRun.map((c) => c.key) : [];
   if (useModel) {
     // With checklists the run's data comes first and the steps last, so the part before them reads the same whatever runs.
-    const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => !carried.includes(f.step ?? '')) }, { template: modelled ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
-    const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
+    const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => !carried.includes(f.step ?? '') && !lightKeys.includes(f.step ?? '')) }, { template: steps ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+    const prompt = steps ? `${pack}\n${stepsBlock(o.prompt.before ?? [], steps, o.prompt.after ?? [])}${await factsBlock(steps, input)}` : pack;
 
-    rungs = ladder({ ...pickInput, promptChars: prompt.length });
+    rungs = ladder({ ...pickInput, checklists: steps?.length, promptChars: prompt.length });
     try {
       const climbed = await step('Review', () =>
         climb(rungs, async (c, last) => {
@@ -417,10 +433,10 @@ async function postReview(
               // On a lower rung a bad reply moves up a model instead of asking the same one again.
               retry: last,
             },
-            modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT,
+            steps ? { ...REVIEW_FORMAT, schema: reviewSchema(steps.map((c) => c.key)) } : REVIEW_FORMAT,
           );
           // A partial review below the last rung moves up one, counting what it used; the last rung's stands.
-          const partial = last ? undefined : partialReview(out.reply, modelled?.map((c) => c.key) ?? []);
+          const partial = last ? undefined : partialReview(out.reply, steps?.map((c) => c.key) ?? []);
           if (partial) throw Object.assign(new NotWorked(partial), { spent: out });
           return out;
         }),
@@ -431,11 +447,18 @@ async function postReview(
       // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
       if (e instanceof ShaftFailure) {
         e.url ??= o.runUrl;
+        if (light && e.spent) e.spent = { ...withSpent(e.spent, light.spent), models: e.spent.models };
         await writeSummary(failedSummary(e, prior));
       }
       throw e;
     }
     core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
+    if (light) {
+      // The light pass's findings, checklists and resolved fingerprints join the main pass's; its tokens always count.
+      const l = light.out?.reply;
+      const main = withSpent(result, light.spent);
+      result = l ? { ...main, reply: { ...main.reply, findings: [...main.reply.findings, ...l.findings], checked: [...main.reply.checked, ...l.checked], resolved: [...main.reply.resolved, ...l.resolved] } } : main;
+    }
   } else {
     const headline = `Only script checklists ran (${scripted.map((c) => c.name).join(', ')}), so no model was called.`;
     const reply: Review = { verdict: 'looks-good', type: '', confidence: 100, headline, claim: '', impact: '', scope: '', findings: [], resolved: [], checked: [], not_checked: '' };
@@ -444,10 +467,11 @@ async function postReview(
   // Only the project's own gates, each with the review's result; any other gates in the reply are dropped.
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
   const { reply } = result;
-  // Two checklists on the same lines leave one finding (dedupe.util). A script's blocking or should-fix finding raises the verdict the model gave.
-  const verdict = scriptFindings.some((f) => f.severity === 'blocking')
+  // Two checklists on the same lines leave one finding (dedupe.util). A script's or the light pass's blocking or should-fix finding raises the verdict the main pass gave.
+  const raising = [...scriptFindings, ...(light?.out?.reply.findings ?? [])];
+  const verdict = raising.some((f) => f.severity === 'blocking')
     ? 'blocking'
-    : scriptFindings.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
+    : raising.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
       ? 'needs-changes'
       : reply.verdict;
   const review: Review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key), ...carried.filter((k) => prior!.checked!.includes(k))] };
@@ -522,6 +546,7 @@ async function postReview(
       tried,
       maxTurns: choice.maxTurns,
       tokens: result.tokens,
+      light: light && { model: lightModel(light), maxTurns: LIGHT_PASS.maxTurns, tokens: light.spent.tokens, checklists: lightRun.map((c) => c.name), failed: !light.out },
       // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
       costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
     }),
@@ -558,7 +583,14 @@ async function postReview(
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
     checks: states.slice(0, 40),
-    ...(modelled && { passes: models ? [{ name: 'main', model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] }),
+    ...(modelled && {
+      passes: models
+        ? [
+            { name: 'main', model: models.main, tokens: light ? subtract(result.tokens, light.spent.tokens) : result.tokens, checklists: steps!.slice(0, 40).map((c) => c.key), max_turns: choice.maxTurns },
+            ...(light ? [{ name: 'light', model: lightModel(light), tokens: light.spent.tokens, checklists: lightKeys.slice(0, 40), max_turns: LIGHT_PASS.maxTurns }] : []),
+          ]
+        : [],
+    }),
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,

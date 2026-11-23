@@ -216,6 +216,8 @@ export type AgentOptions = {
   commands?: string[];
   /** In place of the job's tools: none for a triage, which reads only its prompt. */
   tools?: string[];
+  /** In place of the tools the session may call, keeping the tool list (and so the prompt's start) as it is: the light pass's Read and Grep. */
+  allowed?: string[];
   /** Retry a reply that doesn't match the schema once (the default). A rung of the `auto` ladder moves up instead. */
   retry?: boolean;
 };
@@ -279,7 +281,7 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       tools: o.tools ?? (deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS),
       // A task's Bash runs the repo's commands, which no allow rule can list ahead, so no rule allows it:
       // only the guard's own allow lets a call through, and if the guard doesn't answer, dontAsk denies it.
-      allowedTools: o.tools ?? (deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED),
+      allowedTools: o.tools ?? o.allowed ?? (deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED),
       disallowedTools: DENIED,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',

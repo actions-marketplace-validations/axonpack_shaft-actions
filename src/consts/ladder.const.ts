@@ -44,3 +44,9 @@ export const FIX_HAIKU_MAX = 5;
 
 /** Past this many prompt tokens Haiku costs more than the models above it, so the ladder skips it. */
 export const HAIKU_MAX_PROMPT_TOKENS = 100_000;
+
+/**
+ * The review's light pass: the checklists marked `light`, on Haiku with only their facts and hunks,
+ * Read and Grep, and a short turn cap. Its time limit is the job's, up to `timeoutMinutes`.
+ */
+export const LIGHT_PASS = { model: 'haiku', effort: 'low', maxTurns: 6, timeoutMinutes: 5, allowed: ['Read', 'Grep'] } as const;

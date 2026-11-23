@@ -19,22 +19,23 @@ vi.doMock('@actions/core', () => ({
 }));
 /** The findings the mocked review returns. */
 let found: object[] = [];
-const runs: { prompt: string; model: string; effort: string; passes?: unknown[]; steps?: string[] }[] = [];
+const runs: { prompt: string; model: string; effort: string; passes?: unknown[]; steps?: string[]; maxTurns?: number; allowed?: string[] }[] = [];
 /** What the Agent SDK reports in modelUsage; empty means just the model asked for. */
 let usage: string[] = [];
 /** When set, the review fails with it. */
 let agentError: Error | undefined;
-/** What each attempt's reply changes, in order; by default it checked every checklist it ran, at 90% confidence. */
-let replies: object[] = [];
+/** What each attempt's reply changes, in order, or the error it throws; by default it checked every checklist it ran, at 90% confidence. */
+let replies: (object | Error)[] = [];
 vi.doMock('../agent.service', async (actual) => ({
   ...(await actual<typeof import('../agent.service')>()),
   // `steps` is what the reply's schema limits `step` to: unset for 1.5's fixed steps.
-  runAgent: async (prompt: string, o: { model: string; effort: string; passes?: unknown[] }, format: { schema: any }) => {
+  runAgent: async (prompt: string, o: { model: string; effort: string; passes?: unknown[]; maxTurns?: number; allowed?: string[] }, format: { schema: any }) => {
     const step = format.schema.properties.findings.items.properties.step;
     const steps = format.schema === (await actual<typeof import('../agent.service')>()).SCHEMA ? undefined : (step.enum ?? []);
-    runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes, steps });
+    runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes, steps, maxTurns: o.maxTurns, allowed: o.allowed });
     if (agentError) throw agentError;
-    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: steps ?? ['correctness', 'tests'], not_checked: 'n', ...replies.shift() };
+    if (replies[0] instanceof Error) throw replies.shift();
+    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: steps ?? ['correctness', 'tests'], not_checked: 'n', ...(replies.shift() as object) };
     return { reply: review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
   },
 }));
@@ -543,7 +544,7 @@ test('with checklists, only those whose paths match run: their steps after the d
     { key: 'secrets', label: 'The secrets list', state: 'not_checked', reason: "This version of the action doesn't have this checklist's script yet" },
     { key: 'own-1', label: 'The own-1 list', state: 'passed' },
   ]);
-  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'] }]);
+  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'], max_turns: 1 }]);
   expect(summary).toContain('<kbd>❌ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
 });
 
@@ -599,7 +600,7 @@ test('script checklists stay out of the prompt and the schema, and their finding
   expect(prompt).not.toContain('**secrets.**');
   expect(outcome.verdict).toBe('blocking');
   expect(outcome.output.checks.map((c) => `${c.key}:${c.state}`)).toEqual(['correctness:passed', 'secrets:failed']);
-  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness'] }]);
+  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness'], max_turns: 1 }]);
 });
 
 test('a script checklist with no findings passes', async () => {
@@ -763,5 +764,57 @@ describe('incremental review', () => {
       { key: 'own-1', label: 'The own-1 list', state: 'passed' },
     ]);
     expect(parseState(summary)).toMatchObject({ checked: ['own-1', 'correctness'] });
+  });
+});
+
+describe('the light pass', () => {
+  const docs: Checklist = { ...checklist('docs', ['**/*.md']), model: 'light' };
+  const lists = [checklist('correctness', ['**/*.ts']), docs];
+  const files = () => [file('src/a.ts'), file('README.md', '@@ -1 +1 @@\n-old\n+new docs line')];
+
+  test("runs the light checklists first on Haiku, with their hunks only, Read and Grep and 6 turns; its findings and tokens join the main pass's", async () => {
+    replies = [{ findings: [{ severity: 'should-fix', step: 'docs', file: 'README.md', line: 1, title: 'Stale docs', body: 'The page says old.' }] }];
+    const { outcome, summary } = await review(files(), { checklists: lists, open: OPEN });
+    expect(runs.map((r) => [r.model, r.steps, r.maxTurns, r.allowed])).toEqual([
+      ['haiku', ['docs'], 6, ['Read', 'Grep']],
+      ['sonnet', ['correctness'], 1, undefined],
+    ]);
+    expect(runs[0]!.prompt).toContain('+new docs line');
+    expect(runs[0]!.prompt).not.toContain('src/a.ts');
+    expect(runs[0]!.prompt).toContain('1. **docs.** Look.\n2. **Verify.** Each finding.\n');
+    expect(runs[1]!.prompt).not.toContain('**docs.** Look.');
+    // The main pass said looks-good; the light pass's should-fix raises it, as a script's does.
+    expect(outcome.verdict).toBe('needs-changes');
+    expect(outcome.output.findings.map((f) => [f.check, f.file, f.title])).toEqual([['docs', 'README.md', 'Stale docs']]);
+    const each = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
+    expect(outcome.tokens).toEqual({ input: 240000, output: 12000, cache_read: 100000, cache_write: 12000 });
+    expect(outcome.output.passes).toEqual([
+      { name: 'main', model: 'sonnet', tokens: each, checklists: ['correctness'], max_turns: 1 },
+      { name: 'light', model: 'haiku', tokens: each, checklists: ['docs'], max_turns: 6 },
+    ]);
+    expect(summary).toContain('| Light pass | `haiku`, up to 6 turns, 182k tokens: The docs list |');
+  });
+
+  test('when the light pass fails, or comes back partial, the main pass runs its checklists and the log says so', async () => {
+    replies = [new ShaftFailure('review_timed_out', 'It ran past its time limit.')];
+    const failed = await review(files(), { checklists: lists, open: OPEN });
+    expect(runs.map((r) => r.steps)).toEqual([['docs'], ['correctness', 'docs']]);
+    expect(warnings).toContain("The light pass didn't work (It ran past its time limit.), so the main pass runs its checklists");
+    expect(failed.outcome.output.passes!.map((p) => [p.name, p.checklists])).toEqual([['main', ['correctness', 'docs']], ['light', []]]);
+    expect(failed.summary).toContain("| Light pass | Didn't work, so the main pass ran The docs list |");
+    runs.length = 0;
+    replies = [{ checked: [] }];
+    const partial = await review(files(), { checklists: lists, open: OPEN });
+    expect(runs.map((r) => r.steps)).toEqual([['docs'], ['correctness', 'docs']]);
+    // What the partial light pass used still counts.
+    expect(partial.outcome.tokens.input).toBe(240000);
+  });
+
+  test('with only light checklists to run and no gates, one session runs them; a deep review keeps them in the main pass', async () => {
+    await review([file('README.md')], { checklists: lists, open: OPEN });
+    expect(runs.map((r) => r.steps)).toEqual([['docs']]);
+    runs.length = 0;
+    await review(files(), { checklists: lists, open: OPEN, depth: 'deep' });
+    expect(runs.map((r) => r.steps)).toEqual([['correctness', 'docs']]);
   });
 });

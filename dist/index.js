@@ -58005,6 +58005,10 @@ function footer(f) {
     ["Triage", f.triage],
     ["Tried first", f.tried?.map((t) => `${t.model}, ${t.effort} effort: ${t.why}`).join("; ")],
     ["Turn limit", f.maxTurns],
+    [
+      "Light pass",
+      f.light && (f.light.failed ? `Didn't work, so the main pass ran ${f.light.checklists.join(", ")}` : `${modelCell(f.light.model)}, up to ${f.light.maxTurns} turns, ${formatTokens(Object.values(f.light.tokens).reduce((a, b) => a + b, 0))} tokens: ${f.light.checklists.join(", ")}`)
+    ],
     ["Changed lines", f.lines],
     ["Changed files", f.files],
     ["Skipped by `skip`", f.skipped && plural(f.skipped, "file")],
@@ -58597,7 +58601,7 @@ async function once(prompt, o, schema, controller) {
       fallbackModel: o.fallbackModel,
       maxTurns: o.maxTurns,
       tools: o.tools ?? (deep ? [...READ_TOOLS, "Agent"] : edit ? EDIT_TOOLS : READ_TOOLS),
-      allowedTools: o.tools ?? (deep ? [...ALLOWED, "Agent"] : edit ? EDIT_TOOLS.filter((t) => t !== "Bash") : ALLOWED),
+      allowedTools: o.tools ?? o.allowed ?? (deep ? [...ALLOWED, "Agent"] : edit ? EDIT_TOOLS.filter((t) => t !== "Bash") : ALLOWED),
       disallowedTools: DENIED2,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: "dontAsk",
@@ -58986,6 +58990,7 @@ var REVIEW_MIN_CONFIDENCE = 60;
 var TRIAGE_START = { simple: "haiku", normal: "sonnet", hard: "opus" };
 var FIX_HAIKU_MAX = 5;
 var HAIKU_MAX_PROMPT_TOKENS = 1e5;
+var LIGHT_PASS = { model: "haiku", effort: "low", maxTurns: 6, timeoutMinutes: 5, allowed: ["Read", "Grep"] };
 
 // src/utils/auto-pick.util.ts
 var DEFAULT_MAX_TURNS = 30;
@@ -59341,6 +59346,70 @@ async function openAdvisories(placed, o) {
   }
   return failed.length ? `Couldn't open a private draft advisory for ${failed.join(", ")}, so ${failed.length === 1 ? "that finding shows" : "those findings show"} in full.` : undefined;
 }
+
+// src/services/ladder.service.ts
+class NotWorked extends ShaftFailure {
+  context;
+  constructor(message, context = message) {
+    super("review_failed", message);
+    this.context = context;
+  }
+}
+function whyClimb(e) {
+  if (e instanceof NotWorked)
+    return e.message;
+  if (!(e instanceof ShaftFailure))
+    return;
+  if (e.code === "review_invalid_reply")
+    return "its reply didn't match the format";
+  if (e.code !== "review_failed")
+    return;
+  return /error_max_turns/.test(e.message) ? "it ran out of turns" : "the session failed";
+}
+async function climb(rungs, attempt) {
+  const tried = [];
+  const spent = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
+  let earlier;
+  for (const [i, c] of rungs.entries()) {
+    const last = i === rungs.length - 1;
+    try {
+      return { out: await attempt(c, last, earlier), choice: c, tried, spent };
+    } catch (e) {
+      const why = last ? undefined : whyClimb(e);
+      if (!why)
+        throw e;
+      const f = e;
+      if (f.spent) {
+        spent.models.push(...f.spent.models);
+        spent.costUsd += f.spent.costUsd;
+        for (const k of Object.keys(spent.tokens))
+          spent.tokens[k] += f.spent.tokens[k];
+      }
+      tried.push({ model: c.model, effort: c.effort, why });
+      earlier = e instanceof NotWorked ? e.context : f.message;
+      info(`${c.model}, effort ${c.effort}, didn't work (${why}), so the run tries ${rungs[i + 1].model}`);
+    }
+  }
+  throw new Error("climb needs at least one rung");
+}
+var PARTLY = /\b(?:partly|partially|not fully) reviewed\b|\bpartial review\b/i;
+function partialReview(reply, expected) {
+  const missed = expected.filter((k) => !reply.checked.includes(k)).length;
+  if (expected.length && missed > expected.length * PARTIAL_SHARE)
+    return `partial review: ${missed} of ${expected.length} checklists not checked`;
+  if (PARTLY.test(`${reply.headline} ${reply.not_checked}`))
+    return "partial review: the model says it only partly reviewed the diff";
+  if (reply.confidence < REVIEW_MIN_CONFIDENCE)
+    return `partial review: confidence ${Math.round(reply.confidence)}%`;
+}
+var NO_SPEND = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
+function withSpent(r, spent) {
+  const tokens = { ...r.tokens };
+  for (const k of Object.keys(tokens))
+    tokens[k] += spent.tokens[k];
+  return { ...r, tokens, costUsd: r.costUsd + spent.costUsd };
+}
+var modelLabel = (model, tried) => (tried.length ? `${model} (after ${tried.map((t) => t.model).join(", ")})` : model).slice(0, 200);
 
 // src/services/prestep/deps-diff.service.ts
 import { dirname as dirname3, join as join6 } from "node:path";
@@ -60898,69 +60967,33 @@ ${parts.join(`
 ` : "";
 }
 
-// src/services/ladder.service.ts
-class NotWorked extends ShaftFailure {
-  context;
-  constructor(message, context = message) {
-    super("review_failed", message);
-    this.context = context;
+// src/services/light-pass.service.ts
+async function lightPass(light, ctx, prior, input, o) {
+  const keys = light.map((c) => c.key);
+  const files = ctx.files.filter((f) => light.some((c) => touches(f.filename, c.paths)));
+  const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => keys.includes(f.step ?? "")) }, {
+    template: o.prompt.open.split("{{steps}}").join(STEPS_AT_END),
+    focus: o.focus,
+    skipped: o.skipped
+  });
+  const prompt = `${pack}
+${stepsBlock([], light, o.prompt.after ?? [])}${await factsBlock(light, input)}`;
+  const { model, effort, maxTurns, allowed } = LIGHT_PASS;
+  try {
+    const out = await runAgent(prompt, { claude: o.claude, model, effort, maxTurns, allowed: [...allowed], timeoutMinutes: Math.min(LIGHT_PASS.timeoutMinutes, o.timeoutMinutes), cwd: o.cwd, env: o.env, retry: false }, { ...REVIEW_FORMAT, schema: reviewSchema(keys) });
+    const why = partialReview(out.reply, keys);
+    if (!why)
+      return { out, spent: out };
+    return fellBack(why, out);
+  } catch (e) {
+    const none = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
+    return fellBack(e instanceof Error ? e.message : String(e), e instanceof ShaftFailure ? e.spent ?? none : none);
   }
 }
-function whyClimb(e) {
-  if (e instanceof NotWorked)
-    return e.message;
-  if (!(e instanceof ShaftFailure))
-    return;
-  if (e.code === "review_invalid_reply")
-    return "its reply didn't match the format";
-  if (e.code !== "review_failed")
-    return;
-  return /error_max_turns/.test(e.message) ? "it ran out of turns" : "the session failed";
+function fellBack(why, spent) {
+  warning(`The light pass didn't work (${why}), so the main pass runs its checklists`);
+  return { spent: { models: spent.models, costUsd: spent.costUsd, tokens: spent.tokens }, why };
 }
-async function climb(rungs, attempt) {
-  const tried = [];
-  const spent = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
-  let earlier;
-  for (const [i, c] of rungs.entries()) {
-    const last = i === rungs.length - 1;
-    try {
-      return { out: await attempt(c, last, earlier), choice: c, tried, spent };
-    } catch (e) {
-      const why = last ? undefined : whyClimb(e);
-      if (!why)
-        throw e;
-      const f = e;
-      if (f.spent) {
-        spent.models.push(...f.spent.models);
-        spent.costUsd += f.spent.costUsd;
-        for (const k of Object.keys(spent.tokens))
-          spent.tokens[k] += f.spent.tokens[k];
-      }
-      tried.push({ model: c.model, effort: c.effort, why });
-      earlier = e instanceof NotWorked ? e.context : f.message;
-      info(`${c.model}, effort ${c.effort}, didn't work (${why}), so the run tries ${rungs[i + 1].model}`);
-    }
-  }
-  throw new Error("climb needs at least one rung");
-}
-var PARTLY = /\b(?:partly|partially|not fully) reviewed\b|\bpartial review\b/i;
-function partialReview(reply, expected) {
-  const missed = expected.filter((k) => !reply.checked.includes(k)).length;
-  if (expected.length && missed > expected.length * PARTIAL_SHARE)
-    return `partial review: ${missed} of ${expected.length} checklists not checked`;
-  if (PARTLY.test(`${reply.headline} ${reply.not_checked}`))
-    return "partial review: the model says it only partly reviewed the diff";
-  if (reply.confidence < REVIEW_MIN_CONFIDENCE)
-    return `partial review: confidence ${Math.round(reply.confidence)}%`;
-}
-var NO_SPEND = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
-function withSpent(r, spent) {
-  const tokens = { ...r.tokens };
-  for (const k of Object.keys(tokens))
-    tokens[k] += spent.tokens[k];
-  return { ...r, tokens, costUsd: r.costUsd + spent.costUsd };
-}
-var modelLabel = (model, tried) => (tried.length ? `${model} (after ${tried.map((t) => t.model).join(", ")})` : model).slice(0, 200);
 
 // src/services/step.service.ts
 function step(name, fn) {
@@ -61030,6 +61063,8 @@ function chosenModels(used, choice, deep) {
   const subagents = deep && choice.subagentModel ? [named(choice.subagentModel) ?? choice.subagentModel] : [];
   return { main, fellBack: !picked && fallbacks.length > 0, subagents };
 }
+var lightModel = (l) => l.spent.models.find((m) => m.includes(LIGHT_PASS.model)) ?? LIGHT_PASS.model;
+var subtract = (a, b) => ({ input: a.input - b.input, output: a.output - b.output, cache_read: a.cache_read - b.cache_read, cache_write: a.cache_write - b.cache_write });
 function guidesText(guides) {
   let left = GUIDE_CAP.total;
   return guides.map(({ path, text }) => {
@@ -61267,11 +61302,21 @@ ${clean(body)}`);
   const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, input)) : [];
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
   let result;
+  const lightRun = modelled && o.depth !== "deep" ? modelled.filter((c) => c.model === "light") : [];
+  let light;
+  let steps = modelled;
+  if (useModel && lightRun.length && (lightRun.length < modelled.length || o.gates?.length)) {
+    await progress("Review", "Running the light checklists with Haiku");
+    light = await step("Light pass", () => lightPass(lightRun, { ...ctx, files }, prior, input, { ...o, skipped }));
+    if (light.out)
+      steps = modelled.filter((c) => c.model !== "light");
+  }
+  const lightKeys = light?.out ? lightRun.map((c) => c.key) : [];
   if (useModel) {
-    const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => !carried.includes(f.step ?? "")) }, { template: modelled ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
-    const prompt = modelled ? `${pack}
-${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
-    rungs = ladder({ ...pickInput, promptChars: prompt.length });
+    const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => !carried.includes(f.step ?? "") && !lightKeys.includes(f.step ?? "")) }, { template: steps ? o.prompt.open.split("{{steps}}").join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+    const prompt = steps ? `${pack}
+${stepsBlock(o.prompt.before ?? [], steps, o.prompt.after ?? [])}${await factsBlock(steps, input)}` : pack;
+    rungs = ladder({ ...pickInput, checklists: steps?.length, promptChars: prompt.length });
     try {
       const climbed = await step("Review", () => climb(rungs, async (c, last) => {
         const model = /^[a-z]+$/.test(c.model) ? c.model[0].toUpperCase() + c.model.slice(1) : c.model;
@@ -61288,8 +61333,8 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
           cwd: o.cwd,
           env: o.env,
           retry: last
-        }, modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT);
-        const partial = last ? undefined : partialReview(out.reply, modelled?.map((c) => c.key) ?? []);
+        }, steps ? { ...REVIEW_FORMAT, schema: reviewSchema(steps.map((c) => c.key)) } : REVIEW_FORMAT);
+        const partial = last ? undefined : partialReview(out.reply, steps?.map((c) => c.key) ?? []);
         if (partial)
           throw Object.assign(new NotWorked(partial), { spent: out });
         return out;
@@ -61299,11 +61344,18 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
     } catch (e) {
       if (e instanceof ShaftFailure) {
         e.url ??= o.runUrl;
+        if (light && e.spent)
+          e.spent = { ...withSpent(e.spent, light.spent), models: e.spent.models };
         await writeSummary(failedSummary(e, prior));
       }
       throw e;
     }
     info(`Models used ${result.models.join(", ")}, about $${result.costUsd.toFixed(2)}`);
+    if (light) {
+      const l = light.out?.reply;
+      const main = withSpent(result, light.spent);
+      result = l ? { ...main, reply: { ...main.reply, findings: [...main.reply.findings, ...l.findings], checked: [...main.reply.checked, ...l.checked], resolved: [...main.reply.resolved, ...l.resolved] } } : main;
+    }
   } else {
     const headline = `Only script checklists ran (${scripted.map((c) => c.name).join(", ")}), so no model was called.`;
     const reply = { verdict: "looks-good", type: "", confidence: 100, headline, claim: "", impact: "", scope: "", findings: [], resolved: [], checked: [], not_checked: "" };
@@ -61311,7 +61363,8 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   }
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
   const { reply } = result;
-  const verdict = scriptFindings.some((f) => f.severity === "blocking") ? "blocking" : scriptFindings.some((f) => f.severity === "should-fix") && reply.verdict === "looks-good" ? "needs-changes" : reply.verdict;
+  const raising = [...scriptFindings, ...light?.out?.reply.findings ?? []];
+  const verdict = raising.some((f) => f.severity === "blocking") ? "blocking" : raising.some((f) => f.severity === "should-fix") && reply.verdict === "looks-good" ? "needs-changes" : reply.verdict;
   const review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key), ...carried.filter((k) => prior.checked.includes(k))] };
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
@@ -61378,6 +61431,7 @@ ${c.body}`);
       tried,
       maxTurns: choice.maxTurns,
       tokens: result.tokens,
+      light: light && { model: lightModel(light), maxTurns: LIGHT_PASS.maxTurns, tokens: light.spent.tokens, checklists: lightRun.map((c) => c.name), failed: !light.out },
       costUsd: o.claude.kind === "api_key" ? result.costUsd : undefined
     }
   }, dismissed);
@@ -61411,7 +61465,12 @@ ${clean(body)}`);
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? "" : summary?.html_url ?? "",
     checks: states.slice(0, 40),
-    ...modelled && { passes: models ? [{ name: "main", model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] },
+    ...modelled && {
+      passes: models ? [
+        { name: "main", model: models.main, tokens: light ? subtract(result.tokens, light.spent.tokens) : result.tokens, checklists: steps.slice(0, 40).map((c) => c.key), max_turns: choice.maxTurns },
+        ...light ? [{ name: "light", model: lightModel(light), tokens: light.spent.tokens, checklists: lightKeys.slice(0, 40), max_turns: LIGHT_PASS.maxTurns }] : []
+      ] : []
+    },
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,

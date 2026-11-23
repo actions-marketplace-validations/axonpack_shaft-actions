@@ -253,6 +253,8 @@ export type Footer = {
   /** The `auto` ladder's rungs that didn't work before the one that ran, and why each moved up. */
   tried?: { model: string; effort: string; why: string }[];
   maxTurns?: number;
+  /** The review's light pass on Haiku: its tokens are in `tokens` too. `failed`: the main pass ran its checklists. */
+  light?: { model: string; maxTurns: number; tokens: { input: number; output: number; cache_read: number; cache_write: number }; checklists: string[]; failed: boolean };
   /** The changed lines and files the review read, after `skip`. */
   lines?: number;
   files?: number;
@@ -331,6 +333,13 @@ export function footer(f: Footer): string {
     ['Triage', f.triage],
     ['Tried first', f.tried?.map((t) => `${t.model}, ${t.effort} effort: ${t.why}`).join('; ')],
     ['Turn limit', f.maxTurns],
+    [
+      'Light pass',
+      f.light &&
+        (f.light.failed
+          ? `Didn't work, so the main pass ran ${f.light.checklists.join(', ')}`
+          : `${modelCell(f.light.model)}, up to ${f.light.maxTurns} turns, ${formatTokens(Object.values(f.light.tokens).reduce((a, b) => a + b, 0))} tokens: ${f.light.checklists.join(', ')}`),
+    ],
     ['Changed lines', f.lines],
     ['Changed files', f.files],
     ['Skipped by `skip`', f.skipped && plural(f.skipped, 'file')],
