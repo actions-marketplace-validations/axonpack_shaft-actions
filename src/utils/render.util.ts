@@ -279,6 +279,8 @@ export type Footer = {
   ignored?: number;
   /** The repo config file the API left out, and why. */
   repoConfig?: { path: string; problems: string[] };
+  /** The guardrails' lines for people with strikes (`flaggedLines`). */
+  flagged?: string[];
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];
   /** The follow-up commands someone can comment on this pull request now, without the slash. */
@@ -513,6 +515,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
     const { path, problems } = f.repoConfig;
     out.push('', '> [!WARNING]', `> \`${path}\` on the default branch has problems, so this review used the dashboard's settings and none of the file's.`, ...problems.map((p) => `> - ${html(prose(p)).replace(/\s+/g, ' ')}`));
   }
+  if (f.flagged?.length) out.push('', '> [!WARNING]', ...f.flagged.map((l) => `> ${l}`));
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== 'not_met').length;
     out.push('', `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, '', gatesTable(raw.gates));

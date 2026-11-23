@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { cleanOutput, scanOutput } from '../output.util';
+import { cleanOutput, flaggedLines, scanOutput } from '../output.util';
 import { BAD_OUTPUT } from './fixtures';
 
 test('images from outside GitHub are removed, and token shapes redacted', () => {
@@ -23,4 +23,17 @@ test('scanOutput finds the canary anywhere, and cleans only token shapes in code
   expect(r.leak).toBe(true);
   expect(r.reply.findings[0]!.suggestion).toBe('@Decorator() // [a](https://e.x)');
   expect(scanOutput({ answer: 'fine' }, 'shaft-canary-1')).toEqual({ reply: { answer: 'fine' }, leak: false, hits: [] });
+});
+
+test('flaggedLines adds this run’s strike to the API’s count, names its rule, and never quotes the text', () => {
+  const names = (r: string) => `rule ${r}`;
+  const lines = flaggedLines(
+    [{ user_id: 1, login: 'ana', strikes: 1 }, { user_id: 2, login: 'bo', strikes: 2 }],
+    [{ user_id: 2, login: 'bo', rule: 'spoofing.tags', severity: 'strike' }, { user_id: 3, login: 'cy', rule: 'override.ignore', severity: 'warning' }],
+    names,
+  );
+  expect(lines).toEqual([
+    '⚠️ @ana is flagged (1 of 3). A third strike stops Axon Shaft from running for them on this account.',
+    '@bo is blocked on this account after 3 strikes. An admin can review and clear them on the dashboard.',
+  ]);
 });

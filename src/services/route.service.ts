@@ -114,7 +114,7 @@ export function route(eventName: string, payload: any): Route {
  * The pull request the run is for, as `POST /v1/token` takes it. `base` (the branch it goes into),
  * `association` (GitHub's `author_association`), `bot` and `labels` (their names) are for the review job's filters.
  */
-export type PullRequest = { number: number; title: string; branch?: string; author: string; base?: string; association?: string; bot?: boolean; labels?: string[] };
+export type PullRequest = { number: number; title: string; branch?: string; author: string; /** The author's GitHub ID, which the API keys guardrail strikes by. */ author_id?: number; base?: string; association?: string; bot?: boolean; labels?: string[] };
 
 const labelsOf = (item: any): string[] => (item.labels ?? []).map((l: { name: string }) => l.name);
 
@@ -130,13 +130,14 @@ export function pullRequestOf(payload: any): PullRequest | undefined {
       title: pr.title,
       branch: pr.head.ref,
       author: pr.user.login,
+      author_id: pr.user.id,
       base: pr.base.ref,
       association: pr.author_association,
       bot: pr.user.type === 'Bot',
       labels: labelsOf(pr),
     };
   const issue = payload.issue;
-  if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login, labels: labelsOf(issue) };
+  if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login, author_id: issue.user.id, labels: labelsOf(issue) };
   return undefined;
 }
 

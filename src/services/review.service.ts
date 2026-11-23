@@ -1,5 +1,7 @@
 import * as core from '@actions/core';
 import { datamark } from '../guardrails/input.util';
+import { guardrailEvents, ruleName } from '../guardrails/classify.service';
+import { type Flagged, flaggedLines } from '../guardrails/output.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -91,6 +93,8 @@ export type ReviewOptions = {
   ignore?: Ignore[];
   /** Why the API left the repo's config file out, for a warning in the summary. */
   repoConfig?: { path: string; problems: string[] };
+  /** The users the API says have active strikes, for the summary's guardrail lines. */
+  flagged?: Flagged[];
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
   /** The follow-up commands the project keeps on (the API's `settings.commands`), for the summary to list. */
@@ -538,6 +542,7 @@ async function postReview(
     workflowEditUrl: o.workflowEditUrl,
     ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     repoConfig: o.repoConfig,
+    flagged: flaggedLines(o.flagged ?? [], guardrailEvents(), ruleName),
     // `/resolve` only when GitHub says the pull request has conflicts.
     commands: o.commands?.filter((c) => c !== 'resolve' || ctx.pr.conflicts),
     ...(models && {

@@ -60,3 +60,23 @@ export function scanOutput<T>(reply: T, canary: string): { reply: T; leak: boole
   };
   return { reply: walk(reply) as T, leak, hits: [...hits] };
 }
+
+/** A user the API says has active strikes, from the grant. */
+export type Flagged = { user_id: number; login: string; strikes: number };
+
+/**
+ * One summary line for each user with strikes: the API's count plus this run's strike, and the rule
+ * of this run's strike when there is one. Never the text itself, which would repeat the injection.
+ */
+export function flaggedLines(flagged: Flagged[], events: { user_id: number; login: string; rule: string; severity: string }[], names: (rule: string) => string): string[] {
+  const users = new Map(flagged.map((f) => [f.user_id, { ...f }]));
+  for (const e of events.filter((x) => x.severity === 'strike')) {
+    const u = users.get(e.user_id) ?? { user_id: e.user_id, login: e.login, strikes: 0 };
+    users.set(e.user_id, { ...u, strikes: u.strikes + 1 });
+  }
+  return [...users.values()].map((u) => {
+    if (u.strikes >= 3) return `@${u.login} is blocked on this account after 3 strikes. An admin can review and clear them on the dashboard.`;
+    const rule = events.find((e) => e.user_id === u.user_id && e.severity === 'strike')?.rule;
+    return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${rule ? `: ${names(rule)}` : ''}. A third strike stops Axon Shaft from running for them on this account.`;
+  });
+}

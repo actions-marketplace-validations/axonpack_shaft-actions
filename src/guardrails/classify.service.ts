@@ -3,7 +3,7 @@ import { type AgentResult, type ReplyFormat, runAgent, type Tokens } from '../se
 import type { ClaudeToken } from '../services/api.service';
 import { dataBlock } from '../utils/prompt.util';
 import { redact } from '../utils/render.util';
-import { CLASSIFY_MAX, removedMarker, RULES } from './guardrail.const';
+import { CLASSIFY_MAX, PUSH_RULES, removedMarker, RULES } from './guardrail.const';
 import { capText, datamark, scanInput, withoutQuotes } from './input.util';
 
 /** Who wrote a text: their GitHub ID, which never changes, and their login now. */
@@ -28,7 +28,11 @@ export const guardrailEvents = (): GuardrailEvent[] => [...events];
 /** What the classifier used, for the run's usage. */
 export const classifierTokens = (): Tokens => ({ ...spent });
 
-const ruleName = (id: string) => RULES.find((r) => r.id === id)?.name ?? id;
+/** A rule's name for people, from its ID (`override.ignore+classifier` reads as the rule's own name). */
+export const ruleName = (id: string) => {
+  const base = id.split('+')[0]!;
+  return RULES.find((r) => r.id === base)?.name ?? PUSH_RULES.find((r) => r.id === base)?.name ?? base;
+};
 
 /**
  * Record an event, at most one strike per user per run: a later strike for the same user is kept as

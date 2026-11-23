@@ -1,6 +1,8 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
+import { guardrailEvents } from '../guardrails/classify.service';
+import type { Flagged } from '../guardrails/output.util';
 import type { FollowUp, PullRequest, ReviewEvent } from './route.service';
 
 /**
@@ -88,6 +90,8 @@ export type Grant =
       latest_action?: LatestAction;
       /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
       missing_permissions?: MissingPermission[];
+      /** The users in this run (the actor, the pull request's author) with 1 or 2 active guardrail strikes. Older APIs don't send it. */
+      guardrail?: { flagged: Flagged[] };
     };
 
 /** A permission the AxonShaft app wants at `wanted` that the installation approved only at `granted`, or not at all. */
@@ -210,10 +214,14 @@ export async function fetchPushToken(): Promise<PushGrant> {
   return grant;
 }
 
-/** Record the run on the dashboard. Best effort: a failure is logged and never fails the run. */
+/**
+ * Record the run on the dashboard, with this run's guardrail events (`guardrail`, only when there are
+ * any; an older API ignores it). Best effort: a failure is logged and never fails the run.
+ */
 export async function reportRun(summary: RunSummary): Promise<void> {
+  const guardrail = guardrailEvents();
   try {
-    const res = await post('/v1/runs', summary);
+    const res = await post('/v1/runs', { ...summary, ...(guardrail.length && { guardrail }) });
     if (!res.ok) throw new Error(`the API answered ${res.status}`);
   } catch (e) {
     core.warning(`Couldn't record the run on the Axon Shaft API: ${(e as Error).message}`);
