@@ -6,10 +6,11 @@ import type { PullRequest, ReviewEvent } from './route.service';
 /**
  * What `POST /v1/token` takes: the job the event routed to, for a pull request event which one, for
  * a review whether the PR comes from a fork, and the pull request when the payload has it.
- * `help` asks for the list of commands to post; the rest are a job kind.
+ * `help` asks for the list of commands to post, and `dismiss` or `undismiss` for a token to change a
+ * finding's state with; the rest are a job kind.
  */
 export type GrantRequest = {
-  job: 'review' | 'task' | 'reply' | 'help';
+  job: 'review' | 'task' | 'reply' | 'help' | 'dismiss' | 'undismiss';
   event?: ReviewEvent;
   fork?: boolean;
   pull_request?: PullRequest;
@@ -64,10 +65,11 @@ export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
  * What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's
  * tokens. A fork's PR on a job set to ask a maintainer first also gets the `comment` to post, and the
  * GitHub token to post it with. `code` names why nothing runs (`paused`, `filtered`, `skip_label`, …), for
- * the notice to link to its docs; older APIs send none, or only `notice: 'spending_cap'`.
+ * the notice to link to its docs; older APIs send none, or only `notice: 'spending_cap'`. A `/dismiss`
+ * or `/undismiss` the API allows gets `dismiss: true` and the token to post with: no run, no model.
  */
 export type Grant =
-  | { run: false; reason: string; code?: string; notice?: string; comment?: string; github_token?: string }
+  | { run: false; reason: string; code?: string; notice?: string; comment?: string; github_token?: string; dismiss?: boolean }
   | {
       run: true;
       github_token: string;
@@ -104,6 +106,8 @@ export type RunOutput = {
   passes?: { name: string; model: string; tokens: { input: number; output: number; cache_read: number; cache_write: number }; checklists: string[] }[];
   findings: { severity: string; check: string; file: string; line: number; end_line?: number; title: string; body: string; suggestion?: string; url?: string; inline: boolean }[];
   fixed: number;
+  /** The findings dismissed on the pull request, with who and why. Only when there are any. */
+  dismissed?: { severity: string; file: string; line: number; title: string; by: string; reason: string }[];
 };
 
 /** What `POST /v1/runs` takes: a finished review, reply or task, or a run that failed after it opened. */

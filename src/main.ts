@@ -4,6 +4,7 @@ import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
 import { stopAgents, type Tokens } from './services/agent.service';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
+import { dismissFinding } from './services/dismiss.service';
 import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
@@ -48,9 +49,21 @@ async function run(): Promise<void> {
       r.mode === 'review'
         ? { job: 'review', event: r.event, fork: r.fork, pull_request }
         : // A comment on a line of the diff: the API replies on its thread itself when it refuses the run.
-          { job: r.mode, pull_request, ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }) },
+          { job: r.mode === 'dismiss' && r.undo ? 'undismiss' : r.mode, pull_request, ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }) },
     ),
   );
+  // `/dismiss` and `/undismiss` run no model: the API sends only a token to change the finding's state with.
+  if (r.mode === 'dismiss' && !grant.run && grant.dismiss && typeof grant.github_token === 'string') {
+    const gh = getOctokit(grant.github_token);
+    if (!(await hasWriteAccess(gh, owner, repo, r.actor)))
+      return core.notice(noticeText(`${r.actor} has no write access, so nothing was dismissed. Only people with write access can use /dismiss and /undismiss.`, 'no_write_access'));
+    reaction = await reactStart(gh, context, dryRun);
+    const out = await step(r.undo ? 'Bring the finding back' : 'Dismiss the finding', () =>
+      dismissFinding({ octokit: gh, owner, repo, number: r.number, ask: r.ask, actor: r.actor, undo: r.undo, reason: r.reason, bot: APP_BOT, dryRun, secrets: [grant.github_token!] }),
+    );
+    done = out.done;
+    return out.done ? core.info(out.message) : core.notice(noticeText(out.message, 'not_a_finding'));
+  }
   if (!grant.run) {
     // The API's comment to post once: how to start a fork's review, or the list of commands for /help.
     if (typeof grant.github_token === 'string') {

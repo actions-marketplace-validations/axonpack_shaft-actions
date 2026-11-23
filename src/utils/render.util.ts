@@ -59,8 +59,11 @@ export type Review = {
 };
 
 /** The review memory kept in the summary comment's hidden state line. */
-export type StateFinding = { fp: string; file: string; line: number; severity: Severity; title: string };
-export type State = { sha: string; findings: StateFinding[] };
+export type StateFinding = { fp: string; file: string; line: number; severity: Severity; title: string; step?: string };
+/** A finding someone with write access dismissed on this pull request, with who and why (`reason` may be empty). */
+export type Dismissed = StateFinding & { by: string; reason: string };
+/** `dismissed` stays out of `findings`, from the review that found them on. */
+export type State = { sha: string; findings: StateFinding[]; dismissed?: Dismissed[] };
 
 /** A finding after our code decided where it goes. */
 export type Placed = Finding & { fp: string; inline: boolean };
@@ -454,7 +457,18 @@ export function failedSummary(failure: ShaftFailure, prior?: State): string {
   return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
-export function renderSummary(raw: Review, placed: Placed[], prior: State | undefined, f: Footer): string {
+/** Marks the summary's dismissed section, so `/dismiss` can swap it without a review. */
+export const DISMISSED_START = '<!-- shaft:dismissed -->';
+export const DISMISSED_END = '<!-- /shaft:dismissed -->';
+
+/** The findings dismissed on this pull request, with who and why: a table between the markers, or nothing. */
+export function dismissedSection(dismissed: Dismissed[]): string {
+  if (!dismissed.length) return '';
+  const rows = dismissed.map((d) => `| ${SEVERITY_DOT[d.severity]} | ${cell(where(d))} | ${cell(prose(d.title))} | ${cell(d.by)} | ${cell(html(prose(d.reason))) || '-'} |`);
+  return [DISMISSED_START, `**Dismissed:** ${dismissed.length}`, '', '| | Where | Finding | By | Why |', '|---|---|---|---|---|', ...rows, DISMISSED_END].join('\n');
+}
+
+export function renderSummary(raw: Review, placed: Placed[], prior: State | undefined, f: Footer, dismissed: Dismissed[] = []): string {
   const { headline, claim, impact, scope, not_checked } = raw;
   const review = { ...raw, headline: prose(headline), claim: prose(claim), impact: prose(impact), scope: prose(scope), not_checked: prose(not_checked) };
   const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
@@ -482,6 +496,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   if (f.advisories) out.push('', `**Draft advisories:** ${f.advisories}`);
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
+  if (dismissed.length) out.push('', dismissedSection(dismissed));
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
   // A run with no model call has no claim to show.
@@ -497,7 +512,8 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   out.push('', footer(f));
   const state: State = {
     sha: f.sha,
-    findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),
+    findings: placed.map(({ fp, file, line, severity, title, step }) => ({ fp, file, line, severity, title, step })),
+    ...(dismissed.length && { dismissed }),
   };
   // GitHub caps a comment at 65,536 characters; the state line must survive.
   return `${out.join('\n').slice(0, 60_000)}\n${stateLine(state)}`;

@@ -60,7 +60,7 @@ The workflow holds no secrets. With `id-token: write`, the action gets an OIDC t
 
 Along with the token, it sends:
 
-- The job: `review` for a pull request event or a `/review` comment, `task` for `/fix` or `/axonshaft <prompt>`, `reply` for `/ask`, and `help` for `/help`.
+- The job: `review` for a pull request event or a `/review` comment, `task` for `/fix` or `/axonshaft <prompt>`, `reply` for `/ask`, `help` for `/help`, and `dismiss` or `undismiss` for those commands.
 - Which pull request event it was, and whether the pull request comes from a fork.
 - The pull request's number, title, branch and author, for the dashboard's overview.
 - The branch it goes into, its author's association with the repo, whether a bot opened it, and its label names, for the Code review job's filters.
@@ -130,12 +130,25 @@ A comment starts Axon Shaft with a command at the start of a line. It works in t
 | `/fix` | Fixes the open findings of the last review, or what you write after the command, and pushes one commit to the pull request's branch. Works on a pull request; on an issue it ends with a notice. See [Making a change](#making-a-change). |
 | `/ask <question>` | Answers a question about the code where it was asked, citing `file:line`, and never changes anything. Works on a pull request; on an issue it ends with a notice. See [Answering a question](#answering-a-question). |
 | `/axonshaft <prompt>` | A direct prompt, run like `/fix <prompt>`: Axon Shaft answers, or makes the change and pushes it. |
+| `/dismiss <reason>` | A reply on a finding's inline comment: the finding stops counting on this pull request. No model runs. See [Dismissing a finding](#dismissing-a-finding). |
+| `/undismiss` | A reply on the same thread: brings the finding back. |
 | `/help` | `axonshaft[bot]` posts the list of commands on the pull request or issue, once. |
 
 Who can run a command:
 
 - The commenter needs write access to the repo, which the action checks with GitHub. Anyone else's command starts nothing, and the run ends with a notice that only people with write access can start one.
 - `/help` works for anyone.
+
+### Dismissing a finding
+
+Reply `/dismiss` on a finding's inline comment when you've decided not to fix it. Anything after the command on that line is the reason, and it's optional. Only people with write access can dismiss, the same check as `/fix`.
+
+- No model runs and the run costs nothing. The API answers with a GitHub token only, and the action changes the summary comment's state, resolves the thread, and posts the finding's check run again without it. A check whose only blocking findings are dismissed passes.
+- The summary lists dismissed findings under "Dismissed", with who dismissed each one and why.
+- A dismissed finding counts on this pull request only. The next review doesn't post it again, even when its line moved by a line or two, and it doesn't count toward the verdict or a check run. Merge gates are judged again on each review, as before.
+- Resolving the finding's thread on GitHub does the same as `/dismiss`, with no reason, once the next review runs. Resolving by the pull request's author counts only when they have write access.
+- `/undismiss` on the thread, or reopening it, brings the finding back.
+- `/dismiss` anywhere but a finding's thread, or on a thread that isn't Axon Shaft's, changes nothing: the run replies on the thread where it can, and ends with the `not_a_finding` notice.
 
 ### Reactions on the comment
 

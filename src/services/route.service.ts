@@ -1,7 +1,7 @@
 import type { Octokit } from '../types/octokit.type';
 
 /** The skips the action decides itself, which end with a notice. */
-export type SkipCode = 'fork_pull_request' | 'not_a_pull_request';
+export type SkipCode = 'fork_pull_request' | 'not_a_pull_request' | 'not_a_finding';
 
 /** The pull request event, as the Code review job's `on` choices name it. */
 export type ReviewEvent = 'opened' | 'push' | 'ready';
@@ -16,6 +16,8 @@ export type Route =
   | { mode: 'task'; number: number; actor: string; ask: Ask; bare: boolean }
   /** `/ask`: answer, never change code. */
   | { mode: 'reply'; number: number; actor: string; ask: Ask }
+  /** `/dismiss <reason>` or `/undismiss` (`undo`) in a finding's thread: runs no model. */
+  | { mode: 'dismiss'; number: number; actor: string; ask: Ask; undo: boolean; reason: string }
   /** `/help`: post the list of commands. */
   | { mode: 'help'; number: number; actor: string }
   /** With a `code`, the run ends with a notice that links to the code's docs; without one, only a log line. */
@@ -35,16 +37,16 @@ const REVIEW_EVENTS: Record<string, ReviewEvent> = { opened: 'opened', reopened:
 export const REVIEW_COMMAND = '/review';
 
 /** `prompt` is `/axonshaft <prompt>`: anything, answered or done. */
-export type Command = 'review' | 'fix' | 'ask' | 'help' | 'prompt';
+export type Command = 'review' | 'fix' | 'ask' | 'help' | 'prompt' | 'dismiss' | 'undismiss';
 
 /**
- * The slash command a comment gives: `/review`, `/fix`, `/ask`, `/help` or `/axonshaft` at the start of a line.
+ * The slash command a comment gives: `/review`, `/fix`, `/ask`, `/help`, `/dismiss`, `/undismiss` or `/axonshaft` at the start of a line.
  * Lines in a quote or a code block don't count, so quoting someone's command doesn't run it again.
  */
 export function commandIn(text: string): Command | undefined {
   const lines = text.replace(/```[\s\S]*?(```|$)/g, '').replace(/`[^`\n]*`/g, '').split('\n');
   for (const line of lines) {
-    const m = /^\s*\/(review|fix|ask|help|axonshaft)(?![\w-])/.exec(line);
+    const m = /^\s*\/(review|fix|ask|help|dismiss|undismiss|axonshaft)(?![\w-])/.exec(line);
     if (m && !line.trimStart().startsWith('>')) return m[1] === 'axonshaft' ? 'prompt' : (m[1] as Command);
   }
   return undefined;
@@ -83,6 +85,12 @@ export function route(eventName: string, payload: any): Route {
   if (command === 'review' && onPr) return { mode: 'review', number: number!, fork: pr ? isFork(pr) : undefined, actor };
   if (command === 'review') return { mode: 'skip', reason: '/review works on a pull request, not an issue.', code: 'not_a_pull_request' };
   if (command === 'help') return { mode: 'help', number: number!, actor };
+  if (command === 'dismiss' || command === 'undismiss') {
+    if (eventName !== 'pull_request_review_comment') return { mode: 'skip', reason: `/${command} works as a reply on a finding's inline comment.`, code: 'not_a_finding' };
+    const c = payload.comment;
+    const reason = (/^\s*\/dismiss\b(.*)$/m.exec(text)?.[1] ?? '').trim().slice(0, 300);
+    return { mode: 'dismiss', number: number!, actor, ask: { id: c.id, text, path: c.path, line: c.line ?? c.original_line ?? undefined, thread: c.in_reply_to_id ?? c.id }, undo: command === 'undismiss', reason };
+  }
   const c = eventName === 'pull_request_review' ? payload.review : payload.comment;
   const ask: Ask =
     eventName === 'pull_request_review_comment'
