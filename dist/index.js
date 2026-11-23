@@ -59201,6 +59201,15 @@ function checkoutFiles(cwd) {
       } catch {
         return;
       }
+    },
+    size: (path) => {
+      try {
+        const full = join5(cwd, path);
+        const stat = lstatSync2(full);
+        return stat.isFile() && realpathSync3(full).startsWith(root) ? stat.size : undefined;
+      } catch {
+        return;
+      }
     }
   };
 }
@@ -61181,8 +61190,100 @@ var contractDiff = async (input) => {
   return factsText(lines, "No OpenAPI or .proto file changed.");
 };
 
+// src/services/prestep/focused-tests.service.ts
+var FOCUSED = /\b(?:(?:describe|it|test|context|suite)\.only|fdescribe|fit)\s*\(/;
+var SKIPPED = /\b(?:(?:describe|it|test|context|suite)\.skip|xdescribe|xit)\s*\(/;
+var focusedTests = ({ files }) => files.filter((f) => TEST.test(f.filename)).flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+  if (/^\s*(?:\/\/|\*)/.test(text))
+    return [];
+  const call = (FOCUSED.exec(text) ?? SKIPPED.exec(text))?.[0].replace(/\s*\($/, "");
+  if (!call)
+    return [];
+  return FOCUSED.test(text) ? [{ severity: "blocking", file: f.filename, line, title: `Focused test: \`${call}\``, body: `\`${call}\` makes the test runner skip every other test, so CI passes without running them. Remove it before merging.` }] : [{ severity: "nit", file: f.filename, line, title: `Skipped test: \`${call}\``, body: `\`${call}\` turns this test off. If that's on purpose, a comment or an issue link saying why helps.` }];
+}));
+
+// src/services/prestep/large-files.service.ts
+var MAX_BYTES = 1e6;
+var BUILD = /(?:^|\/)(node_modules|dist)\//;
+var largeFiles = ({ files, checkout }, data) => {
+  const max = typeof data?.maxBytes === "number" && data.maxBytes > 0 ? data.maxBytes : MAX_BYTES;
+  const action = checkout.find(["action.yml", "action.yaml"]).length > 0;
+  const out = [];
+  const folders = new Set;
+  for (const f of files) {
+    if (f.status === "removed")
+      continue;
+    const build = BUILD.exec(f.filename);
+    if (build && f.status === "added" && !(build[1] === "dist" && action)) {
+      const folder = f.filename.slice(0, build.index + build[0].length);
+      if (!folders.has(folder)) {
+        folders.add(folder);
+        out.push({ severity: "should-fix", file: f.filename, line: 1, title: `Committed \`${folder}\``, body: `This pull request adds files under \`${folder}\`, which is usually build output or installed packages. Add it to \`.gitignore\` and remove it from the branch.` });
+      }
+      continue;
+    }
+    const size = checkout.size(f.filename);
+    const text = size !== undefined && size <= max ? checkout.read(f.filename, max) : undefined;
+    if (size !== undefined && size > max)
+      out.push({ severity: "should-fix", file: f.filename, line: 1, title: `Large file: ${(size / 1e6).toFixed(1)} MB`, body: `This file is ${size.toLocaleString("en")} bytes, over the ${max.toLocaleString("en")}-byte limit. Large files stay in the history for good; use Git LFS or keep it out of the repo.` });
+    else if (f.status === "added" && text?.includes("\x00"))
+      out.push({ severity: "should-fix", file: f.filename, line: 1, title: "Binary file added", body: `This pull request adds a binary file (${size?.toLocaleString("en")} bytes). Check that it belongs in the repo rather than in Git LFS or a release asset.` });
+  }
+  return out;
+};
+
+// src/services/prestep/install-hooks.service.ts
+var HOOKS = ["preinstall", "install", "postinstall"];
+var installHooks = ({ files, checkout }) => files.filter((f) => /(^|\/)package\.json$/.test(f.filename) && f.status !== "removed").flatMap((f) => {
+  let scripts = {};
+  try {
+    scripts = JSON.parse(checkout.read(f.filename) ?? "{}").scripts ?? {};
+  } catch {
+    return [];
+  }
+  return [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+    const hook = HOOKS.find((h) => typeof scripts[h] === "string" && new RegExp(`^\\s*"${h}"\\s*:`).test(text));
+    return hook ? [{ severity: "should-fix", file: f.filename, line, title: `New or changed \`${hook}\` script`, body: `\`${hook}\` runs \`${String(scripts[hook]).slice(0, 120)}\` on every install, here and for anyone who installs this package. Check that it's needed and does only what it says.` }] : [];
+  });
+});
+
+// src/services/prestep/debug-output.service.ts
+var PRINTS = ["**/scripts/**", "scripts/**", "**/bin/**", "bin/**", "**/cli/**", "cli/**", "**/*.cli.*", "**/cli.*"];
+var KINDS2 = [
+  [/\.(?:[cm]?[jt]sx?|vue|svelte)$/, "console.log", /\bconsole\.log\s*\(/],
+  [/\.(?:[cm]?[jt]sx?|vue|svelte)$/, "debugger", /^\s*debugger\s*;?\s*$/],
+  [/\.py$/, "print(", /^\s*print\s*\(/],
+  [/\.rs$/, "dbg!", /\bdbg!\s*\(/]
+];
+var debugOutput = ({ files }, data) => {
+  const exclude = Array.isArray(data?.exclude) && data.exclude.every((g) => typeof g === "string") ? data.exclude : PRINTS;
+  return files.filter((f) => !TEST.test(f.filename) && !matches(f.filename, exclude)).flatMap((f) => {
+    const kinds = KINDS2.filter(([exts]) => exts.test(f.filename));
+    if (!kinds.length)
+      return [];
+    return [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+      if (/^\s*(?:\/\/|#|\*)/.test(text))
+        return [];
+      const hit = kinds.find(([, , p]) => p.test(text));
+      return hit ? [{ severity: "nit", file: f.filename, line, title: `Debug output: \`${hit[1]}\``, body: `This added line has \`${hit[1]}\`, which looks left over from debugging. Remove it, or use the project's logger if the output is meant to stay.` }] : [];
+    });
+  });
+};
+
 // src/services/prestep/prestep.service.ts
-var SCRIPTS = { secrets: secrets2, "pr-meta": prMeta, "env-vars": envVars, "schema-pairs": schemaPairs, osv, licences, "code-quality": codeQuality };
+var SCRIPTS = {
+  secrets: secrets2,
+  "pr-meta": prMeta,
+  "env-vars": envVars,
+  "schema-pairs": schemaPairs,
+  osv,
+  licences,
+  "code-quality": codeQuality,
+  "focused-tests": focusedTests,
+  "large-files": largeFiles,
+  "install-hooks": installHooks,
+  "debug-output": debugOutput
+};
 var FACTS = {
   "deps-diff": depsDiffFacts,
   changeset,
@@ -61210,7 +61311,7 @@ var FACTS = {
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
     try {
-      return (await SCRIPTS[c.prestep](input)).map((f) => ({ ...f, step: c.key }));
+      return (await SCRIPTS[c.prestep](input, c.data)).map((f) => ({ ...f, step: c.key }));
     } catch (e) {
       c.skip = e instanceof Error ? e.message : String(e);
       warning(`${c.name} wasn't checked: ${c.skip}`);

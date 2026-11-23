@@ -115,7 +115,11 @@
     "schema-pairs",
     "osv",
     "licences",
-    "code-quality"
+    "code-quality",
+    "focused-tests",
+    "large-files",
+    "install-hooks",
+    "debug-output"
   ],
   "facts": [
     "deps-diff",

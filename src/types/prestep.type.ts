@@ -8,6 +8,8 @@ export type Checkout = {
   find: (globs: string[]) => string[];
   /** A file's text, or undefined when it isn't a regular file under the checkout or is over `max` bytes (1 MB by default). */
   read: (path: string, max?: number) => string | undefined;
+  /** A regular file's size in bytes, or undefined when it isn't one under the checkout. */
+  size: (path: string) => number | undefined;
 };
 
 /**
@@ -19,8 +21,11 @@ export type ScriptInput = Pick<Context, 'files' | 'pr' | 'guides'> & { checkout:
 /** A script's finding; the checklist that ran the script fills in `step`. */
 export type ScriptFinding = Omit<Finding, 'step'>;
 
-/** A pre-step script: reads files only, never runs the repo's code and never calls the network. */
-export type Script = (input: ScriptInput) => ScriptFinding[];
+/**
+ * A pre-step script: reads files only, never runs the repo's code and never calls the network. `data`
+ * is its checklist's settings from the API (thresholds, globs), plain values the script checks itself.
+ */
+export type Script = (input: ScriptInput, data?: Record<string, unknown>) => ScriptFinding[];
 
 /** A pre-step script that calls the network (`osv`, `licences`, `code-quality`): the Axon Shaft API, and for `osv` on an older API osv.dev, for public packages only. */
 export type NetworkScript = (input: ScriptInput) => Promise<ScriptFinding[]>;

@@ -32,9 +32,25 @@ import { hadolint } from './hadolint.service';
 import { migrationLint } from './migration-lint.service';
 import { tflint } from './tflint.service';
 import { contractDiff } from './contract-diff.service';
+import { focusedTests } from './focused-tests.service';
+import { largeFiles } from './large-files.service';
+import { installHooks } from './install-hooks.service';
+import { debugOutput } from './debug-output.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
-export const SCRIPTS: Record<string, Script | NetworkScript> = { secrets, 'pr-meta': prMeta, 'env-vars': envVars, 'schema-pairs': schemaPairs, osv, licences, 'code-quality': codeQuality };
+export const SCRIPTS: Record<string, Script | NetworkScript> = {
+  secrets,
+  'pr-meta': prMeta,
+  'env-vars': envVars,
+  'schema-pairs': schemaPairs,
+  osv,
+  licences,
+  'code-quality': codeQuality,
+  'focused-tests': focusedTests,
+  'large-files': largeFiles,
+  'install-hooks': installHooks,
+  'debug-output': debugOutput,
+};
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */
 export const FACTS: Record<string, Facts> = {
@@ -72,7 +88,7 @@ export async function runScripts(run: Planned[], input: ScriptInput): Promise<Fi
   const found = await Promise.all(
     run.map(async (c) => {
       try {
-        return (await SCRIPTS[c.prestep!]!(input)).map((f) => ({ ...f, step: c.key }));
+        return (await SCRIPTS[c.prestep!]!(input, c.data)).map((f) => ({ ...f, step: c.key }));
       } catch (e) {
         c.skip = e instanceof Error ? e.message : String(e);
         core.warning(`${c.name} wasn't checked: ${c.skip}`);
