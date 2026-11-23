@@ -28,6 +28,8 @@ export type PickInput = {
   maxTurns?: number;
   /** A bare `/fix`'s open findings left for the model, which size its turn cap. */
   findings?: number;
+  /** A review's checklists in the main pass: each past the first adds `TURNS_PER_CHECKLIST` to a small diff's cap. */
+  checklists?: number;
 };
 
 /** The turn cap when the dashboard sets none: the API's default, lower for a small diff. */
@@ -36,6 +38,7 @@ const TURNS_BY_LINES: [below: number, turns: number][] = [
   [100, 12],
   [500, 20],
 ];
+export const TURNS_PER_CHECKLIST = 2;
 /** A bare `/fix` of a few findings needs fewer turns. */
 const TURNS_BY_FINDINGS: [below: number, turns: number][] = [
   [4, 12],
@@ -95,10 +98,11 @@ export function pick(input: PickInput): Choice {
   const autoModel = !input.model || input.model === 'auto';
   const model = autoModel ? row.model : input.model!;
   // A deep review's main session runs the passes and checks their findings, so it keeps the full cap.
-  const sized =
-    input.mode === 'review' && input.depth !== 'deep'
-      ? TURNS_BY_LINES.find(([below]) => lines < below)?.[1]
-      : input.mode === 'task' && input.findings && TURNS_BY_FINDINGS.find(([below]) => input.findings! < below)?.[1];
+  // A small diff's cap grows with the checklists the main pass runs, never past the default.
+  const byLines = input.mode === 'review' && input.depth !== 'deep' ? TURNS_BY_LINES.find(([below]) => lines < below)?.[1] : undefined;
+  const sized = byLines
+    ? Math.min(byLines + TURNS_PER_CHECKLIST * Math.max(0, (input.checklists ?? 1) - 1), DEFAULT_MAX_TURNS)
+    : input.mode === 'task' && input.findings && TURNS_BY_FINDINGS.find(([below]) => input.findings! < below)?.[1];
   const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
   return {
     ...row,

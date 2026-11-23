@@ -58993,6 +58993,7 @@ var TURNS_BY_LINES = [
   [100, 12],
   [500, 20]
 ];
+var TURNS_PER_CHECKLIST = 2;
 var TURNS_BY_FINDINGS = [
   [4, 12],
   [8, 20]
@@ -59043,7 +59044,8 @@ function pick(input) {
     row = { model: "sonnet", effort: "medium", reason: size };
   const autoModel = !input.model || input.model === "auto";
   const model = autoModel ? row.model : input.model;
-  const sized = input.mode === "review" && input.depth !== "deep" ? TURNS_BY_LINES.find(([below]) => lines < below)?.[1] : input.mode === "task" && input.findings && TURNS_BY_FINDINGS.find(([below]) => input.findings < below)?.[1];
+  const byLines = input.mode === "review" && input.depth !== "deep" ? TURNS_BY_LINES.find(([below]) => lines < below)?.[1] : undefined;
+  const sized = byLines ? Math.min(byLines + TURNS_PER_CHECKLIST * Math.max(0, (input.checklists ?? 1) - 1), DEFAULT_MAX_TURNS) : input.mode === "task" && input.findings && TURNS_BY_FINDINGS.find(([below]) => input.findings < below)?.[1];
   const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
   return {
     ...row,
@@ -61149,7 +61151,7 @@ async function postReview(ctx, o, canCheck, progress) {
     skipped,
     missingPermissions: o.missingPermissions
   };
-  const pickInput = { mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns };
+  const pickInput = { mode: "review", depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, checklists: modelled?.length };
   let rungs = ladder(pickInput);
   let choice = rungs[0];
   let tried = [];

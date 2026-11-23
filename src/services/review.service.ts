@@ -275,7 +275,7 @@ async function postReview(
     skipped,
     missingPermissions: o.missingPermissions,
   };
-  const pickInput = { mode: 'review' as const, depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns };
+  const pickInput = { mode: 'review' as const, depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, checklists: modelled?.length };
   let rungs = ladder(pickInput);
   let choice = rungs[0]!;
   let tried: Tried[] = [];

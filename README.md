@@ -320,6 +320,8 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 | Under 500 lines | 20 |
 | 500 lines or more, or a deep review | 30 |
 
+Under 500 lines, each checklist the main pass runs after the first adds 2 turns, up to 30. A 60-line diff with five checklists in the main pass gets 20.
+
 A bare `/fix` of fewer than 4 findings for the model gets 12 turns, and of fewer than 8 gets 20. Any other task gets 30.
 
 - A limit set on the dashboard always wins.
