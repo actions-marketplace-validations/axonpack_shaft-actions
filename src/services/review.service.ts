@@ -28,6 +28,7 @@ import { climb, modelLabel, NotWorked, partialReview, type Tried, withSpent } fr
 import { step } from './step.service';
 import { reviewThreads, threadDismissals } from './dismiss.service';
 import { hasWriteAccess } from './route.service';
+import { dedupe } from '../utils/dedupe.util';
 import { type Ignore, ignored, verdictAfter } from '../utils/dismiss.util';
 import {
   type CheckItem,
@@ -42,6 +43,7 @@ import {
   renderSummary,
   type Review,
   type State,
+  STEPS,
   unposted,
 } from '../utils/render.util';
 import { diffText, fillSlots, trustedComments } from '../utils/prompt.util';
@@ -390,13 +392,13 @@ async function postReview(
   // Only the project's own gates, each with the review's result; any other gates in the reply are dropped.
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
   const { reply } = result;
-  // A script's blocking or should-fix finding raises the verdict the model gave.
+  // Two checklists on the same lines leave one finding (dedupe.util). A script's blocking or should-fix finding raises the verdict the model gave.
   const verdict = scriptFindings.some((f) => f.severity === 'blocking')
     ? 'blocking'
     : scriptFindings.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
       ? 'needs-changes'
       : reply.verdict;
-  const review: Review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
+  const review: Review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
   await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 

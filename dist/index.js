@@ -60971,6 +60971,26 @@ function step(name, fn) {
   });
 }
 
+// src/utils/dedupe.util.ts
+var overlap = (a, b) => a.file === b.file && a.line <= Math.max(b.end_line ?? b.line, b.line) && b.line <= Math.max(a.end_line ?? a.line, a.line);
+function dedupe(findings, order) {
+  const rank = (f) => order.includes(f.step) ? order.indexOf(f.step) : order.length;
+  const kept = [];
+  for (const f of [...findings].sort((a, b) => rank(a) - rank(b))) {
+    const i = kept.findIndex((k) => k.step !== f.step && overlap(k, f));
+    if (i < 0) {
+      kept.push(f);
+      continue;
+    }
+    const k = kept[i];
+    const severity = SEVERITIES.indexOf(f.severity) < SEVERITIES.indexOf(k.severity) ? f.severity : k.severity;
+    kept[i] = { ...k, severity, body: `${k.body}
+
+Also found by \`${f.step}\`.` };
+  }
+  return kept;
+}
+
 // src/services/review.service.ts
 var FALLBACK = { opus: "sonnet,haiku", sonnet: "haiku" };
 function chosenModels(used, choice, deep) {
@@ -61211,7 +61231,7 @@ ${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await fact
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
   const { reply } = result;
   const verdict = scriptFindings.some((f) => f.severity === "blocking") ? "blocking" : scriptFindings.some((f) => f.severity === "should-fix") && reply.verdict === "looks-good" ? "needs-changes" : reply.verdict;
-  const review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
+  const review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
   await progress("Post the review", "Posting the review");
   startGroup("Post the review");
   const dismissed = prior?.dismissed ?? [];
