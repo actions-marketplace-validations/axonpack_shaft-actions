@@ -58361,7 +58361,7 @@ function cleanOutput(text) {
   return { text: out, hits: [...new Set(hits)] };
 }
 function prose2(text, hits) {
-  return text.replace(/!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g, (m, url) => LINK_HOSTS.test(url) ? m : (hits.push("output.image"), "")).replace(/(?<!!)\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, label, url) => LINK_HOSTS.test(url) || !/^[a-z]+:/i.test(url) ? m : (hits.push("output.link"), `${label} (\`${url.replace(/`/g, "")}\`)`)).replace(/(^|[^\w`/])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[\w.-]+)?)\b/g, "$1`@$2`").replace(/^(\s*)\/(?=[a-z])/gim, "$1\\/");
+  return text.replace(/(?<!!)\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, label, url) => LINK_HOSTS.test(url) || !/^[a-z]+:/i.test(url) ? m : (hits.push("output.link"), `${label} (\`${url.replace(/`/g, "")}\`)`)).replace(/(^|[^\w`/])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[\w.-]+)?)\b/g, "$1`@$2`").replace(/^(\s*)\/(?=[a-z])/gim, "$1\\/");
 }
 function scanOutput(reply, canary) {
   let leak = false;

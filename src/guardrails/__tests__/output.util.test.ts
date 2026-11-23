@@ -2,8 +2,8 @@ import { expect, test } from 'vitest';
 import { cleanOutput, flaggedLines, scanOutput } from '../output.util';
 import { BAD_OUTPUT } from './fixtures';
 
-test('images from outside GitHub are removed, and token shapes redacted', () => {
-  expect(cleanOutput(BAD_OUTPUT.image)).toEqual({ text: 'See  for details.', hits: ['output.image'] });
+test('token shapes are redacted; images are left to prose()', () => {
+  expect(cleanOutput(BAD_OUTPUT.image).text).toBe(BAD_OUTPUT.image);
   expect(cleanOutput(BAD_OUTPUT.token)).toEqual({ text: 'Use *** to push.', hits: ['output.token'] });
 });
 

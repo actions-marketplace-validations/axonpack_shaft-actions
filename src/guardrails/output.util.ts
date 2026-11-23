@@ -10,9 +10,8 @@ function tokens(text: string): { text: string; hit: boolean } {
 }
 
 /**
- * The model's text made safe to post: token shapes redacted, images from outside GitHub removed (an
- * image URL is fetched by every reader, so it's the classic way out for a secret), other links outside
- * GitHub and axonpack.dev turned into inert code, `@` mentions made inert so the bot can't ping
+ * The model's text made safe to post: token shapes redacted, links outside GitHub and axonpack.dev
+ * turned into inert code (images are `prose`'s, in render.util), `@` mentions made inert so the bot can't ping
  * anyone, and a `/command` at a line's start escaped so the bot can't command itself.
  */
 export function cleanOutput(text: string): { text: string; hits: string[] } {
@@ -29,7 +28,6 @@ export function cleanOutput(text: string): { text: string; hits: string[] } {
 
 function prose(text: string, hits: string[]): string {
   return text
-    .replace(/!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g, (m, url: string) => (LINK_HOSTS.test(url) ? m : (hits.push('output.image'), '')))
     .replace(/(?<!!)\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (m, label: string, url: string) => (LINK_HOSTS.test(url) || !/^[a-z]+:/i.test(url) ? m : (hits.push('output.link'), `${label} (\`${url.replace(/`/g, '')}\`)`)))
     .replace(/(^|[^\w`/])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[\w.-]+)?)\b/g, '$1`@$2`')
     .replace(/^(\s*)\/(?=[a-z])/gim, '$1\\/');
