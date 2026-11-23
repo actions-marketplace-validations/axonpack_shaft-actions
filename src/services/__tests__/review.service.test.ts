@@ -795,6 +795,12 @@ describe('the light pass', () => {
     expect(summary).toContain('| Light pass | `haiku`, up to 6 turns, 182k tokens: The docs list |');
   });
 
+  test('supply-chain and workflows run in the main pass even when marked light', async () => {
+    const chain: Checklist = { ...checklist('supply-chain', ['**/*.md']), model: 'light' };
+    await review(files(), { checklists: [checklist('correctness', ['**/*.ts']), chain], open: OPEN });
+    expect(runs.map((r) => [r.model, r.steps])).toEqual([['sonnet', ['correctness', 'supply-chain']]]);
+  });
+
   test('when the light pass fails, or comes back partial, the main pass runs its checklists and the log says so', async () => {
     replies = [new ShaftFailure('review_timed_out', 'It ran past its time limit.')];
     const failed = await review(files(), { checklists: lists, open: OPEN });

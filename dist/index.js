@@ -58853,6 +58853,7 @@ var REVIEW_MIN_CONFIDENCE = 60;
 var TRIAGE_START = { simple: "haiku", normal: "sonnet", hard: "opus" };
 var FIX_HAIKU_MAX = 5;
 var HAIKU_MAX_PROMPT_TOKENS = 1e5;
+var MAIN_PASS_ONLY = ["supply-chain", "workflows"];
 var LIGHT_PASS = { model: "haiku", effort: "low", maxTurns: 6, timeoutMinutes: 5, allowed: ["Read", "Grep"] };
 
 // src/utils/auto-pick.util.ts
@@ -61564,14 +61565,14 @@ ${clean(body)}`);
   const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, input)) : [];
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
   let result;
-  const lightRun = modelled && o.depth !== "deep" ? modelled.filter((c) => c.model === "light") : [];
+  const lightRun = modelled && o.depth !== "deep" ? modelled.filter((c) => c.model === "light" && !MAIN_PASS_ONLY.includes(c.key)) : [];
   let light;
   let steps = modelled;
   if (useModel && lightRun.length && (lightRun.length < modelled.length || o.gates?.length)) {
     await progress("Review", "Running the light checklists with Haiku");
     light = await step("Light pass", () => lightPass(lightRun, { ...ctx, files }, prior, input, { ...o, skipped }));
     if (light.out)
-      steps = modelled.filter((c) => c.model !== "light");
+      steps = modelled.filter((c) => !lightRun.includes(c));
   }
   const lightKeys = light?.out ? lightRun.map((c) => c.key) : [];
   if (useModel) {

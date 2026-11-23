@@ -13,7 +13,7 @@ import { type AgentResult, REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } 
 import { openAdvisories } from './advisory.service';
 import { checkoutFiles } from './checkout.service';
 import { type LightResult, lightPass } from './light-pass.service';
-import { LIGHT_PASS } from '../consts/ladder.const';
+import { LIGHT_PASS, MAIN_PASS_ONLY } from '../consts/ladder.const';
 import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
 import { baseFile, type Context, collectContext } from './context.service';
 import {
@@ -401,13 +401,13 @@ async function postReview(
 
   let result: AgentResult<Review>;
   // The checklists marked `light` run first on Haiku, when the main pass has work of its own; if that pass doesn't work, the main pass runs them.
-  const lightRun = modelled && o.depth !== 'deep' ? modelled.filter((c) => c.model === 'light') : [];
+  const lightRun = modelled && o.depth !== 'deep' ? modelled.filter((c) => c.model === 'light' && !MAIN_PASS_ONLY.includes(c.key)) : [];
   let light: LightResult | undefined;
   let steps = modelled;
   if (useModel && lightRun.length && (lightRun.length < modelled!.length || o.gates?.length)) {
     await progress('Review', 'Running the light checklists with Haiku');
     light = await step('Light pass', () => lightPass(lightRun, { ...ctx, files }, prior, input, { ...o, skipped }));
-    if (light.out) steps = modelled!.filter((c) => c.model !== 'light');
+    if (light.out) steps = modelled!.filter((c) => !lightRun.includes(c));
   }
   const lightKeys = light?.out ? lightRun.map((c) => c.key) : [];
   if (useModel) {
