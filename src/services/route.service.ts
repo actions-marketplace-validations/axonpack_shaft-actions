@@ -12,8 +12,11 @@ export type Route =
    * none, and its `actor` needs write access. `fork` is undefined when the payload doesn't say.
    */
   | { mode: 'review'; number: number; event?: ReviewEvent; fork?: boolean; actor?: string }
-  /** `/fix` or `/axonshaft <prompt>`: make the change. `bare`: a `/fix` with nothing else, which fixes the last review's findings. */
-  | { mode: 'task'; number: number; actor: string; ask: Ask; bare: boolean }
+  /**
+   * `/fix` or `/axonshaft <prompt>`: make the change. `bare`: a `/fix` with nothing else, which fixes the last review's findings.
+   * `follow`: a follow-up command, a Task the API sends its template's prompt for.
+   */
+  | { mode: 'task'; number: number; actor: string; ask: Ask; bare: boolean; follow?: FollowUp }
   /** `/ask`: answer, never change code. */
   | { mode: 'reply'; number: number; actor: string; ask: Ask }
   /** `/dismiss <reason>` or `/undismiss` (`undo`) in a finding's thread: runs no model. */
@@ -36,17 +39,21 @@ const REVIEW_EVENTS: Record<string, ReviewEvent> = { opened: 'opened', reopened:
 /** A comment with this in it starts a review of its pull request. */
 export const REVIEW_COMMAND = '/review';
 
+/** The follow-up commands: each a Task with its own built-in template. */
+export const FOLLOW_UPS = ['tests', 'simplify', 'docstrings', 'resolve'] as const;
+export type FollowUp = (typeof FOLLOW_UPS)[number];
+
 /** `prompt` is `/axonshaft <prompt>`: anything, answered or done. */
-export type Command = 'review' | 'fix' | 'ask' | 'help' | 'prompt' | 'dismiss' | 'undismiss';
+export type Command = 'review' | 'fix' | 'ask' | 'help' | 'prompt' | 'dismiss' | 'undismiss' | FollowUp;
 
 /**
- * The slash command a comment gives: `/review`, `/fix`, `/ask`, `/help`, `/dismiss`, `/undismiss` or `/axonshaft` at the start of a line.
+ * The slash command a comment gives: `/review`, `/fix`, `/ask`, `/help`, `/dismiss`, `/undismiss`, a follow-up or `/axonshaft` at the start of a line.
  * Lines in a quote or a code block don't count, so quoting someone's command doesn't run it again.
  */
 export function commandIn(text: string): Command | undefined {
   const lines = text.replace(/```[\s\S]*?(```|$)/g, '').replace(/`[^`\n]*`/g, '').split('\n');
   for (const line of lines) {
-    const m = /^\s*\/(review|fix|ask|help|dismiss|undismiss|axonshaft)(?![\w-])/.exec(line);
+    const m = /^\s*\/(review|fix|ask|help|dismiss|undismiss|tests|simplify|docstrings|resolve|axonshaft)(?![\w-])/.exec(line);
     if (m && !line.trimStart().startsWith('>')) return m[1] === 'axonshaft' ? 'prompt' : (m[1] as Command);
   }
   return undefined;
@@ -98,8 +105,9 @@ export function route(eventName: string, payload: any): Route {
       : { id: c.id, text };
   if (command === 'ask' && !onPr) return { mode: 'skip', reason: '/ask works on a pull request, not an issue.', code: 'not_a_pull_request' };
   if (command === 'ask') return { mode: 'reply', number: number!, actor, ask };
-  if (!onPr) return { mode: 'skip', reason: `/${command === 'fix' ? 'fix' : 'axonshaft'} works on a pull request, not an issue.`, code: 'not_a_pull_request' };
-  return { mode: 'task', number: number!, actor, ask, bare: command === 'fix' && !text.replace('/fix', '').trim() };
+  if (!onPr) return { mode: 'skip', reason: `/${command === 'prompt' ? 'axonshaft' : command} works on a pull request, not an issue.`, code: 'not_a_pull_request' };
+  const follow = (FOLLOW_UPS as readonly string[]).includes(command) ? (command as FollowUp) : undefined;
+  return { mode: 'task', number: number!, actor, ask, bare: command === 'fix' && !text.replace('/fix', '').trim(), ...(follow && { follow }) };
 }
 
 /**

@@ -1,3 +1,5 @@
+import { lstatSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import * as core from '@actions/core';
 import { DASHBOARD_URL } from '../consts/api.const';
 import { TRIAGE_START } from '../consts/ladder.const';
@@ -9,14 +11,14 @@ import { dataBlock } from '../utils/prompt.util';
 import { type ReplyFormat, runAgent } from './agent.service';
 import { fetchPushToken } from './api.service';
 import { checkList, checksTable, repoCommands, runCheck, skippedNote } from './commands.service';
-import { savedCredentials } from './checkout.service';
+import { fetchBase, savedCredentials } from './checkout.service';
 import { collectContext } from './context.service';
 import { applySuggestions, fixStart, openFindings, taskRequest } from './fix.service';
 import { climb, NotWorked, NO_SPEND, withSpent } from './ladder.service';
-import { assertHead, fileAt, head, pushChanges, readChanges, resetTo } from './push.service';
+import { assertHead, fileAt, head, mergeInto, pushChanges, readChanges, resetTo } from './push.service';
 import { ANSWER_MAX, answerFooter, buildReplyPrompt, postInThread, type ReplyOptions, type ReplyOutcome } from './reply.service';
 import { FALLBACK } from './review.service';
-import { commandIn } from './route.service';
+import { commandIn, type FollowUp } from './route.service';
 import { endSandboxes, prepareSandbox, which } from './sandbox.service';
 import { triage, triagePrompt } from './triage.service';
 import { step } from './step.service';
@@ -41,8 +43,11 @@ export const TASK_FORMAT: ReplyFormat<TaskReply> = {
   },
 };
 
-/** A reply's options, plus a bare `/fix`, the project's push mode and the repo's page on GitHub, for the commit link. */
-export type TaskOptions = ReplyOptions & { bare: boolean; pushMode: string; repoUrl: string };
+/**
+ * A reply's options, plus a bare `/fix`, the follow-up command when it's one, the project's push mode,
+ * the repo's page on GitHub, for the commit link, and the run's GitHub token, which `/resolve` fetches the base branch with.
+ */
+export type TaskOptions = ReplyOptions & { bare: boolean; follow?: FollowUp; pushMode: string; repoUrl: string; githubToken: string };
 /**
  * A finished task, or one that stopped before its session: `push_failed` when nothing could be
  * pushed, `nothing_to_fix` for a bare `/fix` with no open findings, `self_hosted_unsupported` on a
@@ -51,7 +56,30 @@ export type TaskOptions = ReplyOptions & { bare: boolean; pushMode: string; repo
  */
 export type TaskOutcome =
   | ReplyOutcome
-  | { refused: string; code: 'push_failed' | 'nothing_to_fix' | 'self_hosted_unsupported' | 'credentials_in_checkout' | 'sandbox_unavailable' };
+  | {
+      refused: string;
+      code: 'push_failed' | 'nothing_to_fix' | 'nothing_to_resolve' | 'merge_needs_decision' | 'self_hosted_unsupported' | 'credentials_in_checkout' | 'sandbox_unavailable';
+    };
+
+/** Git's conflict markers, at the start of a line. */
+const MARKERS = /^(<{7}|>{7})( |$)|^={7}$/m;
+/** A regular file in the checkout that still holds conflict markers. A link or a binary file never does. */
+export function marked(cwd: string, path: string): boolean {
+  try {
+    const file = join(cwd, path);
+    return lstatSync(file).isFile() && MARKERS.test(readFileSync(file, 'utf8'));
+  } catch {
+    return false;
+  }
+}
+/** Why git couldn't merge a file, by its `git status` code, when it isn't a text file both sides changed. */
+const CONFLICT: Record<string, string> = {
+  DD: 'both sides deleted it',
+  AU: 'only this branch added it',
+  UA: 'only the base branch added it',
+  DU: 'this branch deleted it and the base branch changed it',
+  UD: 'the base branch deleted it and this branch changed it',
+};
 
 /** Why a task refuses a checkout whose `.git/config` holds a credential. */
 export const CREDENTIALS_IN_CHECKOUT =
@@ -109,6 +137,26 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     return { refused: unsandboxed, code: 'sandbox_unavailable' };
   }
   const base = head(o.cwd);
+  const name = (f: string) => `\`${f.replace(/[`\r\n]/g, '')}\``;
+  // `/resolve` merges the base branch first. Only conflicts where both sides changed a text file go to the model.
+  let merge: { theirs: string; conflicts: string[] } | undefined;
+  if (o.follow === 'resolve') {
+    const theirs = await step('Fetch the base branch', async () => fetchBase(o.cwd, ctx.pr.base, o.githubToken));
+    const m = mergeInto(o.cwd, theirs);
+    if (m.upToDate) {
+      const why = `This pull request already has everything from \`${ctx.pr.base}\`, so there's nothing to resolve.`;
+      await post(`${why}\n\n${TASK_MARKER}`);
+      return { refused: why, code: 'nothing_to_resolve' };
+    }
+    const stuck = m.conflicts.filter((c) => !['UU', 'AA'].includes(c.code) || !marked(o.cwd, c.path));
+    if (stuck.length) {
+      resetTo(o.cwd, base);
+      const why = `Merging \`${ctx.pr.base}\` needs a decision Axon Shaft can't make: ${stuck.map((c) => `${name(c.path)} (${CONFLICT[c.code] ?? 'a binary file both sides changed'})`).join(', ')}. Nothing was pushed. Merge it by hand, then comment \`/resolve\` again for any other conflicts.`;
+      await post(`${why}\n\n${TASK_MARKER}`);
+      return { refused: why, code: 'merge_needs_decision' };
+    }
+    merge = { theirs, conflicts: m.conflicts.map((c) => c.path) };
+  }
 
   const commands = repoCommands(o.cwd);
   // A bare `/fix` applies the review's own suggested changes first, with no model; the model gets only the rest.
@@ -123,15 +171,33 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     const changes = readChanges(o.cwd, base);
     const outside = scope ? changes.map((c) => c.path).filter((p) => !scope.has(p)) : [];
     // Anything else may touch what runs on install and in CI only when the request asks for it.
-    const unasked = scope ? [] : unaskedBuildInputs(changes, (p) => fileAt(o.cwd, base, p), o.ask.text);
-    const checks = changes.length && !outside.length && !unasked.length ? await step('Run the checks', async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
+    // A merge brings in the base branch's own changes, which nobody needs to ask for: only what differs from it counts.
+    const own = merge ? changes.filter((c) => c.content?.toString('utf8') !== fileAt(o.cwd, merge!.theirs, c.path)) : changes;
+    const unasked = scope ? [] : unaskedBuildInputs(own, (p) => fileAt(o.cwd, base, p), o.ask.text);
+    // A conflict left unresolved fails like a check, so it's never pushed.
+    const unresolved = (merge?.conflicts ?? []).filter((p) => marked(o.cwd, p)).map((p) => ({ command: `conflict markers in ${p}`, passed: false, output: `${p} still has conflict markers.` }));
+    const checks = unresolved.length
+      ? unresolved
+      : changes.length && !outside.length && !unasked.length
+        ? await step('Run the checks', async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env)))
+        : [];
     return { changes, outside, unasked, checks, failed: checks.filter((r) => !r.passed) };
   };
   try {
-    const ran = o.bare && !left.length ? { ...(await settle([])), result: undefined } : await withModel();
+    // A bare `/fix` whose suggestions all applied, and a `/resolve` with no conflicts, need no model.
+    const noModel = (o.bare && !left.length) || (merge && !merge.conflicts.length);
+    const ran = noModel ? { ...(await settle([])), result: undefined } : await withModel();
     const { changes, outside, unasked, checks, failed, result } = ran;
-    const name = (f: string) => `\`${f.replace(/[`\r\n]/g, '')}\``;
-    const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? '' : 's'}, with no model call.`];
+    const lines = [
+      result
+        ? prose(result.reply.answer)
+        : merge
+          ? `Merged \`${ctx.pr.base}\` with no conflicts, with no model call.`
+          : `Applied the review's suggested change${applied.length === 1 ? '' : 's'}, with no model call.`,
+    ];
+    if (o.follow === 'tests' && !commands.some((c) => /\btest\b/.test(c)))
+      lines.push("This repo has no test command Axon Shaft can run (a `test` script, a `make test` target, Cargo or Go), so the new tests weren't run here. The repo's CI runs them on the push.");
+    let commit: string | undefined;
     if (applied.length) lines.push(`**Suggestions applied:** ${applied.map((f) => `${name(`${f.file}:${f.line}`)} ${prose(f.title)}`).join('; ')}`);
     if (unapplied.length) lines.push(`**Suggestions not applied:** ${unapplied.map((u) => `${name(`${u.finding.file}:${u.finding.line}`)} (${u.why})`).join('; ')}`);
     if (changes.length) {
@@ -154,11 +220,17 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
       else {
         assertHead(o.cwd, base);
         const { data: bot } = await o.octokit.rest.users.getByUsername({ username: o.bot });
-        const message = (result && redact(result.reply.commit_message.split('\n')[0]!.trim(), o.secrets).slice(0, 100)) || (result ? 'Make the change asked for with /fix' : "Apply the review's suggested changes");
+        const message =
+          (result && redact(result.reply.commit_message.split('\n')[0]!.trim(), o.secrets).slice(0, 100)) ||
+          (merge && `Merge ${ctx.pr.base} into ${ctx.pr.head}`) ||
+          (result ? `Make the change asked for with /${o.follow ?? 'fix'}` : "Apply the review's suggested changes");
         const author = { name: o.bot, email: `${bot.id}+${o.bot}@users.noreply.github.com` };
         // The push token exists only from here on: asked for after the checks, and revoked by the push.
         const grant = await step('Get the push token', fetchPushToken);
-        const sha = await step('Push the commit', () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
+        const sha = await step('Push the commit', () =>
+          pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author, merged: merge?.theirs }),
+        );
+        commit = sha;
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
       const skipped = skippedNote(checks);
@@ -167,14 +239,16 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>\n\n\`\`\`\`\n${prose(c.output).replace(/`{4,}/g, '```')}\n\`\`\`\`\n\n</details>`);
     }
     const answer = redact(lines.join('\n\n'), o.secrets).slice(0, ANSWER_MAX);
+    // For the run page: the follow-up that ran and the commit it pushed.
+    const kind = { ...(o.follow && { command: o.follow }), ...(commit && { commit }) };
     if (!ran.result) {
       const sub = footer({ sha: ctx.pr.headSha, repo: `${o.owner}/${o.repo}`, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
       const commentUrl = await post(`${answer}\n\n${sub}\n\n${TASK_MARKER}`);
-      return { model: 'none', effort: 'none', tokens: NO_SPEND.tokens, costUsd: 0, output: { answer, comment_url: commentUrl } };
+      return { model: 'none', effort: 'none', tokens: NO_SPEND.tokens, costUsd: 0, output: { answer, comment_url: commentUrl, ...kind } };
     }
     const { sub, model } = answerFooter(o, ctx.pr.headSha, ran.choice, ran.result, ran.tried, ran.triaged);
     const commentUrl = await post(`${answer}\n\n${sub}\n\n${TASK_MARKER}`);
-    return { model, effort: ran.choice.effort, tokens: ran.result.tokens, costUsd: ran.result.costUsd, output: { answer, comment_url: commentUrl } };
+    return { model, effort: ran.choice.effort, tokens: ran.result.tokens, costUsd: ran.result.costUsd, output: { answer, comment_url: commentUrl, ...kind } };
   } catch (e) {
     // The person who asked sees the same card as the job summary, where they asked.
     if (e instanceof ShaftFailure) {
@@ -201,6 +275,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
       if (earlier) {
         resetTo(o.cwd, base);
         suggest();
+        if (merge) mergeInto(o.cwd, merge.theirs);
       }
       const retold = earlier
         ? `${request}\n\nAn attempt with a smaller model didn't work, and the checkout is back at the pull request's head. What went wrong, as data:\n\n${dataBlock('earlier-attempt', earlier)}`

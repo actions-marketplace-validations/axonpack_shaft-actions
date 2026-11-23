@@ -60,7 +60,7 @@ The workflow holds no secrets. With `id-token: write`, the action gets an OIDC t
 
 Along with the token, it sends:
 
-- The job: `review` for a pull request event or a `/review` comment, `task` for `/fix` or `/axonshaft <prompt>`, `reply` for `/ask`, `help` for `/help`, and `dismiss` or `undismiss` for those commands.
+- The job: `review` for a pull request event or a `/review` comment, `task` for `/fix`, `/axonshaft <prompt>` and the follow-up commands (with `command` naming which), `reply` for `/ask`, `help` for `/help`, and `dismiss` or `undismiss` for those commands.
 - Which pull request event it was, and whether the pull request comes from a fork.
 - The pull request's number, title, branch and author, for the dashboard's overview.
 - The branch it goes into, its author's association with the repo, whether a bot opened it, and its label names, for the Code review job's filters.
@@ -130,6 +130,10 @@ A comment starts Axon Shaft with a command at the start of a line. It works in t
 | `/fix` | Fixes the open findings of the last review, or what you write after the command, and pushes one commit to the pull request's branch. Works on a pull request; on an issue it ends with a notice. See [Making a change](#making-a-change). |
 | `/ask <question>` | Answers a question about the code where it was asked, citing `file:line`, and never changes anything. Works on a pull request; on an issue it ends with a notice. See [Answering a question](#answering-a-question). |
 | `/axonshaft <prompt>` | A direct prompt, run like `/fix <prompt>`: Axon Shaft answers, or makes the change and pushes it. |
+| `/tests` | Writes tests for the code the pull request changes, runs them, and pushes one commit. See [Follow-up commands](#follow-up-commands). |
+| `/simplify` | Simplifies the changed code without changing what it does, and pushes one commit. |
+| `/docstrings` | Documents the public functions the pull request adds or changes, and pushes one commit. |
+| `/resolve` | Merges the base branch into the pull request, resolves the conflicts, and pushes the merge commit. |
 | `/dismiss <reason>` | A reply on a finding's inline comment: the finding stops counting on this pull request. No model runs. See [Dismissing a finding](#dismissing-a-finding). |
 | `/undismiss` | A reply on the same thread: brings the finding back. |
 | `/help` | `axonshaft[bot]` posts the list of commands on the pull request or issue, once. |
@@ -138,6 +142,14 @@ Who can run a command:
 
 - The commenter needs write access to the repo, which the action checks with GitHub. Anyone else's command starts nothing, and the run ends with a notice that only people with write access can start one.
 - `/help` works for anyone.
+
+### Follow-up commands
+
+`/tests`, `/simplify`, `/docstrings` and `/resolve` are Tasks, like `/fix`, each with a built-in template's instructions that the API sends with the grant. They follow every rule of [Making a change](#making-a-change): write access only, never on a fork's pull request (the reply says why), the same checks, and one commit pushed to the pull request's branch, named in the reply. Each one is a run on the project's Claude token and counts toward the spending cap. Anything you write after the command is added to the request. A project can turn each one off on the dashboard, in the Task automation's settings; one that's off ends with a notice.
+
+- `/tests` runs the repo's test command after writing the tests. When the repo has none the action can find (a `test` script, a `make test` target, Cargo or Go), the reply says the tests weren't run there.
+- `/resolve` fetches the base branch (the whole history when the checkout is shallow) and merges it before the session. With no conflicts, no model runs and the merge commit is pushed as it is. With conflicts in text files both sides changed, the model gets only those, and a file that still has conflict markers fails like a check, so nothing is pushed. A conflict only a person can settle, such as a file one side deleted or a binary file, stops the run before the model with a reply that names each file (`merge_needs_decision`). A pull request that already has the whole base branch ends with `nothing_to_resolve`. The commit has two parents, the pull request's head and the base branch, and a change from the base branch to a `package.json` or a lock file doesn't need asking for.
+- The review summary lists the commands the project keeps on, and `/resolve` only when GitHub says the pull request has conflicts.
 
 ### Dismissing a finding
 
@@ -510,6 +522,7 @@ These end with a notice, and the step passes. A notice with a code ends with a l
 - a `/review`, `/ask`, `/fix` or `/axonshaft` on an issue (`not_a_pull_request`);
 - a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
 - a bare `/fix` with nothing to fix (`nothing_to_fix`);
+- a `/resolve` on a pull request that already has the whole base branch (`nothing_to_resolve`), or whose merge needs a decision only a person can make (`merge_needs_decision`);
 - a `/fix` or `/axonshaft` on a self-hosted runner (`self_hosted_unsupported`);
 - a `/fix` or `/axonshaft` whose checkout kept a token in `.git/config` (`credentials_in_checkout`);
 - a `/fix` or `/axonshaft` on a runner that can't start the sandbox (`sandbox_unavailable`);

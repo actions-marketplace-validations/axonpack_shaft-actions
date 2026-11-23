@@ -27,6 +27,11 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     message: 'The workflow was cancelled before the review finished. Its check runs end as cancelled, and the summary comment shows this card in place of "Reviewing".',
   },
   nothing_to_fix: { kind: 'notice', message: "A bare `/fix` had nothing to fix: the last review has no open findings, or there's no review yet." },
+  nothing_to_resolve: { kind: 'notice', message: '`/resolve` had nothing to do: the pull request already has everything from its base branch.' },
+  merge_needs_decision: {
+    kind: 'notice',
+    message: "`/resolve` stopped before the model: merging the base branch left a conflict only a person can settle, such as a file one side deleted or a binary file, so nothing was pushed.",
+  },
   self_hosted_unsupported: { kind: 'notice', message: 'A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran.' },
   credentials_in_checkout: {
     kind: 'notice',
