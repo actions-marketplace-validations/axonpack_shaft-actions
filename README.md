@@ -493,7 +493,7 @@ The limits above hold even when the model is fooled. The guardrails also check w
 - The model never reads `.env` files, `.pem` keys, SSH keys, `.npmrc`, `.pypirc` or `.netrc`.
 - A change from `/fix` isn't pushed when its new lines pipe a download into a shell, send the whole environment out, send a variable to a hard-coded host, or add a long encoded blob (`guardrail_blocked`).
 - A clear hit is a strike against the person who wrote the text: the PR's author for its text and diff, the commenter for a comment or command, and whoever started a `/fix` for its push. A run gives at most one strike per person. Anything else is a warning. The action sends each event to the API with a redacted excerpt of at most 200 characters, and the API keeps the count.
-- When someone has strikes, the summary flags them, for example `⚠️ @login is flagged (2 of 3): <rule>`. It never quotes their text. After 3 strikes the API stops runs for that person on the account (`user_blocked`) until an admin clears them on the dashboard. Admins and maintainers are never blocked: their line shows only the count, such as `⚠️ @login has 4 guardrail strikes`.
+- When someone has strikes, the summary flags them, for example `⚠️ @login is flagged (2 of 3): <rule>`. It never quotes their text. After 3 strikes the API stops runs for that person on the account (`user_blocked`) until an admin clears them on the dashboard, or 30 days after their last strike. With strikes set to warn only, nobody is blocked and the summary shows only the count. Admins and maintainers are never blocked: their line shows only the count, such as `⚠️ @login has 4 guardrail strikes`.
 
 <details>
 <summary>Runner variables the model's environment always gets</summary>
