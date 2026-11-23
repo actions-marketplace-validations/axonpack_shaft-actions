@@ -545,7 +545,7 @@ The action fills the prompt's slots with the run's data and changes nothing else
 - the comments of people inside the repo (see [What the review can do](#what-the-review-can-do));
 - the previous review's findings;
 - how many files `skip` left out;
-- the diff, with each `focus` file marked.
+- the diff, with each `focus` file marked. Lockfiles, `*.snap` snapshots, `.min.js` and `.min.css` files, anything under `dist/`, and the files the base branch's `.gitattributes` marks `linguist-generated` show as one line each with their line counts; the model can read them from the checkout, and the scripts still get their full diff.
 
 It also fills in the repo's guides as the base branch has them, whichever exist:
 `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CONVENTIONS.md`, `.github/pull_request_template.md` and the root `README.md`. Each is cut at 8,000 characters, and all of them together at 30,000.

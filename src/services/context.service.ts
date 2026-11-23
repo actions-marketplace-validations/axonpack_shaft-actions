@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import type { ChangedFile } from '../utils/auto-pick.util';
 import type { Octokit } from '../types/octokit.type';
 import { GUIDE_FILES } from '../consts/settings.const';
+import { generatedGlobs } from '../utils/prompt.util';
 import { SUMMARY_MARKER } from '../utils/render.util';
 import { hasWriteAccess } from './route.service';
 
@@ -36,6 +37,8 @@ export type Context = {
   summary?: Comment;
   /** The repo's guides (`GUIDE_FILES`) the base branch has, in that order. */
   guides: { path: string; text: string }[];
+  /** The globs the base branch's `.gitattributes` marks `linguist-generated`: their diffs stay out of the prompt. */
+  generated?: string[];
 };
 
 const toComment = (c: any, trusted: boolean): Comment => ({
@@ -136,5 +139,7 @@ export async function collectContext(
     guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter(
       (g): g is { path: string; text: string } => typeof g.text === 'string' && !!g.text.trim(),
     ),
+    // From the base branch, so a pull request can't mark its own files generated to hide them.
+    generated: generatedGlobs(await baseFile(octokit, owner, repo, pr.base.ref, '.gitattributes')),
   };
 }

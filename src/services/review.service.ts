@@ -167,7 +167,7 @@ export function buildPrompt(ctx: Context, prior: State | undefined, o: { templat
     body: pr.body,
     commits: ctx.commits.map((m) => `- ${m}`).join('\n'),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments]),
-    diff: diffText(ctx.files, o.focus),
+    diff: diffText(ctx.files, o.focus, ctx.generated),
   });
 }
 

@@ -64,7 +64,7 @@ export function buildReplyPrompt(ctx: Context, ask: Ask, asker: string, o: { tem
     body: pr.body,
     commits: ctx.commits.map((m) => `- ${m}`).join('\n'),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments].filter((c) => c.id !== ask.id)),
-    diff: diffText(ctx.files, o.focus),
+    diff: diffText(ctx.files, o.focus, ctx.generated),
     // A task's own: its request and the repo's commands.
     ...o.slots,
   });

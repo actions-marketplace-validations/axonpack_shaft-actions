@@ -58963,6 +58963,157 @@ async function postCategoryChecks(octokit, owner, repo, sha, states, placed, cle
 var GUIDE_FILES = ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "CONVENTIONS.md", ".github/pull_request_template.md", "README.md"];
 var GUIDE_CAP = { file: 8000, total: 30000 };
 
+// src/utils/auto-pick.util.ts
+import { matchesGlob as matchesGlob2 } from "node:path";
+
+// src/consts/ladder.const.ts
+var LADDERS = {
+  task: ["haiku", "sonnet", "opus"],
+  taskUnchecked: ["sonnet", "opus"],
+  reply: ["haiku", "sonnet", "opus"],
+  reviewLight: ["haiku", "sonnet"],
+  review: ["sonnet", "opus"],
+  reviewHot: ["opus"]
+};
+var LADDER_EFFORT = "low";
+var REVIEW_SIZE_FLOOR = [
+  [2000, "opus"],
+  [400, "sonnet"]
+];
+var PARTIAL_SHARE = 1 / 3;
+var REVIEW_MIN_CONFIDENCE = 60;
+var TRIAGE_START = { simple: "haiku", normal: "sonnet", hard: "opus" };
+var FIX_HAIKU_MAX = 5;
+var HAIKU_MAX_PROMPT_TOKENS = 1e5;
+
+// src/utils/auto-pick.util.ts
+var DEFAULT_MAX_TURNS = 30;
+var TURNS_BY_LINES = [
+  [100, 12],
+  [500, 20]
+];
+var TURNS_BY_FINDINGS = [
+  [4, 12],
+  [8, 20]
+];
+var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
+var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
+var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
+var CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
+var COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
+var matches = (file, globs) => globs.some((g) => matchesGlob2(file, g));
+function isSensitive(f) {
+  if (/(^|\/)package\.json$/.test(f.filename))
+    return f.patch === undefined || /ependencies"/.test(f.patch);
+  return SENSITIVE.test(f.filename);
+}
+function onlyComments(patch) {
+  if (!patch)
+    return false;
+  return patch.split(`
+`).filter((l) => /^[+-]/.test(l)).every((l) => {
+    const code = l.slice(1).trim();
+    return code === "" || COMMENT.test(code);
+  });
+}
+var isLight = (f) => DOCS.test(f.filename) || LOCKFILE.test(f.filename) || CONFIG.test(f.filename) || onlyComments(f.patch);
+function sizeUp(input) {
+  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
+  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
+  return { files, hot, lines: files.reduce((n, f) => n + f.additions + f.deletions, 0) };
+}
+function pick(input) {
+  const { files, hot, lines } = sizeUp(input);
+  const size = `${lines} lines`;
+  let row;
+  if (input.mode === "task")
+    row = { model: "opus", effort: "high", reason: "task" };
+  else if (input.mode === "reply")
+    row = { model: "sonnet", effort: "medium", reason: "question" };
+  else if (hot)
+    row = { model: "opus", effort: "high", reason: `${size}, touches ${hot.filename}` };
+  else if (input.depth === "deep")
+    row = { model: "opus", effort: "high", reason: `${size}, deep` };
+  else if (lines > 1000 || files.length > 30)
+    row = { model: "opus", effort: "medium", reason: `${size}, ${files.length} files` };
+  else if (files.length > 0 && files.every(isLight))
+    row = { model: "haiku", effort: "low", reason: `${size}, docs and config only` };
+  else
+    row = { model: "sonnet", effort: "medium", reason: size };
+  const autoModel = !input.model || input.model === "auto";
+  const model = autoModel ? row.model : input.model;
+  const sized = input.mode === "review" && input.depth !== "deep" ? TURNS_BY_LINES.find(([below]) => lines < below)?.[1] : input.mode === "task" && input.findings && TURNS_BY_FINDINGS.find(([below]) => input.findings < below)?.[1];
+  const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
+  return {
+    ...row,
+    reason: input.maxTurns === undefined && sized ? `${row.reason}, up to ${sized} turns` : row.reason,
+    maxTurns,
+    model,
+    effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
+    subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
+    autoModel
+  };
+}
+function ladder(input) {
+  const first = pick(input);
+  if (!first.autoModel || input.effort && input.effort !== "auto" || input.depth === "deep")
+    return [first];
+  const { files, hot, lines } = sizeUp(input);
+  const [key, why] = input.mode === "task" ? input.checked === false ? ["taskUnchecked", "task, and the repo's checks can't run on this runner"] : ["task", "task"] : input.mode === "reply" ? ["reply", "question"] : hot ? ["reviewHot", `${lines} lines, touches ${hot.filename}`] : files.length > 0 && files.every(isLight) ? ["reviewLight", `${lines} lines, docs and config only`] : ["review", `${lines} lines`];
+  const big = (input.promptChars ?? 0) / 4 > HAIKU_MAX_PROMPT_TOKENS;
+  const allowed = LADDERS[key].filter((m) => !(big && m === "haiku"));
+  let models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ""), allowed.length - 1)));
+  const floor = input.mode === "review" ? REVIEW_SIZE_FLOOR.find(([above]) => lines > above)?.[1] : undefined;
+  if (floor) {
+    const order = ["haiku", "sonnet", "opus"];
+    const kept = models.filter((m) => order.indexOf(m) >= order.indexOf(floor));
+    models = kept.length ? kept : [floor];
+  }
+  const reason = `${why}; auto tries ${models.join(", then ")} at ${LADDER_EFFORT} effort, moving up only when an attempt doesn't work`;
+  return models.map((model) => ({ ...first, model, effort: LADDER_EFFORT, reason }));
+}
+
+// src/utils/prompt.util.ts
+var MAX_DIFF = 200000;
+var GENERATED = /\.snap$|\.min\.(js|css)$|(^|\/)dist\//;
+function generatedGlobs(gitattributes) {
+  return (gitattributes ?? "").split(`
+`).flatMap((l) => {
+    const [pattern, ...attrs] = l.trim().split(/\s+/);
+    if (!pattern || pattern.startsWith("#") || !attrs.some((a) => a === "linguist-generated" || a === "linguist-generated=true"))
+      return [];
+    const glob = pattern.replace(/\/$/, "");
+    return [glob.includes("/") ? glob.replace(/^\//, "") : `**/${glob}`];
+  });
+}
+var trimmed = (file, generated = []) => LOCKFILE.test(file) || GENERATED.test(file) || matches(file, generated) || matches(file, generated.map((g) => `${g}/**`));
+function diffText(files, focus, generated = []) {
+  const diff = files.map((f) => {
+    const head = `diff --git a/${f.filename} b/${f.filename} (${f.status}${matches(f.filename, focus) ? ", focus" : ""})`;
+    if (trimmed(f.filename, generated))
+      return `${head}
+(left out: a lockfile or generated file, +${f.additions} -${f.deletions} lines; read it from the checkout if it matters)`;
+    return `${head}
+${f.patch ?? "(no patch: binary or too large, read the file)"}`;
+  }).join(`
+`);
+  return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}
+(the diff is cut here; read the remaining files from the checkout)` : diff;
+}
+var trustedComments = (comments) => comments.filter((c) => c.trusted).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
+`);
+function fillSlots(template, slots) {
+  return template.replace(/\{\{(\w+)\}\}/g, (slot, name) => {
+    if (!Object.hasOwn(slots, name))
+      return slot;
+    const value = String(slots[name]);
+    return value.trim() ? value : "None.";
+  });
+}
+var dataBlock = (tag, text) => `<${tag}>
+${text.replace(new RegExp(`</?${tag}\\b[^>]*>`, "gi"), "")}
+</${tag}>`;
+
 // src/services/route.service.ts
 var REVIEW_EVENTS = { opened: "opened", reopened: "opened", synchronize: "push", ready_for_review: "ready" };
 var REVIEW_COMMAND = "/review";
@@ -59125,140 +59276,10 @@ async function collectContext(octokit, owner, repo, number, bot) {
     comments: comments.filter((c) => c !== summary),
     reviewComments: await Promise.all(reviewComments.map(comment)),
     summary,
-    guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter((g) => typeof g.text === "string" && !!g.text.trim())
+    guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter((g) => typeof g.text === "string" && !!g.text.trim()),
+    generated: generatedGlobs(await baseFile(octokit, owner, repo, pr.base.ref, ".gitattributes"))
   };
 }
-
-// src/consts/ladder.const.ts
-var LADDERS = {
-  task: ["haiku", "sonnet", "opus"],
-  taskUnchecked: ["sonnet", "opus"],
-  reply: ["haiku", "sonnet", "opus"],
-  reviewLight: ["haiku", "sonnet"],
-  review: ["sonnet", "opus"],
-  reviewHot: ["opus"]
-};
-var LADDER_EFFORT = "low";
-var REVIEW_SIZE_FLOOR = [
-  [2000, "opus"],
-  [400, "sonnet"]
-];
-var PARTIAL_SHARE = 1 / 3;
-var REVIEW_MIN_CONFIDENCE = 60;
-var TRIAGE_START = { simple: "haiku", normal: "sonnet", hard: "opus" };
-var FIX_HAIKU_MAX = 5;
-var HAIKU_MAX_PROMPT_TOKENS = 1e5;
-
-// src/utils/auto-pick.util.ts
-import { matchesGlob as matchesGlob2 } from "node:path";
-var DEFAULT_MAX_TURNS = 30;
-var TURNS_BY_LINES = [
-  [100, 12],
-  [500, 20]
-];
-var TURNS_BY_FINDINGS = [
-  [4, 12],
-  [8, 20]
-];
-var SENSITIVE = /(^|\/)\.github\/workflows\/|(^|[/._-])(auth|oauth|authentication|authorization|crypto|cryptography|payments?|billing|migrations?)([/._-]|$)/i;
-var DOCS = /\.(md|mdx|markdown|txt|rst|adoc)$|(^|\/)(LICENSE|COPYING|NOTICE)[^/]*$/i;
-var LOCKFILE = /(^|\/)(bun\.lockb?|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|Podfile\.lock|pubspec\.lock)$/;
-var CONFIG = /\.(json|jsonc|json5|ya?ml|toml|ini|cfg|conf)$|(^|\/)\.[^/]+$/i;
-var COMMENT = /^(\/\/|\/\*|\*|#|<!--|--)/;
-var matches = (file, globs) => globs.some((g) => matchesGlob2(file, g));
-function isSensitive(f) {
-  if (/(^|\/)package\.json$/.test(f.filename))
-    return f.patch === undefined || /ependencies"/.test(f.patch);
-  return SENSITIVE.test(f.filename);
-}
-function onlyComments(patch) {
-  if (!patch)
-    return false;
-  return patch.split(`
-`).filter((l) => /^[+-]/.test(l)).every((l) => {
-    const code = l.slice(1).trim();
-    return code === "" || COMMENT.test(code);
-  });
-}
-var isLight = (f) => DOCS.test(f.filename) || LOCKFILE.test(f.filename) || CONFIG.test(f.filename) || onlyComments(f.patch);
-function sizeUp(input) {
-  const files = (input.files ?? []).filter((f) => !matches(f.filename, input.skip ?? []));
-  const hot = files.find((f) => matches(f.filename, input.focus ?? []) || isSensitive(f));
-  return { files, hot, lines: files.reduce((n, f) => n + f.additions + f.deletions, 0) };
-}
-function pick(input) {
-  const { files, hot, lines } = sizeUp(input);
-  const size = `${lines} lines`;
-  let row;
-  if (input.mode === "task")
-    row = { model: "opus", effort: "high", reason: "task" };
-  else if (input.mode === "reply")
-    row = { model: "sonnet", effort: "medium", reason: "question" };
-  else if (hot)
-    row = { model: "opus", effort: "high", reason: `${size}, touches ${hot.filename}` };
-  else if (input.depth === "deep")
-    row = { model: "opus", effort: "high", reason: `${size}, deep` };
-  else if (lines > 1000 || files.length > 30)
-    row = { model: "opus", effort: "medium", reason: `${size}, ${files.length} files` };
-  else if (files.length > 0 && files.every(isLight))
-    row = { model: "haiku", effort: "low", reason: `${size}, docs and config only` };
-  else
-    row = { model: "sonnet", effort: "medium", reason: size };
-  const autoModel = !input.model || input.model === "auto";
-  const model = autoModel ? row.model : input.model;
-  const sized = input.mode === "review" && input.depth !== "deep" ? TURNS_BY_LINES.find(([below]) => lines < below)?.[1] : input.mode === "task" && input.findings && TURNS_BY_FINDINGS.find(([below]) => input.findings < below)?.[1];
-  const maxTurns = input.maxTurns ?? (sized || DEFAULT_MAX_TURNS);
-  return {
-    ...row,
-    reason: input.maxTurns === undefined && sized ? `${row.reason}, up to ${sized} turns` : row.reason,
-    maxTurns,
-    model,
-    effort: !input.effort || input.effort === "auto" ? row.effort : input.effort,
-    subagentModel: input.depth === "deep" ? autoModel ? "sonnet" : model : undefined,
-    autoModel
-  };
-}
-function ladder(input) {
-  const first = pick(input);
-  if (!first.autoModel || input.effort && input.effort !== "auto" || input.depth === "deep")
-    return [first];
-  const { files, hot, lines } = sizeUp(input);
-  const [key, why] = input.mode === "task" ? input.checked === false ? ["taskUnchecked", "task, and the repo's checks can't run on this runner"] : ["task", "task"] : input.mode === "reply" ? ["reply", "question"] : hot ? ["reviewHot", `${lines} lines, touches ${hot.filename}`] : files.length > 0 && files.every(isLight) ? ["reviewLight", `${lines} lines, docs and config only`] : ["review", `${lines} lines`];
-  const big = (input.promptChars ?? 0) / 4 > HAIKU_MAX_PROMPT_TOKENS;
-  const allowed = LADDERS[key].filter((m) => !(big && m === "haiku"));
-  let models = allowed.slice(Math.max(0, Math.min(allowed.indexOf(input.start ?? ""), allowed.length - 1)));
-  const floor = input.mode === "review" ? REVIEW_SIZE_FLOOR.find(([above]) => lines > above)?.[1] : undefined;
-  if (floor) {
-    const order = ["haiku", "sonnet", "opus"];
-    const kept = models.filter((m) => order.indexOf(m) >= order.indexOf(floor));
-    models = kept.length ? kept : [floor];
-  }
-  const reason = `${why}; auto tries ${models.join(", then ")} at ${LADDER_EFFORT} effort, moving up only when an attempt doesn't work`;
-  return models.map((model) => ({ ...first, model, effort: LADDER_EFFORT, reason }));
-}
-
-// src/utils/prompt.util.ts
-var MAX_DIFF = 200000;
-function diffText(files, focus) {
-  const diff = files.map((f) => `diff --git a/${f.filename} b/${f.filename} (${f.status}${matches(f.filename, focus) ? ", focus" : ""})
-${f.patch ?? "(no patch: binary or too large, read the file)"}`).join(`
-`);
-  return diff.length > MAX_DIFF ? `${diff.slice(0, MAX_DIFF)}
-(the diff is cut here; read the remaining files from the checkout)` : diff;
-}
-var trustedComments = (comments) => comments.filter((c) => c.trusted).map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}: ${c.body.slice(0, 2000)}`).join(`
-`);
-function fillSlots(template, slots) {
-  return template.replace(/\{\{(\w+)\}\}/g, (slot, name) => {
-    if (!Object.hasOwn(slots, name))
-      return slot;
-    const value = String(slots[name]);
-    return value.trim() ? value : "None.";
-  });
-}
-var dataBlock = (tag, text) => `<${tag}>
-${text.replace(new RegExp(`</?${tag}\\b[^>]*>`, "gi"), "")}
-</${tag}>`;
 
 // src/utils/checklist-plan.util.ts
 var NO_MATCH = "No matching files changed";
@@ -60999,7 +61020,7 @@ ${prior.findings.map((f) => `- ${f.fp} ${f.severity} \`${f.file}:${f.line}\` ${f
     commits: ctx.commits.map((m) => `- ${m}`).join(`
 `),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments]),
-    diff: diffText(ctx.files, o.focus)
+    diff: diffText(ctx.files, o.focus, ctx.generated)
   });
 }
 async function resolveThreads(octokit, ctx, fps, bot) {
@@ -61389,7 +61410,7 @@ function buildReplyPrompt(ctx, ask, asker, o) {
     commits: ctx.commits.map((m) => `- ${m}`).join(`
 `),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments].filter((c) => c.id !== ask.id)),
-    diff: diffText(ctx.files, o.focus),
+    diff: diffText(ctx.files, o.focus, ctx.generated),
     ...o.slots
   });
 }
