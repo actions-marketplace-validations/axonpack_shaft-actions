@@ -4,7 +4,9 @@ import * as core from '@actions/core';
 import { DASHBOARD_URL } from '../consts/api.const';
 import { TRIAGE_START } from '../consts/ladder.const';
 import { ladder, matches } from '../utils/auto-pick.util';
-import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
+import { failureMarkdown, noticeText, ShaftFailure } from '../utils/failure.util';
+import { pushHits } from '../guardrails/push.util';
+import { recordEvent } from '../guardrails/classify.service';
 import { pushDenial, type PushTarget, runsCode, sameChanges, unaskedBuildInputs } from '../utils/push.util';
 import { footer, prose, redact } from '../utils/render.util';
 import { dataBlock } from '../utils/prompt.util';
@@ -174,20 +176,22 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
     // A merge brings in the base branch's own changes, which nobody needs to ask for: only what differs from it counts.
     const own = merge ? changes.filter((c) => c.content?.toString('utf8') !== fileAt(o.cwd, merge!.theirs, c.path)) : changes;
     const unasked = scope ? [] : unaskedBuildInputs(own, (p) => fileAt(o.cwd, base, p), o.ask.text);
+    // Lines that look like an attack (a download piped to a shell, the environment sent out) are never pushed.
+    const blocked = pushHits(own, (p) => fileAt(o.cwd, base, p));
     // A conflict left unresolved fails like a check, so it's never pushed.
     const unresolved = (merge?.conflicts ?? []).filter((p) => marked(o.cwd, p)).map((p) => ({ command: `conflict markers in ${p}`, passed: false, output: `${p} still has conflict markers.` }));
     const checks = unresolved.length
       ? unresolved
-      : changes.length && !outside.length && !unasked.length
+      : changes.length && !outside.length && !unasked.length && !blocked.length
         ? await step('Run the checks', async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env)))
         : [];
-    return { changes, outside, unasked, checks, failed: checks.filter((r) => !r.passed) };
+    return { changes, outside, unasked, blocked, checks, failed: checks.filter((r) => !r.passed) };
   };
   try {
     // A bare `/fix` whose suggestions all applied, and a `/resolve` with no conflicts, need no model.
     const noModel = (o.bare && !left.length) || (merge && !merge.conflicts.length);
     const ran = noModel ? { ...(await settle([])), result: undefined } : await withModel();
-    const { changes, outside, unasked, checks, failed, result } = ran;
+    const { changes, outside, unasked, blocked, checks, failed, result } = ran;
     const lines = [
       result
         ? prose(result.reply.answer)
@@ -208,6 +212,11 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
       if (outside.length) {
         core.warning(`Nothing was pushed: ${outside.join(', ')} isn't named by any finding.`);
         lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(', ')}.`);
+      } else if (blocked.length) {
+        const why = `Nothing was pushed: a guardrail rule refused the change (${blocked.map((b) => `${b.name} in ${name(b.path)}`).join('; ')}).`;
+        core.warning(noticeText(why, 'guardrail_blocked'));
+        recordEvent(o.askerId ? { id: o.askerId, login: o.asker } : undefined, { rule: blocked[0]!.rule, severity: 'strike', where: 'push', excerpt: blocked[0]!.line });
+        lines.push(why);
       } else if (unasked.length) {
         core.warning(`Nothing was pushed: the request didn't ask to change ${unasked.join(', ')}.`);
         lines.push(
@@ -234,7 +243,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
       const skipped = skippedNote(checks);
-      if (!outside.length && !unasked.length) lines.push(checksTable(checks), ...(skipped ? [skipped] : []));
+      if (!outside.length && !unasked.length && !blocked.length) lines.push(checksTable(checks), ...(skipped ? [skipped] : []));
       for (const c of failed)
         lines.push(`<details><summary>Output of <code>${c.command}</code></summary>\n\n\`\`\`\`\n${prose(c.output).replace(/`{4,}/g, '```')}\n\`\`\`\`\n\n</details>`);
     }

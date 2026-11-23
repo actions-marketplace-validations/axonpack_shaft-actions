@@ -169,7 +169,7 @@ Reply `/dismiss` on a finding's inline comment when you've decided not to fix it
 - 👀 when the run starts. For `/review`, `/fix`, `/ask` and `/axonshaft`, it comes after the write access check, so a comment from someone without write access gets no reaction. `/help` gets it from anyone.
 - When the run ends, the 👀 is replaced with 🚀 if the run did its job (for `/ask`, once the answer is posted), or 😕 if it failed or did nothing, such as a command that isn't built yet or a run the API stopped.
 
-GitHub has no reactions on a review's body, so a command in a review gets none, and neither does a pull request event. If GitHub refuses a reaction, the job log warns and the run carries on; if removing the 👀 fails, it stays next to the new one. A dry run logs the reactions and adds none.
+GitHub has no reactions on a review's body, so a command in a review gets none. A review started by a pull request event gets its 👀 on the pull request instead; see [Progress while the review runs](#progress-while-the-review-runs). If GitHub refuses a reaction, the job log warns and the run carries on; if removing the 👀 fails, it stays next to the new one. A dry run logs the reactions and adds none.
 
 What counts as a command:
 
@@ -320,6 +320,8 @@ With no turn limit set on the dashboard, the action picks one from the diff's ch
 | Under 500 lines | 20 |
 | 500 lines or more, or a deep review | 30 |
 
+Under 500 lines, each checklist the main pass runs after the first adds 2 turns, up to 30. A 60-line diff with five checklists in the main pass gets 20.
+
 A bare `/fix` of fewer than 4 findings for the model gets 12 turns, and of fewer than 8 gets 20. Any other task gets 30.
 
 - A limit set on the dashboard always wins.
@@ -344,13 +346,13 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
    It's on by default, and "Walkthrough in the summary" on the dashboard turns it off. A walkthrough over 8 areas or 20 files in an area is left out, and so is a diagram that isn't a `flowchart` or has a `click` link.
 7. "What this PR does", folded: what the PR claims, its impact, its scope and what the review couldn't check.
 8. A footer, one small line that opens into a table. The line gives the model by name, the effort, the tokens and the changed lines, such as `Claude Sonnet 5.5, medium effort · 62k tokens, 219 lines`. On an API key the cost follows the tokens (`62k tokens · $0.38, 219 lines`). With no token counts the tokens are left out, and a run with no model call reads `no model call · 219 lines`.
-   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the rating and the models tried first, the turn limit, the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the permissions the app's installation hasn't approved yet, the tokens (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
+   The table lists what the run knows and leaves out what it doesn't: the run's page on the dashboard (or the dashboard, with an API that doesn't send the page), the Actions log, the action's version and ref, the model's name and ID, the fallback and the subagents' models, the effort and why `auto` picked it, the rating and the models tried first, the turn limit, the light session's model, turn limit, tokens and checklists (or that it didn't work), the changed lines and files, the files `skip` left out, the checklists that ran and the ones that didn't, the permissions the app's installation hasn't approved yet, the tokens of every session together (input, output, cache read, cache write, total and billed), the cost on an API key, and the reviewed commit.
    Billed is cache-weighted: a cache read counts as 0.1 of an input token and a cache write as 1.25, so it can come out above the total when a run writes a lot of cache. A note under the table says so.
    The dashboard's Runs list shows the tokens split into input, output and cache, with the cost for a run on an API key.
 
 #### The card
 
-The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. On a later push, the comment switches to `reviewing.svg` while the review runs. GitHub sends no email when a comment is edited. Under it are the headline and these chips:
+The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. The comment is written only when the review is done: the first review creates it, and a later push edits it in place, which GitHub sends no email for. While a review runs, the comment stays as the last review left it. Under it are the headline and these chips:
 
 - **Findings**: the number of blocking, should-fix and nit findings, and how many earlier findings this push fixed.
 - **Checks**: one chip per check:
@@ -368,6 +370,14 @@ The card opens with the verdict's status card, an SVG from `https://shaft.axonpa
 
 The card's last line gives the kind of change, the model's confidence and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · 85% confidence · reviewed a1b2c3d`.
 
+### What a push reviews again
+
+The summary's hidden state line keeps a hash of each reviewed file's diff, taken without the hunks' line numbers, so a rebase that leaves the change as it was keeps the same hash. It also keeps a hash of the job's settings and the action's version, the checklists the review checked, its verdict and its merge gates. The next run compares them:
+
+- Same diff and settings (a rerun, or a rebase onto a newer base): no model call and no scripts. The summary keeps its review, with one line on top saying nothing changed since the last review, and the check runs, the merge gates check and the run on the dashboard carry its results to the new commit.
+- Some files changed, with checklists: only the checklists whose `paths` match a file added, changed or removed since the last review run again. The others keep their findings and their check runs' results, and the model doesn't see those findings. A carried finding outside the diff says it was found by an earlier review. When no checklist matches the changed files, the whole review runs.
+- Anything else gets a full review: new settings, a new action version, the first review, a summary written before 1.11, a file with no patch (binary or too large), merge gates the last review didn't record, or a pull request with more than 300 files, whose state keeps no hashes.
+
 ### Progress while the review runs
 
 The action shows that a review is running without anything that emails people:
@@ -375,16 +385,16 @@ The action shows that a review is running without anything that emails people:
 - A check run named `Axon Shaft / review` on the reviewed commit. It's in progress while the review runs. It then passes, with a link to the summary comment, or fails, with the failure's message and a link to the run.
 
   The check is updated once at the start of each step. Its title is the current step, such as "Reviewing with Sonnet, effort medium" or "Posting the review". Its summary lists the steps, with ✓ on the ones done and the current one in bold, and says how far into the review that step started.
-- An 👀 reaction on the `/review` comment, when a comment started the review. Every command gets one; see [Reactions on the comment](#reactions-on-the-comment).
+- An 👀 reaction on the `/review` comment when a comment started the review (every command gets one; see [Reactions on the comment](#reactions-on-the-comment)). Otherwise the 👀 goes on the pull request itself. When the run ends it's replaced the same way: 🚀 when the review is posted, 😕 when it failed or was cancelled.
 
 The check run needs Checks (write) on the run's token. Without it the review still posts, the job log warns once, and the action skips the other check runs. If GitHub refuses a step's update, the job log warns once and the check gets no more step updates. The review carries on, and the check still gets its result at the end. A dry run logs the check, each step's title and the reaction, and posts none of them.
 
 ### When a run is cancelled or stops early
 
-No check run stays in progress after the run ends, and the summary comment never stays on "Reviewing":
+No check run stays in progress after the run ends:
 
-- When the workflow is cancelled (a newer push with `cancel-in-progress: true`, someone pressing Cancel, or the job's `timeout-minutes`), GitHub stops the step. The action then closes each check run it left in progress as cancelled, with the summary "The workflow was cancelled before the review finished." The summary comment shows the `cancelled` card in place of "Reviewing", the 👀 on a `/review` comment becomes 😕, and the run is recorded on the dashboard with the `cancelled` code. This takes at most 5 seconds, then the Claude session stops.
-- If the review fails, a check run still in progress fails with the failure's card and message, and the summary comment shows the same card.
+- When the workflow is cancelled (a newer push with `cancel-in-progress: true`, someone pressing Cancel, or the job's `timeout-minutes`), GitHub stops the step. The action then closes each check run it left in progress as cancelled, with the summary "The workflow was cancelled before the review finished." The summary comment keeps the last review's result, the 👀 on the `/review` comment or the pull request becomes 😕, and the run is recorded on the dashboard with the `cancelled` code. This takes at most 5 seconds, then the Claude session stops.
+- If the review fails, a check run still in progress fails with the failure's card and message. When the model's run fails, the summary comment shows the same card.
 - The action also has a post step that GitHub runs at the end of the job, after a cancel too. If the step was killed before it could clean up, the post step closes what's left the same way. After a normal run it does nothing.
 
 ### The merge gates check
@@ -471,6 +481,20 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 - The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments `axonshaft[bot]` wrote, so a copy posted by someone else is ignored.
 - Before anything is posted, the action replaces the tokens it holds with `***`. It masks every token in the job log.
 
+### Guardrails
+
+The limits above hold even when the model is fooled. The guardrails also check what people write, and tie each attempt they catch to the person who made it.
+
+- Before the model runs, the action checks the PR's title, description and commit messages, the comments that reach the prompt, and a `/ask` or `/fix` command against fixed rules: asks to ignore earlier instructions, to print the environment or tokens, `/proc/self/environ`, fake role or tool tags such as `<tool_result>`, invisible or direction-changing characters, and instructions hidden in HTML comments. Diff lines are checked only for hidden characters, fake tags and lines that tell an AI reviewer what to conclude, since code may mention a system prompt for real reasons. Quoted lines (`> `) are never judged.
+- A text that clearly breaks a rule is replaced in the prompt with `[removed by guardrail: <rule>]`, and the rest of the PR is still reviewed. A command that does is refused before any model runs (`guardrail_blocked`).
+- A text that only looks suspicious goes to one Haiku call with no tools, at most once per run, which says whether it's an injection. If that call fails, the text counts as harmless and stays in.
+- Text from people (title, description, comments, commands) reaches the model with its words joined by `ˆ`, and the system prompt says such text is data. It also carries a random line for the run. A reply that repeats it isn't posted (`guardrail_leak`).
+- In what the model writes, token shapes (`ghp_`, `github_pat_`, `sk-ant-`, `AKIA`, private keys, JWTs) become `***`, links outside GitHub and axonpack.dev become inert code, `@` mentions can't ping anyone, and a `/command` at the start of a line is escaped.
+- The model never reads `.env` files, `.pem` keys, SSH keys, `.npmrc`, `.pypirc` or `.netrc`.
+- A change from `/fix` isn't pushed when its new lines pipe a download into a shell, send the whole environment out, send a variable to a hard-coded host, or add a long encoded blob (`guardrail_blocked`).
+- A clear hit is a strike against the person who wrote the text: the PR's author for its text and diff, the commenter for a comment or command, and whoever started a `/fix` for its push. A run gives at most one strike per person. Anything else is a warning. The action sends each event to the API with a redacted excerpt of at most 200 characters, and the API keeps the count.
+- When someone has strikes, the summary flags them, for example `⚠️ @login is flagged (2 of 3): <rule>`. It never quotes their text. After 3 strikes the API stops runs for that person on the account (`user_blocked`) until an admin clears them on the dashboard.
+
 <details>
 <summary>Runner variables the model's environment always gets</summary>
 
@@ -493,6 +517,7 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `no_claude_token` | Neither the project nor its account has a Claude token saved. |
 | `oidc_invalid` | The API refused the run's OIDC token because it was bad, expired or already used. |
 | `event_not_allowed` | The API doesn't take runs started by this workflow event. |
+| `user_blocked` | The PR's author or the commenter has 3 active guardrail strikes on this account, so nothing runs for them. An admin can clear them on the dashboard. |
 | `rate_limited` | The repo is over its rate limit. Wait a little and rerun the job. |
 | `api_error` | The API failed, or its answer couldn't be used: a setting the action can't run with, or an error page from something in front of the API. |
 
@@ -507,6 +532,7 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
 | `claude_binary_unverified` | The Claude Code binary downloaded from npm didn't match the sha512 the release records, or the release has no hash for the runner's platform, so it wasn't run. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
+| `guardrail_leak` | The model's reply repeated the system prompt's line for the run, so nothing was posted. |
 | `self_hosted_unsupported` | A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran. |
 | `credentials_in_checkout` | A task's checkout kept a token in `.git/config`, so no session ran. Set `persist-credentials: false` on `actions/checkout`. |
 | `sandbox_unavailable` | A task couldn't start its sandbox on this runner, so no session ran. The message says why. |
@@ -522,6 +548,8 @@ These end with a notice, and the step passes. A notice with a code ends with a l
 - a `/review`, `/ask`, `/fix` or `/axonshaft` on an issue (`not_a_pull_request`);
 - a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
 - a bare `/fix` with nothing to fix (`nothing_to_fix`);
+- a command, or a `/fix` change, that a guardrail rule refused (`guardrail_blocked`);
+- a run for someone with 3 guardrail strikes (`user_blocked`). The job summary shows its card too;
 - a `/resolve` on a pull request that already has the whole base branch (`nothing_to_resolve`), or whose merge needs a decision only a person can make (`merge_needs_decision`);
 - a `/fix` or `/axonshaft` on a self-hosted runner (`self_hosted_unsupported`);
 - a `/fix` or `/axonshaft` whose checkout kept a token in `.git/config` (`credentials_in_checkout`);
@@ -545,7 +573,7 @@ The action fills the prompt's slots with the run's data and changes nothing else
 - the comments of people inside the repo (see [What the review can do](#what-the-review-can-do));
 - the previous review's findings;
 - how many files `skip` left out;
-- the diff, with each `focus` file marked.
+- the diff, with each `focus` file marked. Lockfiles, `*.snap` snapshots, `.min.js` and `.min.css` files, anything under `dist/`, and the files the base branch's `.gitattributes` marks `linguist-generated` show as one line each with their line counts; the model can read them from the checkout, and the scripts still get their full diff.
 
 It also fills in the repo's guides as the base branch has them, whichever exist:
 `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `.github/CONTRIBUTING.md`, `CONVENTIONS.md`, `.github/pull_request_template.md` and the root `README.md`. Each is cut at 8,000 characters, and all of them together at 30,000.
@@ -604,8 +632,12 @@ An Axon Shaft API that sends the job's checklists also sends the prompt with its
 - The pinned linters: actionlint 1.7.12, hadolint 2.15.1, tflint 0.66.0, squawk 2.71.0, oasdiff 1.37.0 and buf 1.75.0, in `src/consts/tools.const.ts`. Each is downloaded once a run into `RUNNER_TEMP`, only from that project's own GitHub release, and unpacked and run only once its sha256 matches the one this release records: the hash the project publishes beside its release (squawk publishes none, so its hash is of the file as this release downloaded it). The API never names a tool, a version, a URL or a hash. The linter runs in the bubblewrap sandbox with no network, on copies of the changed files in an empty folder it can only read, with the runner's allowed environment, for 60 seconds and 5 MB of output at most. They run only on Linux runners on x64 or arm64. When a linter can't be installed (another platform, no sandbox, a failed download or a hash that doesn't match), its facts say why, and the checklist runs on the model alone.
 - The run's data comes first in the prompt and the steps come last, numbered from 1: the steps that always run first, the step of each checklist that runs, then the job's own instructions and the steps that always run last. Everything before the steps is the same whichever checklists run.
 - A finding's `step` can only name a checklist that runs.
+- When two checklists report findings on the same lines of a file, one finding is kept: the one from the checklist earlier in the job's order, at the higher of the two severities, with "Also found by" and the other checklist's key added to its text.
 - When no checklist runs, no model is called. The summary comment says so, with a chip for each checklist, and each check run is skipped. A project with merge gates still gets a review, because only the model can judge the gates.
-- The run's page on the dashboard gets the model session's model, tokens and the checklists it ran.
+- Checklists marked `light` run in their own session on Haiku, before the main one: the changed files their `paths` match, their scripts' facts, their steps and the steps that always run last. It has 6 turns, may call only Read and Grep, and doesn't retry a reply that doesn't match the format. Its findings go through the same dedupe, dismissals, `ignore` entries and fingerprints as the main session's, and a blocking or should-fix one raises the verdict the main session gave. The main session runs the other checklists, the merge gates and the verdict.
+  - When the light session fails, runs past 5 minutes (or the job's time limit, when that's shorter), sends a reply that doesn't match the format, or comes back partial (more than a third of its checklists not checked, a confidence under 60%, or saying it only partly reviewed), the job log warns and the main session runs those checklists too. Its tokens still count.
+  - When only light checklists run and there are no merge gates, one session runs them, picked as any review is. A deep review runs them in its main session.
+- The run's page on the dashboard gets each model session's model, tokens, turn limit and the checklists it ran.
 
 With an API that doesn't send checklists, the action runs the prompt it gets, as 1.5 did.
 

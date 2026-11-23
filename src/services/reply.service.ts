@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import { datamark } from '../guardrails/input.util';
 import { TRIAGE_START } from '../consts/ladder.const';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -31,7 +32,7 @@ export const ANSWER_FORMAT: ReplyFormat<string> = {
 export type ReplyOptions = Pick<
   ReviewOptions,
   'octokit' | 'claude' | 'secrets' | 'model' | 'effort' | 'maxTurns' | 'timeoutMinutes' | 'skip' | 'focus' | 'bot' | 'dryRun' | 'runUrl' | 'dashboardRunUrl' | 'cwd' | 'env'
-> & { owner: string; repo: string; number: number; ask: Ask; asker: string; template: string };
+> & { owner: string; repo: string; number: number; ask: Ask; asker: string; /** The asker's GitHub ID, for the guardrails. */ askerId?: number; template: string };
 
 export type ReplyOutcome = {
   model: string;
@@ -58,13 +59,13 @@ export function buildReplyPrompt(ctx: Context, ask: Ask, asker: string, o: { tem
     sha: pr.headSha,
     place: path ? `on \`${path}\`${ask.line ? ` line ${ask.line}` : ''}` : "in the pull request's conversation",
     asker,
-    question: ask.text,
-    title: pr.title,
+    question: datamark(ask.text),
+    title: datamark(pr.title),
     author: pr.author,
-    body: pr.body,
+    body: datamark(pr.body),
     commits: ctx.commits.map((m) => `- ${m}`).join('\n'),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments].filter((c) => c.id !== ask.id)),
-    diff: diffText(ctx.files, o.focus),
+    diff: diffText(ctx.files, o.focus, ctx.generated),
     // A task's own: its request and the repo's commands.
     ...o.slots,
   });

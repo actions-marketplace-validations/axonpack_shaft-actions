@@ -83,3 +83,8 @@ test('insideCheckout follows symlinks', () => {
   expect(insideCheckout('src/a.ts', cwd)).toBe(true);
   expect(insideCheckout('hosts', cwd)).toBe(false);
 });
+
+test('Read: files that hold credentials are refused', () => {
+  for (const bad of ['.env', 'apps/api/.env.local', 'certs/server.pem', '.npmrc', 'id_ed25519']) expect(toolDenial('Read', { file_path: bad }, cwd), bad).toMatch(/credentials/);
+  for (const ok of ['src/env.ts', '.envrc.example.md', 'docs/pem.md']) expect(toolDenial('Read', { file_path: ok }, cwd), ok).toBeUndefined();
+});

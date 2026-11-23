@@ -13,38 +13,55 @@ export function triggerComment(eventName: string, payload: any): Comment | undef
   return { id, review: eventName === 'pull_request_review_comment' };
 }
 
-/** The 👀 on the comment that started the run. `id` is GitHub's id for it, unset on a dry run. */
-export type Reaction = { octokit: Octokit; owner: string; repo: string; comment: Comment; dryRun: boolean; id?: number };
+/**
+ * The 👀 on the comment that started the run, or on the pull request itself (`pr`) for a review no
+ * comment started. `id` is GitHub's id for it, unset on a dry run.
+ */
+export type Reaction = { octokit: Octokit; owner: string; repo: string; comment?: Comment; pr?: number; dryRun: boolean; id?: number };
 
-const warn = (what: string) => (e: Error) => {
-  core.warning(`Couldn't ${what} on the comment that started the run: ${e.message}`);
+const where = (r: Reaction) => (r.comment ? 'the comment that started the run' : 'the pull request');
+
+const warn = (r: Reaction, what: string) => (e: Error) => {
+  core.warning(`Couldn't ${what} on ${where(r)}: ${e.message}`);
   return undefined;
 };
 
 async function add(r: Reaction, content: 'eyes' | 'rocket' | 'confused'): Promise<number> {
-  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, content };
-  const { data } = await (r.comment.review ? r.octokit.rest.reactions.createForPullRequestReviewComment(req) : r.octokit.rest.reactions.createForIssueComment(req));
+  const base = { owner: r.owner, repo: r.repo, content };
+  const { data } = await (!r.comment
+    ? r.octokit.rest.reactions.createForIssue({ ...base, issue_number: r.pr! })
+    : r.comment.review
+      ? r.octokit.rest.reactions.createForPullRequestReviewComment({ ...base, comment_id: r.comment.id })
+      : r.octokit.rest.reactions.createForIssueComment({ ...base, comment_id: r.comment.id }));
   return data.id;
 }
 
-/** Puts 👀 on the comment that started the run. None when no comment started it, or when GitHub refused it, which only warns. */
-export async function reactStart(octokit: Octokit, event: Event, dryRun: boolean): Promise<Reaction | undefined> {
+/**
+ * Puts 👀 on the comment that started the run, or on pull request `pr` when no comment did. None when
+ * there's neither, or when GitHub refused it, which only warns.
+ */
+export async function reactStart(octokit: Octokit, event: Event, dryRun: boolean, pr?: number): Promise<Reaction | undefined> {
   const comment = triggerComment(event.eventName, event.payload);
-  if (!comment) return undefined;
-  const r: Reaction = { octokit, owner: event.repo.owner, repo: event.repo.repo, comment, dryRun };
+  if (!comment && pr === undefined) return undefined;
+  const r: Reaction = { octokit, owner: event.repo.owner, repo: event.repo.repo, comment, pr: comment ? undefined : pr, dryRun };
   if (dryRun) {
-    core.info('Would react 👀 to the comment that started the run');
+    core.info(`Would react 👀 to ${where(r)}`);
     return r;
   }
-  const id = await add(r, 'eyes').catch(warn('add 👀'));
+  const id = await add(r, 'eyes').catch(warn(r, 'add 👀'));
   return id === undefined ? undefined : { ...r, id };
 }
 
 /** Swaps the 👀 for 🚀 when the run did its job, or 😕 when it failed or did nothing. If removing 👀 fails, it stays. */
 export async function reactEnd(r: Reaction, done: boolean): Promise<void> {
   const [content, emoji] = done ? (['rocket', '🚀'] as const) : (['confused', '😕'] as const);
-  if (r.dryRun) return core.info(`Would swap 👀 for ${emoji} on the comment that started the run`);
-  const req = { owner: r.owner, repo: r.repo, comment_id: r.comment.id, reaction_id: r.id! };
-  await (r.comment.review ? r.octokit.rest.reactions.deleteForPullRequestComment(req) : r.octokit.rest.reactions.deleteForIssueComment(req)).catch(warn('remove 👀'));
-  await add(r, content).catch(warn(`add ${emoji}`));
+  if (r.dryRun) return core.info(`Would swap 👀 for ${emoji} on ${where(r)}`);
+  const ids = { owner: r.owner, repo: r.repo, reaction_id: r.id! };
+  await (!r.comment
+    ? r.octokit.rest.reactions.deleteForIssue({ ...ids, issue_number: r.pr! })
+    : r.comment.review
+      ? r.octokit.rest.reactions.deleteForPullRequestComment({ ...ids, comment_id: r.comment.id })
+      : r.octokit.rest.reactions.deleteForIssueComment({ ...ids, comment_id: r.comment.id })
+  ).catch(warn(r, 'remove 👀'));
+  await add(r, content).catch(warn(r, `add ${emoji}`));
 }

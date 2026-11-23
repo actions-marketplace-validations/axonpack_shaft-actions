@@ -1,15 +1,14 @@
 import * as core from '@actions/core';
 import { getOctokit } from '@actions/github';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
-import { failedSummary, redact, type State } from '../utils/render.util';
+import { redact } from '../utils/render.util';
 import { reportRun } from './api.service';
 
 /** How the run ended, for closing what it left open on GitHub. */
 export type Ending = { kind: 'finished' } | { kind: 'failed'; error: unknown } | { kind: 'cancelled'; message: string };
 
 /**
- * What this run has open on GitHub: its check runs still in progress, by ID, and the summary comment
- * while it says "Reviewing". Saved to the job's state on every change, so the post step can close them
+ * What this run has open on GitHub: its check runs still in progress, by ID. Saved to the job's state on every change, so the post step can close them
  * when the main step died before it could.
  */
 type Open = {
@@ -20,7 +19,6 @@ type Open = {
   /** When the API opened the run's row, so a cancelled run is reported to it. */
   started?: number;
   checks: Record<string, string>;
-  comment?: { id: number; prior?: State };
   /** `finalize` already ran, in the main step. */
   finalized?: boolean;
 };
@@ -48,12 +46,6 @@ export function trackCheck(id: number, name?: string): void {
   save();
 }
 
-/** The summary comment was written: it says "Reviewing" when `reviewing` is set, until it's written again. */
-export function trackComment(id: number, reviewing: boolean, prior?: State): void {
-  open.comment = reviewing ? { id, prior } : undefined;
-  save();
-}
-
 /** In the post step: what the main step saved. */
 export function resume(): void {
   try {
@@ -66,7 +58,7 @@ export function resume(): void {
 }
 
 /**
- * Closes every check run still in progress and takes the summary comment off "Reviewing": cancelled on
+ * Closes every check run still in progress: cancelled on
  * a cancel, failed on a failure (a check that never got its result mustn't read as passed), and neutral
  * after a normal finish, where a check left open is a bug. A cancel is also reported to the API, unless
  * the main step got this far before. Runs once, whoever calls it first, and never throws.
@@ -76,7 +68,7 @@ export function finalize(e: Ending): Promise<void> {
 }
 
 async function close(e: Ending): Promise<void> {
-  const { token, owner, repo, runUrl, started, comment } = open;
+  const { token, owner, repo, runUrl, started } = open;
   const report = e.kind === 'cancelled' && started !== undefined && !open.finalized;
   open.finalized = true;
   save();
@@ -94,16 +86,12 @@ async function close(e: Ending): Promise<void> {
         : { conclusion: 'neutral' as const, title: 'Finished without a result', summary: 'Axon Shaft finished without a result for this check.' };
   const clean = (s: string) => redact(s, secrets);
   const jobs: Promise<unknown>[] = [];
-  if (token && owner && repo && (comment || Object.keys(open.checks).length)) {
+  if (token && owner && repo && Object.keys(open.checks).length) {
     const gh = getOctokit(token);
     for (const [id, name] of Object.entries(open.checks)) {
       if (e.kind === 'finished') core.warning(`The ${name} check was still in progress when the run finished, so it's closed as neutral.`);
       const output = { title: end.title, summary: clean(end.summary) };
       jobs.push(gh.rest.checks.update({ owner, repo, check_run_id: Number(id), status: 'completed', conclusion: end.conclusion, output }).then(() => trackCheck(Number(id))));
-    }
-    if (comment) {
-      const body = clean(failedSummary(failure, comment.prior));
-      jobs.push(gh.rest.issues.updateComment({ owner, repo, comment_id: comment.id, body }).then(() => trackComment(comment.id, false)));
     }
   }
   if (report) jobs.push(reportRun({ error: { code: 'cancelled', message: clean(failure.message) }, duration_ms: Date.now() - started }));

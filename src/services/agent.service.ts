@@ -7,6 +7,8 @@ import { ShaftFailure } from '../utils/failure.util';
 import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
+import { CANARY, SYSTEM_PROMPT } from '../guardrails/guardrail.const';
+import { scanOutput } from '../guardrails/output.util';
 import { sandboxPrefix } from './sandbox.service';
 import { claudeBinary } from './claude-binary.service';
 
@@ -216,6 +218,8 @@ export type AgentOptions = {
   commands?: string[];
   /** In place of the job's tools: none for a triage, which reads only its prompt. */
   tools?: string[];
+  /** In place of the tools the session may call, keeping the tool list (and so the prompt's start) as it is: the light pass's Read and Grep. */
+  allowed?: string[];
   /** Retry a reply that doesn't match the schema once (the default). A rung of the `auto` ladder moves up instead. */
   retry?: boolean;
 };
@@ -260,6 +264,12 @@ export function bashFailure(command: string, content: unknown): string {
   return line.length > 300 ? `${line.slice(0, 299)}…` : line;
 }
 
+/** The reply's schema with `injection_seen`, the asks the model noticed and ignored, as a warning only. */
+const withInjectionSeen = (schema: Record<string, unknown>) => ({
+  ...schema,
+  properties: { ...(schema.properties as object), injection_seen: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 5 } },
+});
+
 async function once(prompt: string, o: AgentOptions, schema: Record<string, unknown>, controller: AbortController): Promise<SDKResultMessage | undefined> {
   const deep = !!o.subagentModel && !!o.passes?.length;
   const edit = !!o.commands;
@@ -279,14 +289,16 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       tools: o.tools ?? (deep ? [...READ_TOOLS, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS),
       // A task's Bash runs the repo's commands, which no allow rule can list ahead, so no rule allows it:
       // only the guard's own allow lets a call through, and if the guard doesn't answer, dontAsk denies it.
-      allowedTools: o.tools ?? (deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED),
+      allowedTools: o.tools ?? o.allowed ?? (deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS.filter((t) => t !== 'Bash') : ALLOWED),
       disallowedTools: DENIED,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
       // No project or user settings: a PR could otherwise add hooks or MCP servers that run its code.
       settingSources: [],
       persistSession: false,
-      outputFormat: { type: 'json_schema', schema },
+      // Spotlighting and the canary (`SYSTEM_PROMPT`); the reply may list asks it ignored in `injection_seen`.
+      systemPrompt: SYSTEM_PROMPT,
+      outputFormat: { type: 'json_schema', schema: withInjectionSeen(schema) },
       agents: deep ? deepAgents(o.subagentModel!, o.effort as EffortLevel, o.passes!) : undefined,
       abortController: controller,
       env: cliEnv(o.claude, o.env),
@@ -336,7 +348,13 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
         for (const k of Object.keys(t) as (keyof Tokens)[]) spent.tokens[k] += t[k];
       }
       if (result?.subtype === 'success') {
-        const reply = format.parse(result.structured_output);
+        const out = scanOutput(result.structured_output as Record<string, unknown> | undefined, CANARY);
+        if (out.leak) throw new ShaftFailure('guardrail_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
+        if (out.hits.length) core.warning(`Guardrail: took ${out.hits.join(', ')} out of the ${format.name} before posting.`);
+        const { injection_seen: seen, ...rest } = out.reply ?? {};
+        // Only a count: the job log is public, and the model can be steered into accusing anyone.
+        if (Array.isArray(seen) && seen.length) core.warning(`The model saw ${seen.length} instruction${seen.length === 1 ? '' : 's'} aimed at it in the pull request's text and ignored ${seen.length === 1 ? 'it' : 'them'}.`);
+        const reply = format.parse(rest);
         if (reply) return { reply, ...spent };
       } else if (result && result.subtype !== 'error_max_structured_output_retries') {
         throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join('; ')}`);

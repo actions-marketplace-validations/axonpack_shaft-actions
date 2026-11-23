@@ -69,6 +69,19 @@ test('max turns by size when the dashboard sets none: under 100 lines 12, under 
   expect(pick({ mode: 'task', files: [file('src/a.ts')] }).maxTurns).toBe(30);
 });
 
+test('a small diff gets 2 more turns for each main-pass checklist past the first, up to 30', () => {
+  const turns = (lines: number, checklists: number, extra: object = {}) => pick({ mode: 'review', files: [file('src/a.ts', lines)], checklists, ...extra }).maxTurns;
+  expect(turns(60, 1)).toBe(12);
+  expect(turns(60, 0)).toBe(12);
+  expect(turns(60, 5)).toBe(20);
+  expect(turns(300, 4)).toBe(26);
+  expect(turns(300, 9)).toBe(30);
+  expect(turns(800, 5)).toBe(30);
+  expect(turns(60, 5, { depth: 'deep' })).toBe(30);
+  expect(turns(60, 5, { maxTurns: 8 })).toBe(8);
+  expect(pick({ mode: 'review', files: [file('src/a.ts', 60)], checklists: 3 }).reason).toBe('60 lines, up to 16 turns');
+});
+
 test("the dashboard's max turns always wins and leaves the reason alone", () => {
   expect(pick({ mode: 'review', files: [file('src/a.ts', 60)], maxTurns: 50 })).toMatchObject({ maxTurns: 50, reason: '60 lines' });
   expect(pick({ mode: 'review', files: [file('src/a.ts', 5000)], maxTurns: 5 }).maxTurns).toBe(5);

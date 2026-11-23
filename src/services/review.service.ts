@@ -1,4 +1,7 @@
 import * as core from '@actions/core';
+import { datamark } from '../guardrails/input.util';
+import { guardrailEvents, ruleName } from '../guardrails/classify.service';
+import { type Flagged, flaggedLines } from '../guardrails/output.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -9,6 +12,8 @@ import type { ClaudeToken, GrantJob, MissingPermission, RunOutput } from './api.
 import { type AgentResult, REVIEW_FORMAT, reviewSchema, runAgent, type Tokens } from './agent.service';
 import { openAdvisories } from './advisory.service';
 import { checkoutFiles } from './checkout.service';
+import { type LightResult, lightPass } from './light-pass.service';
+import { LIGHT_PASS, MAIN_PASS_ONLY } from '../consts/ladder.const';
 import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
 import { baseFile, type Context, collectContext } from './context.service';
 import {
@@ -24,14 +29,16 @@ import {
   REVIEW_CHECK,
   type ReviewStep,
 } from './check-runs.service';
-import { trackComment } from './finalize.service';
 import { climb, modelLabel, NotWorked, partialReview, type Tried, withSpent } from './ladder.service';
 import { step } from './step.service';
 import { reviewThreads, threadDismissals } from './dismiss.service';
 import { hasWriteAccess } from './route.service';
-import { type Ignore, ignored, verdictAfter } from '../utils/dismiss.util';
+import { dedupe } from '../utils/dedupe.util';
+import { changedSince, configHash, diffHashes, nothingChangedNote } from '../utils/incremental.util';
+import { type Ignore, ignored, verdictAfter, withDismissed } from '../utils/dismiss.util';
 import {
   type CheckItem,
+  type Finding,
   checkStates,
   failedSummary,
   idleSummary,
@@ -43,7 +50,7 @@ import {
   renderSummary,
   type Review,
   type State,
-  startSummary,
+  STEPS,
   unposted,
 } from '../utils/render.util';
 import { diffText, fillSlots, trustedComments } from '../utils/prompt.util';
@@ -86,6 +93,8 @@ export type ReviewOptions = {
   ignore?: Ignore[];
   /** Why the API left the repo's config file out, for a warning in the summary. */
   repoConfig?: { path: string; problems: string[] };
+  /** The users the API says have active strikes, for the summary's guardrail lines. */
+  flagged?: Flagged[];
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
   /** The follow-up commands the project keeps on (the API's `settings.commands`), for the summary to list. */
@@ -129,6 +138,10 @@ export function chosenModels(used: string[], choice: Choice, deep: boolean): { m
   return { main, fellBack: !picked && fallbacks.length > 0, subagents };
 }
 
+/** The light pass's model as the run reported it, or its alias when it reported none. */
+const lightModel = (l: LightResult) => l.spent.models.find((m) => m.includes(LIGHT_PASS.model)) ?? LIGHT_PASS.model;
+const subtract = (a: Tokens, b: Tokens): Tokens => ({ input: a.input - b.input, output: a.output - b.output, cache_read: a.cache_read - b.cache_read, cache_write: a.cache_write - b.cache_write });
+
 /** The guides as prompt text: each cut at `GUIDE_CAP.file`, and all of them at `GUIDE_CAP.total`. */
 export function guidesText(guides: Context['guides']): string {
   let left = GUIDE_CAP.total;
@@ -164,12 +177,12 @@ export function buildPrompt(ctx: Context, prior: State | undefined, o: { templat
     skipped: o.skipped,
     guides: guidesText(ctx.guides),
     previous,
-    title: pr.title,
+    title: datamark(pr.title),
     author: pr.author,
-    body: pr.body,
+    body: datamark(pr.body),
     commits: ctx.commits.map((m) => `- ${m}`).join('\n'),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments]),
-    diff: diffText(ctx.files, o.focus),
+    diff: diffText(ctx.files, o.focus, ctx.generated),
   });
 }
 
@@ -252,9 +265,16 @@ async function postReview(
   // Only the checklists whose paths match a changed file run; the others get a skipped check run.
   const planned = Array.isArray(o.checklists) && typeof o.prompt.open === 'string' ? planChecklists(o.checklists, files, Object.keys(SCRIPTS)) : undefined;
   const fired = planned?.filter((c) => !c.skip);
+  // What the next push builds on, and the files changed since the review this one builds on (none: nothing changed).
+  const memo = { files: diffHashes(files), config: configHash([o.prompt, o.checklists, o.nits, o.ignore, o.gates, o.focus, o.skip, o.depth, o.model, o.effort, o.checks]) };
+  const changed = changedSince(prior, memo.files, memo.config);
+  // On a push, only the checklists whose paths the changed files touch run again; the rest keep the last review's findings.
+  const rerun = changed?.length && planned ? planChecklists(o.checklists!, changed.map((filename) => ({ filename })), Object.keys(SCRIPTS)).filter((c) => !c.skip).map((c) => c.key) : undefined;
+  const carried = rerun?.length ? (fired?.filter((c) => !rerun.includes(c.key)).map((c) => c.key) ?? []) : [];
+  const running = fired?.filter((c) => !carried.includes(c.key));
   // Script checklists' findings are their result: they never reach the model.
-  const scripted = fired?.filter((c) => c.mode === 'script') ?? [];
-  const modelled = fired?.filter((c) => c.mode !== 'script');
+  const scripted = running?.filter((c) => c.mode === 'script') ?? [];
+  const modelled = running?.filter((c) => c.mode !== 'script');
   // What the footer says about the run, whichever way it goes.
   const facts = {
     sha,
@@ -266,7 +286,7 @@ async function postReview(
     skipped,
     missingPermissions: o.missingPermissions,
   };
-  const pickInput = { mode: 'review' as const, depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns };
+  const pickInput = { mode: 'review' as const, depth: o.depth, files, focus: o.focus, model: o.model, effort: o.effort, maxTurns: o.maxTurns, checklists: modelled?.length };
   let rungs = ladder(pickInput);
   let choice = rungs[0]!;
   let tried: Tried[] = [];
@@ -274,15 +294,13 @@ async function postReview(
   core.info(`Reviewing ${sha.slice(0, 7)} with ${choice.model}, effort ${choice.effort} (${choice.reason})`);
 
   let summary = ctx.summary && { id: ctx.summary.id, html_url: ctx.summary.html_url };
-  const writeSummary = async (body: string, reviewing = false) => {
+  const writeSummary = async (body: string) => {
     if (o.dryRun) return;
     const req = { owner: ctx.owner, repo: ctx.repo, body: clean(body) };
     const { data } = summary
       ? await octokit.rest.issues.updateComment({ ...req, comment_id: summary.id })
       : await octokit.rest.issues.createComment({ ...req, issue_number: ctx.pr.number });
     summary = { id: data.id, html_url: data.html_url };
-    // A run that ends while it says "Reviewing" swaps it for its failure or cancelled card.
-    trackComment(data.id, reviewing, prior);
   };
   const postChecks = async (states: CheckItem[], placed: Placed[]) => {
     if (!o.dryRun) return canCheck ? postCategoryChecks(octokit, ctx.owner, ctx.repo, sha, states, placed, clean) : undefined;
@@ -324,6 +342,49 @@ async function postReview(
     };
   }
 
+  // The same diff as the last review, after a rerun or a rebase: its result carries over with no model call.
+  if (changed?.length === 0 && ctx.summary && (!o.gates?.length || prior!.gates)) {
+    const kept: State = { ...prior!, sha, ...memo };
+    const placed = kept.findings.map((f): Placed => ({ ...f, step: f.step ?? '', body: '', inline: true }));
+    const headline = 'Nothing changed since the last review, so no model was called.';
+    const review: Review = { verdict: verdictAfter(kept.verdict ?? 'looks-good', placed) as Review['verdict'], type: '', confidence: 0, headline, claim: '', impact: '', scope: '', findings: [], resolved: [], checked: kept.checked ?? [], not_checked: '' };
+    const body = withDismissed(nothingChangedNote(ctx.summary.body, sha), kept);
+    if (o.dryRun) core.info(`--- summary comment\n${clean(body)}`);
+    else await writeSummary(body);
+    const gates = o.gates?.length ? gateResults(o.gates, kept.gates) : undefined;
+    if (gates && o.dryRun) core.info(`Would post the ${GATES_CHECK} check: ${gatesConclusion(gates)}`);
+    else if (gates && canCheck) await postGatesCheck(octokit, ctx.owner, ctx.repo, sha, gates, clean);
+    const states = checkStates(review, placed, o.checks, planned);
+    await postChecks(states, placed);
+    const url = o.dryRun ? '' : (summary?.html_url ?? '');
+    const count = (s: Placed['severity']) => placed.filter((p) => p.severity === s).length;
+    return {
+      verdict: review.verdict,
+      findings: placed.filter((p) => p.severity !== 'nit').length,
+      summaryUrl: url,
+      model: 'none',
+      effort: 'none',
+      tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+      costUsd: 0,
+      bySeverity: { blocking: count('blocking'), should_fix: count('should-fix'), nit: count('nit') },
+      output: {
+        headline,
+        claim: '',
+        impact: '',
+        scope: '',
+        not_checked: '',
+        type: '',
+        confidence: 0,
+        comment_url: url,
+        checks: states.slice(0, 40),
+        passes: [],
+        findings: placed.slice(0, 200).map((p) => ({ severity: p.severity, check: p.step, file: p.file, line: Math.max(1, p.line), title: p.title, body: '', inline: true })),
+        fixed: 0,
+      },
+    };
+  }
+  if (carried.length) core.info(`Only ${rerun!.join(', ')} run again; ${carried.join(', ')} keep the last review's findings`);
+
   // What the scripts read. Each base-branch file is fetched once, however many scripts ask for it.
   const reads = new Map<string, Promise<string | undefined>>();
   const input: ScriptInput = {
@@ -339,14 +400,22 @@ async function postReview(
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
 
   let result: AgentResult<Review>;
+  // The checklists marked `light` run first on Haiku, when the main pass has work of its own; if that pass doesn't work, the main pass runs them.
+  const lightRun = modelled && o.depth !== 'deep' ? modelled.filter((c) => c.model === 'light' && !MAIN_PASS_ONLY.includes(c.key)) : [];
+  let light: LightResult | undefined;
+  let steps = modelled;
+  if (useModel && lightRun.length && (lightRun.length < modelled!.length || o.gates?.length)) {
+    await progress('Review', 'Running the light checklists with Haiku');
+    light = await step('Light pass', () => lightPass(lightRun, { ...ctx, files }, prior, input, { ...o, skipped }));
+    if (light.out) steps = modelled!.filter((c) => !lightRun.includes(c));
+  }
+  const lightKeys = light?.out ? lightRun.map((c) => c.key) : [];
   if (useModel) {
     // With checklists the run's data comes first and the steps last, so the part before them reads the same whatever runs.
-    const pack = buildPrompt({ ...ctx, files }, prior, { template: modelled ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
-    const prompt = modelled ? `${pack}\n${stepsBlock(o.prompt.before ?? [], modelled, o.prompt.after ?? [])}${await factsBlock(modelled, input)}` : pack;
+    const pack = buildPrompt({ ...ctx, files }, prior && { ...prior, findings: prior.findings.filter((f) => !carried.includes(f.step ?? '') && !lightKeys.includes(f.step ?? '')) }, { template: steps ? o.prompt.open!.split('{{steps}}').join(STEPS_AT_END) : o.prompt.template, focus: o.focus, skipped });
+    const prompt = steps ? `${pack}\n${stepsBlock(o.prompt.before ?? [], steps, o.prompt.after ?? [])}${await factsBlock(steps, input)}` : pack;
 
-    // Only an edit: a new comment emails everyone on the PR, so the first review's comment waits for the result.
-    if (summary) await writeSummary(startSummary(sha, prior), true);
-    rungs = ladder({ ...pickInput, promptChars: prompt.length });
+    rungs = ladder({ ...pickInput, checklists: steps?.length, promptChars: prompt.length });
     try {
       const climbed = await step('Review', () =>
         climb(rungs, async (c, last) => {
@@ -369,10 +438,10 @@ async function postReview(
               // On a lower rung a bad reply moves up a model instead of asking the same one again.
               retry: last,
             },
-            modelled ? { ...REVIEW_FORMAT, schema: reviewSchema(modelled.map((c) => c.key)) } : REVIEW_FORMAT,
+            steps ? { ...REVIEW_FORMAT, schema: reviewSchema(steps.map((c) => c.key)) } : REVIEW_FORMAT,
           );
           // A partial review below the last rung moves up one, counting what it used; the last rung's stands.
-          const partial = last ? undefined : partialReview(out.reply, modelled?.map((c) => c.key) ?? []);
+          const partial = last ? undefined : partialReview(out.reply, steps?.map((c) => c.key) ?? []);
           if (partial) throw Object.assign(new NotWorked(partial), { spent: out });
           return out;
         }),
@@ -383,11 +452,18 @@ async function postReview(
       // runAgent's failures are all review_* ones; the PR shows the same card as the job summary.
       if (e instanceof ShaftFailure) {
         e.url ??= o.runUrl;
+        if (light && e.spent) e.spent = { ...withSpent(e.spent, light.spent), models: e.spent.models };
         await writeSummary(failedSummary(e, prior));
       }
       throw e;
     }
     core.info(`Models used ${result.models.join(', ')}, about $${result.costUsd.toFixed(2)}`);
+    if (light) {
+      // The light pass's findings, checklists and resolved fingerprints join the main pass's; its tokens always count.
+      const l = light.out?.reply;
+      const main = withSpent(result, light.spent);
+      result = l ? { ...main, reply: { ...main.reply, findings: [...main.reply.findings, ...l.findings], checked: [...main.reply.checked, ...l.checked], resolved: [...main.reply.resolved, ...l.resolved] } } : main;
+    }
   } else {
     const headline = `Only script checklists ran (${scripted.map((c) => c.name).join(', ')}), so no model was called.`;
     const reply: Review = { verdict: 'looks-good', type: '', confidence: 100, headline, claim: '', impact: '', scope: '', findings: [], resolved: [], checked: [], not_checked: '' };
@@ -396,22 +472,29 @@ async function postReview(
   // Only the project's own gates, each with the review's result; any other gates in the reply are dropped.
   const gates = o.gates?.length ? gateResults(o.gates, result.reply.gates) : undefined;
   const { reply } = result;
-  // A script's blocking or should-fix finding raises the verdict the model gave.
-  const verdict = scriptFindings.some((f) => f.severity === 'blocking')
+  // Two checklists on the same lines leave one finding (dedupe.util). A script's or the light pass's blocking or should-fix finding raises the verdict the main pass gave.
+  const raising = [...scriptFindings, ...(light?.out?.reply.findings ?? [])];
+  const verdict = raising.some((f) => f.severity === 'blocking')
     ? 'blocking'
-    : scriptFindings.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
+    : raising.some((f) => f.severity === 'should-fix') && reply.verdict === 'looks-good'
       ? 'needs-changes'
       : reply.verdict;
-  const review: Review = { ...reply, verdict, gates, findings: [...reply.findings, ...scriptFindings], checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key)] };
+  const review: Review = { ...reply, verdict, gates, findings: dedupe([...reply.findings, ...scriptFindings], planned?.map((c) => c.key) ?? [...STEPS]), checked: [...reply.checked, ...scripted.filter((c) => !c.skip).map((c) => c.key), ...carried.filter((k) => prior!.checked!.includes(k))] };
   await progress('Post the review', 'Posting the review');
   core.startGroup('Post the review');
 
   // A dismissed finding (by fingerprint, or a line or two away) isn't posted, counted or checked again.
   // Nor is one the repo config file's `ignore` matches, which the summary only counts.
   const dismissed = prior?.dismissed ?? [];
-  const all = place(review.findings, files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
+  // A carried finding goes through `place` again, so it keeps its fingerprint and only its first inline comment.
+  const kept = (prior?.findings ?? []).filter((f) => carried.includes(f.step ?? '')).map((f): Finding => ({ ...f, step: f.step!, body: 'Found by an earlier review. Its checklist had nothing new to check on this push.' }));
+  const all = place([...review.findings, ...kept], files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
   const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length) review.verdict = verdictAfter(review.verdict, placed) as Review['verdict'];
+  // A carried finding raises the verdict as a script's does.
+  const old = placed.filter((p) => carried.includes(p.step));
+  if (old.some((p) => p.severity === 'blocking')) review.verdict = 'blocking';
+  else if (old.some((p) => p.severity === 'should-fix') && review.verdict === 'looks-good') review.verdict = 'needs-changes';
   // Before anything is posted, so a withheld finding's details never reach the PR.
   const advisories = o.advisories ? await openAdvisories(placed, { pull: ctx.pr.number, sha: ctx.pr.headSha, dryRun: o.dryRun, clean }) : undefined;
   const fresh = unposted(placed, ctx.reviewComments, o.bot);
@@ -451,6 +534,7 @@ async function postReview(
     prior,
     {
     ...facts,
+    memo,
     advisories,
     checks: o.checks,
     checklists: planned,
@@ -458,6 +542,7 @@ async function postReview(
     workflowEditUrl: o.workflowEditUrl,
     ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     repoConfig: o.repoConfig,
+    flagged: flaggedLines(o.flagged ?? [], guardrailEvents(), ruleName),
     // `/resolve` only when GitHub says the pull request has conflicts.
     commands: o.commands?.filter((c) => c !== 'resolve' || ctx.pr.conflicts),
     ...(models && {
@@ -467,6 +552,7 @@ async function postReview(
       tried,
       maxTurns: choice.maxTurns,
       tokens: result.tokens,
+      light: light && { model: lightModel(light), maxTurns: LIGHT_PASS.maxTurns, tokens: light.spent.tokens, checklists: lightRun.map((c) => c.name), failed: !light.out },
       // On a subscription the SDK's price is only an estimate, so the footer weighs the tokens instead.
       costUsd: o.claude.kind === 'api_key' ? result.costUsd : undefined,
     }),
@@ -503,7 +589,14 @@ async function postReview(
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
     checks: states.slice(0, 40),
-    ...(modelled && { passes: models ? [{ name: 'main', model: models.main, tokens: result.tokens, checklists: modelled.slice(0, 40).map((c) => c.key) }] : [] }),
+    ...(modelled && {
+      passes: models
+        ? [
+            { name: 'main', model: models.main, tokens: light ? subtract(result.tokens, light.spent.tokens) : result.tokens, checklists: steps!.slice(0, 40).map((c) => c.key), max_turns: choice.maxTurns },
+            ...(light ? [{ name: 'light', model: lightModel(light), tokens: light.spent.tokens, checklists: lightKeys.slice(0, 40), max_turns: LIGHT_PASS.maxTurns }] : []),
+          ]
+        : [],
+    }),
     findings: placed.slice(0, 200).map((p) => ({
       severity: p.severity,
       check: p.step,

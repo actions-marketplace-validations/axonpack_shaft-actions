@@ -42,7 +42,6 @@ test('after a normal finish, a check a code path forgot is closed as neutral wit
 test('nothing left open means no call to GitHub, and it runs only once', async () => {
   const t = await import('../finalize.service');
   t.trackRun(run);
-  t.trackComment(8, false);
   await t.finalize({ kind: 'finished' });
   t.trackCheck(5, 'Axon Shaft / review');
   await t.finalize({ kind: 'failed', error: new Error('late') });
@@ -53,10 +52,9 @@ test('a refused cleanup only warns, and finalize never throws', async () => {
   const t = await import('../finalize.service');
   t.trackRun(run);
   t.trackCheck(5, 'Axon Shaft / review');
-  t.trackComment(8, true);
   refuse = true;
   await expect(t.finalize({ kind: 'failed', error: new Error('boom') })).resolves.toBeUndefined();
-  expect(warnings).toEqual(["Couldn't close what the run left open: Bad credentials", "Couldn't close what the run left open: Bad credentials"]);
+  expect(warnings).toEqual(["Couldn't close what the run left open: Bad credentials"]);
 });
 
 test('a failure message is redacted before it reaches the check run', async () => {

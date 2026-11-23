@@ -10,7 +10,7 @@ vi.doMock('@actions/core', () => ({
 }));
 const calls: Record<string, unknown>[] = [];
 const call = async (p: Record<string, unknown>) => calls.push(p);
-vi.doMock('@actions/github', () => ({ getOctokit: () => ({ rest: { checks: { update: call }, issues: { updateComment: call } } }) }));
+vi.doMock('@actions/github', () => ({ getOctokit: () => ({ rest: { checks: { update: call } } }) }));
 let reported: unknown;
 
 beforeEach(() => {
@@ -30,7 +30,6 @@ async function mainStep() {
   const t = await import('../services/finalize.service');
   t.trackRun({ token: 'ghs_shaft', owner: 'acme', repo: 'widgets', runUrl: 'https://github.com/acme/widgets/actions/runs/9', started: Date.now(), secrets: [] });
   t.trackCheck(5, 'Axon Shaft / review');
-  t.trackComment(8, true);
   return t;
 }
 
@@ -45,14 +44,12 @@ test("after the main step was killed, the post step closes what it left open as 
   await vi.waitFor(() => expect(reported).toBeDefined());
   const message = 'The run stopped before the review finished: the workflow was cancelled, timed out or crashed.';
   expect(calls[0]).toMatchObject({ check_run_id: 5, status: 'completed', conclusion: 'cancelled', output: { title: 'Cancelled', summary: message } });
-  expect(calls[1]).toMatchObject({ comment_id: 8, body: expect.stringContaining('errors/cancelled.svg') });
   expect(reported).toEqual({ error: { code: 'cancelled', message }, duration_ms: expect.any(Number) });
 });
 
 test('after a normal finish the post step does nothing', async () => {
   const t = await mainStep();
   t.trackCheck(5);
-  t.trackComment(8, false);
   await t.finalize({ kind: 'finished' });
   await postStep();
   await new Promise((r) => setTimeout(r, 20));
@@ -62,7 +59,7 @@ test('after a normal finish the post step does nothing', async () => {
 
 test('after the main step closed things, the post step only retries what failed and never reports twice', async () => {
   const t = await mainStep();
-  t.trackComment(8, false);
+  t.trackCheck(5);
   await t.finalize({ kind: 'cancelled', message: 'The workflow was cancelled before the review finished.' });
   calls.length = 0;
   reported = undefined;
