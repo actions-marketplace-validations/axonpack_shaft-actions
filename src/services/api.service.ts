@@ -40,6 +40,8 @@ export type Checklist = {
   exclude?: string[];
   prestep: string | null;
   prompt: string;
+  /** Its script's settings, as plain data (a size limit, globs). Older APIs send none, and each script keeps its own defaults. */
+  data?: Record<string, unknown>;
 };
 
 /**

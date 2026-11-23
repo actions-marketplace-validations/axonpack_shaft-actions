@@ -54,6 +54,15 @@ export function checkoutFiles(cwd: string): Checkout {
         return undefined;
       }
     },
+    size: (path) => {
+      try {
+        const full = join(cwd, path);
+        const stat = lstatSync(full);
+        return stat.isFile() && realpathSync(full).startsWith(root) ? stat.size : undefined;
+      } catch {
+        return undefined;
+      }
+    },
   };
 }
 
