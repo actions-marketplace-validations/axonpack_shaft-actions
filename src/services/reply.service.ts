@@ -7,7 +7,7 @@ import { footer, prose, redact } from '../utils/render.util';
 import { type AgentResult, type ReplyFormat, runAgent, type Tokens } from './agent.service';
 import { type Context, collectContext } from './context.service';
 import { chosenModels, FALLBACK, type ReviewOptions } from './review.service';
-import type { Ask } from './route.service';
+import type { Ask, FollowUp } from './route.service';
 import { climb, modelLabel, NO_SPEND, type Tried, withSpent } from './ladder.service';
 import { triage, triagePrompt } from './triage.service';
 import { step } from './step.service';
@@ -38,8 +38,8 @@ export type ReplyOutcome = {
   effort: string;
   tokens: Tokens;
   costUsd: number;
-  /** For the run's page on the dashboard: the answer as posted, and the comment it's in. */
-  output: { answer: string; comment_url: string };
+  /** For the run's page on the dashboard: the answer as posted, the comment it's in, and for a task the follow-up command and the commit it pushed. */
+  output: { answer: string; comment_url: string; command?: FollowUp; commit?: string };
 };
 
 /**

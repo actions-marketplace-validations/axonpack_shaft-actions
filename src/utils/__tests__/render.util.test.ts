@@ -227,6 +227,14 @@ test('a looks-good review with no findings: a TIP card with one chip, and no tab
   expect(body).not.toContain('fixed</kbd>');
 });
 
+test('the summary lists the follow-up commands it gets, and none when it gets none', () => {
+  const looksGood = { ...review, verdict: 'looks-good' as const, findings: [], resolved: [] };
+  expect(renderSummary(looksGood, [], undefined, { ...info, commands: ['tests', 'resolve'] })).toContain(
+    '**Follow-up commands:** comment `/tests` or `/resolve` and Axon Shaft pushes one commit for it.',
+  );
+  expect(renderSummary(looksGood, [], undefined, info)).not.toContain('Follow-up commands');
+});
+
 test('a run on an older v1 release gets a NOTE after the card, with the newest release and where to update it', async () => {
   const { version } = await import('../../../package.json');
   const latestAction = { version: '9.9.9', url: 'https://github.com/axonpack/shaft-actions/releases/tag/v9.9.9' };

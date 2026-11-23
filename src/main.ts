@@ -55,7 +55,12 @@ async function run(): Promise<void> {
       r.mode === 'review'
         ? { job: 'review', event: r.event, fork: r.fork, pull_request }
         : // A comment on a line of the diff: the API replies on its thread itself when it refuses the run.
-          { job: r.mode === 'dismiss' && r.undo ? 'undismiss' : r.mode, pull_request, ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }) },
+          {
+            job: r.mode === 'dismiss' && r.undo ? 'undismiss' : r.mode,
+            ...(r.mode === 'task' && r.follow && { command: r.follow }),
+            pull_request,
+            ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }),
+          },
     ),
   );
   // `/dismiss` and `/undismiss` run no model: the API sends only a token to change the finding's state with.
@@ -98,7 +103,7 @@ async function run(): Promise<void> {
         ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}`
         : r.mode === 'reply'
           ? "the question wasn't answered. Only people with write access can ask with /ask"
-          : 'nothing was changed. Only people with write access can start a change with /fix or /axonshaft';
+          : `nothing was changed. Only people with write access can start a change with ${r.mode === 'task' && r.follow ? `/${r.follow}` : '/fix or /axonshaft'}`;
     return core.notice(noticeText(`${r.actor} has no write access, so ${what}.`, 'no_write_access'));
   }
   reaction = await reactStart(octokit, context, dryRun);
@@ -153,8 +158,10 @@ async function run(): Promise<void> {
       ask: r.ask,
       asker: r.actor,
       bare: r.bare,
+      follow: r.follow,
       template: job.prompt.template,
       pushMode: String(settings.pushMode),
+      githubToken: grant.github_token,
       repoUrl: `${context.serverUrl}/${owner}/${repo}`,
     });
     if (!('refused' in out)) {
@@ -182,6 +189,7 @@ async function run(): Promise<void> {
     advisories: settings.advisories === true,
     ignore: ignoresOf(settings.ignore),
     repoConfig: repoConfigOf(settings.repoConfig),
+    commands: globs(settings.commands),
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
   });
   core.setOutput('verdict', out.verdict);

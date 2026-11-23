@@ -19,6 +19,20 @@ export function checkoutHead(cwd: string, number: number, token: string): void {
   git('checkout', '--quiet', '--detach', 'FETCH_HEAD');
 }
 
+/**
+ * For `/resolve`: fetch the pull request's base branch, the whole history when the checkout is shallow
+ * so git can find where the two branches split, and return its commit. Nothing from the PR runs, and
+ * the token goes on the command line only, as in `checkoutHead`.
+ */
+export function fetchBase(cwd: string, branch: string, token: string): string {
+  const git = (...args: string[]) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  const basic = Buffer.from(`x-access-token:${token}`).toString('base64');
+  core.setSecret(basic);
+  const deep = git('rev-parse', '--is-shallow-repository') === 'true' ? ['--unshallow'] : [];
+  git('-c', `http.extraheader=AUTHORIZATION: basic ${basic}`, 'fetch', '--no-tags', ...deep, 'origin', `refs/heads/${branch}`);
+  return git('rev-parse', 'FETCH_HEAD');
+}
+
 /** The biggest file a script reads, unless it asks for more (a lockfile can be several MB). */
 const READ_MAX = 1_000_000;
 

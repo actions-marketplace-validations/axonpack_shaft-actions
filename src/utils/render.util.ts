@@ -197,6 +197,8 @@ export function prose(text: string): string {
   return s;
 }
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** "a, b or c". */
+const either = (words: string[]) => (words.length > 1 ? `${words.slice(0, -1).join(', ')} or ${words.at(-1)}` : (words[0] ?? ''));
 
 export function inlineBody(f: Placed): string {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
@@ -261,6 +263,8 @@ export type Footer = {
   repoConfig?: { path: string; problems: string[] };
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];
+  /** The follow-up commands someone can comment on this pull request now, without the slash. */
+  commands?: string[];
 };
 
 /**
@@ -518,6 +522,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
       ),
     );
   }
+  if (f.commands?.length) out.push('', `**Follow-up commands:** comment ${either(f.commands.map((c) => `\`/${c}\``))} and Axon Shaft pushes one commit for it.`);
   out.push('', footer(f));
   const state: State = {
     sha: f.sha,

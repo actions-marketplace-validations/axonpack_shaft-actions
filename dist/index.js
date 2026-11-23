@@ -57949,6 +57949,7 @@ function prose(text) {
   return s;
 }
 var plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+var either = (words) => words.length > 1 ? `${words.slice(0, -1).join(", ")} or ${words.at(-1)}` : words[0] ?? "";
 function inlineBody(f) {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
   if (f.suggestion)
@@ -58173,6 +58174,8 @@ function renderSummary(raw, placed, prior, f, dismissed = []) {
 
 `)));
   }
+  if (f.commands?.length)
+    out.push("", `**Follow-up commands:** comment ${either(f.commands.map((c) => `\`/${c}\``))} and Axon Shaft pushes one commit for it.`);
   out.push("", footer(f));
   const state = {
     sha: f.sha,
@@ -58758,6 +58761,14 @@ function checkoutHead(cwd, number, token) {
   git("-c", `http.extraheader=AUTHORIZATION: basic ${basic}`, "fetch", "--no-tags", ...depth, "origin", `refs/pull/${number}/head`);
   git("checkout", "--quiet", "--detach", "FETCH_HEAD");
 }
+function fetchBase(cwd, branch, token) {
+  const git = (...args) => execFileSync3("git", args, { cwd, encoding: "utf8" }).trim();
+  const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+  setSecret(basic);
+  const deep = git("rev-parse", "--is-shallow-repository") === "true" ? ["--unshallow"] : [];
+  git("-c", `http.extraheader=AUTHORIZATION: basic ${basic}`, "fetch", "--no-tags", ...deep, "origin", `refs/heads/${branch}`);
+  return git("rev-parse", "FETCH_HEAD");
+}
 var READ_MAX = 1e6;
 function checkoutFiles(cwd) {
   const root = realpathSync3(cwd) + sep4;
@@ -58967,11 +58978,12 @@ var GUIDE_CAP = { file: 8000, total: 30000 };
 // src/services/route.service.ts
 var REVIEW_EVENTS = { opened: "opened", reopened: "opened", synchronize: "push", ready_for_review: "ready" };
 var REVIEW_COMMAND = "/review";
+var FOLLOW_UPS = ["tests", "simplify", "docstrings", "resolve"];
 function commandIn(text) {
   const lines = text.replace(/```[\s\S]*?(```|$)/g, "").replace(/`[^`\n]*`/g, "").split(`
 `);
   for (const line of lines) {
-    const m = /^\s*\/(review|fix|ask|help|dismiss|undismiss|axonshaft)(?![\w-])/.exec(line);
+    const m = /^\s*\/(review|fix|ask|help|dismiss|undismiss|tests|simplify|docstrings|resolve|axonshaft)(?![\w-])/.exec(line);
     if (m && !line.trimStart().startsWith(">"))
       return m[1] === "axonshaft" ? "prompt" : m[1];
   }
@@ -59018,8 +59030,9 @@ function route(eventName, payload) {
   if (command === "ask")
     return { mode: "reply", number, actor, ask };
   if (!onPr)
-    return { mode: "skip", reason: `/${command === "fix" ? "fix" : "axonshaft"} works on a pull request, not an issue.`, code: "not_a_pull_request" };
-  return { mode: "task", number, actor, ask, bare: command === "fix" && !text.replace("/fix", "").trim() };
+    return { mode: "skip", reason: `/${command === "prompt" ? "axonshaft" : command} works on a pull request, not an issue.`, code: "not_a_pull_request" };
+  const follow = FOLLOW_UPS.includes(command) ? command : undefined;
+  return { mode: "task", number, actor, ask, bare: command === "fix" && !text.replace("/fix", "").trim(), ...follow && { follow } };
 }
 var labelsOf = (item) => (item.labels ?? []).map((l) => l.name);
 function pullRequestOf(payload) {
@@ -59116,7 +59129,8 @@ async function collectContext(octokit, owner, repo, number, bot) {
       base: pr.base.ref,
       head: pr.head.ref,
       fork: pr.head.repo?.full_name !== pr.base.repo.full_name,
-      defaultBranch: pr.base.repo.default_branch
+      defaultBranch: pr.base.repo.default_branch,
+      conflicts: pr.mergeable === false
     },
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),
@@ -61242,6 +61256,7 @@ ${c.body}`);
     workflowEditUrl: o.workflowEditUrl,
     ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     repoConfig: o.repoConfig,
+    commands: o.commands?.filter((c) => c !== "resolve" || ctx.pr.conflicts),
     ...models && {
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
       effort: choice.effort,
@@ -61566,6 +61581,10 @@ async function reactEnd(r, done) {
   await add(r, content).catch(warn(`add ${emoji}`));
 }
 
+// src/services/task.service.ts
+import { lstatSync as lstatSync3, readFileSync as readFileSync8 } from "node:fs";
+import { join as join13 } from "node:path";
+
 // src/utils/push.util.ts
 import { basename as basename6, dirname as dirname10 } from "node:path";
 
@@ -61878,6 +61897,17 @@ function resetTo(cwd, base) {
   git(cwd, ["reset", "-q", "--hard", base]);
   git(cwd, ["clean", "-q", "-f", "-d"]);
 }
+function mergeInto(cwd, theirs) {
+  try {
+    git(cwd, ["merge-base", "--is-ancestor", theirs, "HEAD"]);
+    return { upToDate: true, conflicts: [] };
+  } catch {}
+  try {
+    git(cwd, ["-c", "user.name=axonshaft", "-c", "user.email=axonshaft@users.noreply.github.com", "merge", "--no-commit", "--no-ff", "--no-edit", theirs]);
+  } catch {}
+  const conflicts = git(cwd, ["status", "--porcelain", "-z", "--no-renames"]).split("\x00").filter((l) => /^(DD|AU|UD|UA|DU|AA|UU) /.test(l)).map((l) => ({ code: l.slice(0, 2), path: l.slice(3) }));
+  return { upToDate: false, conflicts };
+}
 async function pushChanges(token, p) {
   const octokit = getOctokit(token);
   const { owner, repo } = p;
@@ -61889,7 +61919,7 @@ async function pushChanges(token, p) {
       tree.push({ path: c.path, mode: c.mode ?? "100644", type: "blob", sha });
     }
     const { data: made } = await octokit.rest.git.createTree({ owner, repo, base_tree: base.tree.sha, tree });
-    const { data: commit } = await octokit.rest.git.createCommit({ owner, repo, message: p.message, tree: made.sha, parents: [p.base], author: p.author });
+    const { data: commit } = await octokit.rest.git.createCommit({ owner, repo, message: p.message, tree: made.sha, parents: [p.base, ...p.merged ? [p.merged] : []], author: p.author });
     await octokit.rest.git.updateRef({ owner, repo, ref: `heads/${p.branch}`, sha: commit.sha, force: false });
     return commit.sha;
   } catch (e) {
@@ -61914,6 +61944,22 @@ var TASK_FORMAT = {
     const ok = typeof r?.answer === "string" && !!r.answer.trim() && typeof r.commit_message === "string" && Array.isArray(r.checks) && r.checks.every((c) => typeof c === "string");
     return ok ? r : undefined;
   }
+};
+var MARKERS = /^(<{7}|>{7})( |$)|^={7}$/m;
+function marked(cwd, path) {
+  try {
+    const file = join13(cwd, path);
+    return lstatSync3(file).isFile() && MARKERS.test(readFileSync8(file, "utf8"));
+  } catch {
+    return false;
+  }
+}
+var CONFLICT = {
+  DD: "both sides deleted it",
+  AU: "only this branch added it",
+  UA: "only the base branch added it",
+  DU: "this branch deleted it and the base branch changed it",
+  UD: "the base branch deleted it and this branch changed it"
 };
 var CREDENTIALS_IN_CHECKOUT = "The checkout's .git/config holds a GitHub credential, which the model could read, so nothing was changed. Set `persist-credentials: false` on the workflow's actions/checkout step.";
 function selfHosted() {
@@ -61963,6 +62009,29 @@ ${TASK_MARKER}`);
     return { refused: unsandboxed, code: "sandbox_unavailable" };
   }
   const base = head(o.cwd);
+  const name = (f) => `\`${f.replace(/[`\r\n]/g, "")}\``;
+  let merge;
+  if (o.follow === "resolve") {
+    const theirs = await step("Fetch the base branch", async () => fetchBase(o.cwd, ctx.pr.base, o.githubToken));
+    const m = mergeInto(o.cwd, theirs);
+    if (m.upToDate) {
+      const why = `This pull request already has everything from \`${ctx.pr.base}\`, so there's nothing to resolve.`;
+      await post(`${why}
+
+${TASK_MARKER}`);
+      return { refused: why, code: "nothing_to_resolve" };
+    }
+    const stuck = m.conflicts.filter((c) => !["UU", "AA"].includes(c.code) || !marked(o.cwd, c.path));
+    if (stuck.length) {
+      resetTo(o.cwd, base);
+      const why = `Merging \`${ctx.pr.base}\` needs a decision Axon Shaft can't make: ${stuck.map((c) => `${name(c.path)} (${CONFLICT[c.code] ?? "a binary file both sides changed"})`).join(", ")}. Nothing was pushed. Merge it by hand, then comment \`/resolve\` again for any other conflicts.`;
+      await post(`${why}
+
+${TASK_MARKER}`);
+      return { refused: why, code: "merge_needs_decision" };
+    }
+    merge = { theirs, conflicts: m.conflicts.map((c) => c.path) };
+  }
   const commands = repoCommands(o.cwd);
   const suggest = () => o.bare ? applySuggestions(o.cwd, base, findings) : { applied: [], unapplied: [] };
   const { applied, unapplied } = suggest();
@@ -61972,15 +62041,22 @@ ${TASK_MARKER}`);
   const settle = async (listed) => {
     const changes = readChanges(o.cwd, base);
     const outside = scope ? changes.map((c) => c.path).filter((p) => !scope.has(p)) : [];
-    const unasked = scope ? [] : unaskedBuildInputs(changes, (p) => fileAt(o.cwd, base, p), o.ask.text);
-    const checks = changes.length && !outside.length && !unasked.length ? await step("Run the checks", async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
+    const own = merge ? changes.filter((c) => c.content?.toString("utf8") !== fileAt(o.cwd, merge.theirs, c.path)) : changes;
+    const unasked = scope ? [] : unaskedBuildInputs(own, (p) => fileAt(o.cwd, base, p), o.ask.text);
+    const unresolved = (merge?.conflicts ?? []).filter((p) => marked(o.cwd, p)).map((p) => ({ command: `conflict markers in ${p}`, passed: false, output: `${p} still has conflict markers.` }));
+    const checks = unresolved.length ? unresolved : changes.length && !outside.length && !unasked.length ? await step("Run the checks", async () => checkList(listed, commands, o.cwd).map((cmd) => runCheck(o.cwd, cmd, o.env))) : [];
     return { changes, outside, unasked, checks, failed: checks.filter((r) => !r.passed) };
   };
   try {
-    const ran = o.bare && !left.length ? { ...await settle([]), result: undefined } : await withModel();
+    const noModel = o.bare && !left.length || merge && !merge.conflicts.length;
+    const ran = noModel ? { ...await settle([]), result: undefined } : await withModel();
     const { changes, outside, unasked, checks, failed, result } = ran;
-    const name = (f) => `\`${f.replace(/[`\r\n]/g, "")}\``;
-    const lines = [result ? prose(result.reply.answer) : `Applied the review's suggested change${applied.length === 1 ? "" : "s"}, with no model call.`];
+    const lines = [
+      result ? prose(result.reply.answer) : merge ? `Merged \`${ctx.pr.base}\` with no conflicts, with no model call.` : `Applied the review's suggested change${applied.length === 1 ? "" : "s"}, with no model call.`
+    ];
+    if (o.follow === "tests" && !commands.some((c) => /\btest\b/.test(c)))
+      lines.push("This repo has no test command Axon Shaft can run (a `test` script, a `make test` target, Cargo or Go), so the new tests weren't run here. The repo's CI runs them on the push.");
+    let commit;
     if (applied.length)
       lines.push(`**Suggestions applied:** ${applied.map((f) => `${name(`${f.file}:${f.line}`)} ${prose(f.title)}`).join("; ")}`);
     if (unapplied.length)
@@ -62006,10 +62082,11 @@ ${TASK_MARKER}`);
         assertHead(o.cwd, base);
         const { data: bot } = await o.octokit.rest.users.getByUsername({ username: o.bot });
         const message = result && redact(result.reply.commit_message.split(`
-`)[0].trim(), o.secrets).slice(0, 100) || (result ? "Make the change asked for with /fix" : "Apply the review's suggested changes");
+`)[0].trim(), o.secrets).slice(0, 100) || merge && `Merge ${ctx.pr.base} into ${ctx.pr.head}` || (result ? `Make the change asked for with /${o.follow ?? "fix"}` : "Apply the review's suggested changes");
         const author = { name: o.bot, email: `${bot.id}+${o.bot}@users.noreply.github.com` };
         const grant = await step("Get the push token", fetchPushToken);
-        const sha = await step("Push the commit", () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author }));
+        const sha = await step("Push the commit", () => pushChanges(grant.push_token, { owner: o.owner, repo: o.repo, branch: grant.branch, base, changes, message, author, merged: merge?.theirs }));
+        commit = sha;
         lines.push(`**Commit:** [\`${sha.slice(0, 7)}\`](${o.repoUrl}/commit/${sha}) on \`${grant.branch}\``);
       }
       const skipped = skippedNote(checks);
@@ -62027,6 +62104,7 @@ ${prose(c.output).replace(/`{4,}/g, "```")}
     const answer = redact(lines.join(`
 
 `), o.secrets).slice(0, ANSWER_MAX);
+    const kind = { ...o.follow && { command: o.follow }, ...commit && { commit } };
     if (!ran.result) {
       const sub = footer({ sha: ctx.pr.headSha, repo: `${o.owner}/${o.repo}`, runUrl: o.runUrl, dashboardRunUrl: o.dashboardRunUrl });
       const commentUrl = await post(`${answer}
@@ -62034,7 +62112,7 @@ ${prose(c.output).replace(/`{4,}/g, "```")}
 ${sub}
 
 ${TASK_MARKER}`);
-      return { model: "none", effort: "none", tokens: NO_SPEND.tokens, costUsd: 0, output: { answer, comment_url: commentUrl } };
+      return { model: "none", effort: "none", tokens: NO_SPEND.tokens, costUsd: 0, output: { answer, comment_url: commentUrl, ...kind } };
     }
     const { sub, model } = answerFooter(o, ctx.pr.headSha, ran.choice, ran.result, ran.tried, ran.triaged);
     const commentUrl = await post(`${answer}
@@ -62042,7 +62120,7 @@ ${TASK_MARKER}`);
 ${sub}
 
 ${TASK_MARKER}`);
-    return { model, effort: ran.choice.effort, tokens: ran.result.tokens, costUsd: ran.result.costUsd, output: { answer, comment_url: commentUrl } };
+    return { model, effort: ran.choice.effort, tokens: ran.result.tokens, costUsd: ran.result.costUsd, output: { answer, comment_url: commentUrl, ...kind } };
   } catch (e) {
     if (e instanceof ShaftFailure) {
       e.url ??= o.runUrl;
@@ -62065,6 +62143,8 @@ ${TASK_MARKER}`);
       if (earlier) {
         resetTo(o.cwd, base);
         suggest();
+        if (merge)
+          mergeInto(o.cwd, merge.theirs);
       }
       const retold = earlier ? `${request}
 
@@ -62138,7 +62218,12 @@ async function run() {
   const cwd = process.env.GITHUB_WORKSPACE ?? process.cwd();
   const { owner, repo } = context2.repo;
   const pull_request = pullRequestOf(context2.payload);
-  const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork, pull_request } : { job: r.mode === "dismiss" && r.undo ? "undismiss" : r.mode, pull_request, ...context2.eventName === "pull_request_review_comment" && "ask" in r && { comment: { id: r.ask.id } } }));
+  const grant = await step("Config from the dashboard", () => fetchGrant(r.mode === "review" ? { job: "review", event: r.event, fork: r.fork, pull_request } : {
+    job: r.mode === "dismiss" && r.undo ? "undismiss" : r.mode,
+    ...r.mode === "task" && r.follow && { command: r.follow },
+    pull_request,
+    ...context2.eventName === "pull_request_review_comment" && "ask" in r && { comment: { id: r.ask.id } }
+  }));
   if (r.mode === "dismiss" && !grant.run && grant.dismiss && typeof grant.github_token === "string") {
     const gh = getOctokit(grant.github_token);
     if (!await hasWriteAccess(gh, owner, repo, r.actor))
@@ -62173,7 +62258,7 @@ ${grant.comment}`);
   if (r.mode === "help")
     return notice("The Axon Shaft API sent a run for /help, which runs nothing.");
   if (r.actor && !await hasWriteAccess(octokit, owner, repo, r.actor)) {
-    const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : r.mode === "reply" ? "the question wasn't answered. Only people with write access can ask with /ask" : "nothing was changed. Only people with write access can start a change with /fix or /axonshaft";
+    const what = r.mode === "review" ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}` : r.mode === "reply" ? "the question wasn't answered. Only people with write access can ask with /ask" : `nothing was changed. Only people with write access can start a change with ${r.mode === "task" && r.follow ? `/${r.follow}` : "/fix or /axonshaft"}`;
     return notice(noticeText(`${r.actor} has no write access, so ${what}.`, "no_write_access"));
   }
   reaction = await reactStart(octokit, context2, dryRun);
@@ -62221,8 +62306,10 @@ ${grant.comment}`);
       ask: r.ask,
       asker: r.actor,
       bare: r.bare,
+      follow: r.follow,
       template: job.prompt.template,
       pushMode: String(settings.pushMode),
+      githubToken: grant.github_token,
       repoUrl: `${context2.serverUrl}/${owner}/${repo}`
     });
     if (!("refused" in out)) {
@@ -62250,6 +62337,7 @@ ${grant.comment}`);
     advisories: settings.advisories === true,
     ignore: ignoresOf(settings.ignore),
     repoConfig: repoConfigOf(settings.repoConfig),
+    commands: globs(settings.commands),
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch)
   });
   setOutput("verdict", out.verdict);

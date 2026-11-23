@@ -88,6 +88,8 @@ export type ReviewOptions = {
   repoConfig?: { path: string; problems: string[] };
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
+  /** The follow-up commands the project keeps on (the API's `settings.commands`), for the summary to list. */
+  commands?: string[];
   cwd: string;
   /** The project's own variables the agent's commands get, by name. */
   env?: string[];
@@ -456,6 +458,8 @@ async function postReview(
     workflowEditUrl: o.workflowEditUrl,
     ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     repoConfig: o.repoConfig,
+    // `/resolve` only when GitHub says the pull request has conflicts.
+    commands: o.commands?.filter((c) => c !== 'resolve' || ctx.pr.conflicts),
     ...(models && {
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
       effort: choice.effort,

@@ -76,8 +76,30 @@ export function resetTo(cwd: string, base: string): void {
   git(cwd, ['clean', '-q', '-f', '-d']);
 }
 
-/** A commit to push: `changes` on top of `base`, by `author`, to `branch` of `owner/repo`. */
-export type PushRequest = { owner: string; repo: string; branch: string; base: string; changes: Change[]; message: string; author: { name: string; email: string } };
+/**
+ * For `/resolve`: merge `theirs` into the checkout without committing, so HEAD stays the PR's head and
+ * `readChanges` sees the merge as changes. `upToDate` when the PR already has `theirs`; else the
+ * paths git couldn't merge, each with its `git status` code (`UU` both changed, `DU` deleted by us, ...).
+ */
+export function mergeInto(cwd: string, theirs: string): { upToDate: boolean; conflicts: { path: string; code: string }[] } {
+  try {
+    git(cwd, ['merge-base', '--is-ancestor', theirs, 'HEAD']);
+    return { upToDate: true, conflicts: [] };
+  } catch {}
+  try {
+    git(cwd, ['-c', 'user.name=axonshaft', '-c', 'user.email=axonshaft@users.noreply.github.com', 'merge', '--no-commit', '--no-ff', '--no-edit', theirs]);
+  } catch {
+    // A conflict ends the merge with a non-zero exit; what's unmerged says which.
+  }
+  const conflicts = git(cwd, ['status', '--porcelain', '-z', '--no-renames'])
+    .split('\0')
+    .filter((l) => /^(DD|AU|UD|UA|DU|AA|UU) /.test(l))
+    .map((l) => ({ code: l.slice(0, 2), path: l.slice(3) }));
+  return { upToDate: false, conflicts };
+}
+
+/** A commit to push: `changes` on top of `base`, by `author`, to `branch` of `owner/repo`. `merged`: the second parent of a merge commit. */
+export type PushRequest = { owner: string; repo: string; branch: string; base: string; changes: Change[]; message: string; author: { name: string; email: string }; merged?: string };
 
 /**
  * Commit `changes` on top of `base` and move `branch` to it, through GitHub's Git Data API with
@@ -96,7 +118,7 @@ export async function pushChanges(token: string, p: PushRequest): Promise<string
       tree.push({ path: c.path, mode: c.mode ?? '100644', type: 'blob' as const, sha });
     }
     const { data: made } = await octokit.rest.git.createTree({ owner, repo, base_tree: base.tree.sha, tree });
-    const { data: commit } = await octokit.rest.git.createCommit({ owner, repo, message: p.message, tree: made.sha, parents: [p.base], author: p.author });
+    const { data: commit } = await octokit.rest.git.createCommit({ owner, repo, message: p.message, tree: made.sha, parents: [p.base, ...(p.merged ? [p.merged] : [])], author: p.author });
     await octokit.rest.git.updateRef({ owner, repo, ref: `heads/${p.branch}`, sha: commit.sha, force: false });
     return commit.sha;
   } catch (e) {

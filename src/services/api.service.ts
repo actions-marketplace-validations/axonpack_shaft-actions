@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
-import type { PullRequest, ReviewEvent } from './route.service';
+import type { FollowUp, PullRequest, ReviewEvent } from './route.service';
 
 /**
  * What `POST /v1/token` takes: the job the event routed to, for a pull request event which one, for
@@ -14,6 +14,8 @@ export type GrantRequest = {
   event?: ReviewEvent;
   fork?: boolean;
   pull_request?: PullRequest;
+  /** With `job: 'task'`, the follow-up command that asked for it. An older API ignores it and runs a plain Task. */
+  command?: FollowUp;
   /** The comment on a line of the diff that asked for the run, so the API can reply on its thread when it refuses it. An older API ignores it. */
   comment?: { id: number };
 };
@@ -113,7 +115,10 @@ export type RunOutput = {
 /** What `POST /v1/runs` takes: a finished review, reply or task, or a run that failed after it opened. */
 export type RunSummary = RunDone | ReplyDone | { error: { code: string; message: string }; duration_ms: number };
 /** A finished reply or task: no verdict or findings, and what it posted as `output`. */
-type ReplyDone = Pick<RunDone, 'model' | 'effort' | 'duration_ms' | 'tokens' | 'cost_usd'> & { output: { answer: string; comment_url: string } };
+type ReplyDone = Pick<RunDone, 'model' | 'effort' | 'duration_ms' | 'tokens' | 'cost_usd'> & {
+  /** `command` is the follow-up that ran, and `commit` the sha it pushed, when it pushed one. */
+  output: { answer: string; comment_url: string; command?: FollowUp; commit?: string };
+};
 type RunDone = {
   verdict: string;
   model: string;

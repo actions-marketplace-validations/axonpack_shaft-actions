@@ -181,6 +181,15 @@ test('a bare /fix fixes the last review; anything else after it, or /axonshaft, 
   for (const body of ['/fix the null check', 'Thanks.\n/fix', '/axonshaft']) expect(route('issue_comment', says(body)), body).toMatchObject({ mode: 'task', bare: false });
 });
 
+test('a follow-up command is a task that names it, and only on a pull request', () => {
+  const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
+  for (const c of ['tests', 'simplify', 'docstrings', 'resolve']) expect(route('issue_comment', says(`/${c}`)), c).toMatchObject({ mode: 'task', follow: c, bare: false });
+  expect(route('issue_comment', says('/fix it'))).not.toHaveProperty('follow');
+  expect(route('issue_comment', says('/testsuite'))).toMatchObject({ mode: 'skip' });
+  const onIssue = { ...says('/resolve'), issue: { ...comment.issue, pull_request: undefined } };
+  expect(route('issue_comment', onIssue)).toEqual({ mode: 'skip', reason: '/resolve works on a pull request, not an issue.', code: 'not_a_pull_request' });
+});
+
 test('a command inside a sentence, a quote, inline code or a code block, or a longer word, starts nothing', () => {
   const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
   for (const body of ['please /review this', '> /review', 'run `/review` later', '```\n/review\n```', '/reviewer', '/fix-it', 'see /help/me'])
