@@ -4,11 +4,14 @@ import type { Octokit } from '../types/octokit.type';
 import { GUIDE_FILES } from '../consts/settings.const';
 import { generatedGlobs } from '../utils/prompt.util';
 import { SUMMARY_MARKER } from '../utils/render.util';
+import { guardContext } from '../guardrails/classify.service';
 import { hasWriteAccess } from './route.service';
 
 export type Comment = {
   id: number;
   author: string;
+  /** The author's GitHub ID, for the guardrails. */
+  authorId?: number;
   /** Whether the author is inside the repo (`insider`), so the review reads the comment. */
   trusted: boolean;
   body: string;
@@ -27,7 +30,7 @@ export type Context = {
    * `fork`: the head branch lives in another repo, or one that was deleted. `defaultBranch` is the base repo's.
    * `conflicts`: GitHub says it can't merge into the base; unset while GitHub is still working it out.
    */
-  pr: { number: number; title: string; body: string; author: string; headSha: string; base: string; head: string; fork: boolean; defaultBranch: string; conflicts?: boolean };
+  pr: { number: number; title: string; body: string; author: string; authorId?: number; headSha: string; base: string; head: string; fork: boolean; defaultBranch: string; conflicts?: boolean };
   commits: string[];
   files: (ChangedFile & { status: string })[];
   /** Issue comments, without our own summary. */
@@ -44,6 +47,7 @@ export type Context = {
 const toComment = (c: any, trusted: boolean): Comment => ({
   id: c.id,
   author: c.user?.login ?? 'ghost',
+  authorId: c.user?.id,
   trusted,
   body: c.body ?? '',
   html_url: c.html_url,
@@ -116,7 +120,7 @@ export async function collectContext(
   const comment = async (c: any) => toComment(c, await trusted(c));
   const comments = await Promise.all(issueComments.map(comment));
   const summary = comments.find((c) => c.author === bot && c.body.startsWith(SUMMARY_MARKER));
-  return {
+  const ctx: Context = {
     owner,
     repo,
     pr: {
@@ -124,6 +128,7 @@ export async function collectContext(
       title: pr.title,
       body: pr.body ?? '',
       author: pr.user.login,
+      authorId: pr.user.id,
       headSha: pr.head.sha,
       base: pr.base.ref,
       head: pr.head.ref,
@@ -142,4 +147,6 @@ export async function collectContext(
     // From the base branch, so a pull request can't mark its own files generated to hide them.
     generated: generatedGlobs(await baseFile(octokit, owner, repo, pr.base.ref, '.gitattributes')),
   };
+  await guardContext({ ...ctx, comments: [...ctx.comments, ...ctx.reviewComments] }, bot);
+  return ctx;
 }

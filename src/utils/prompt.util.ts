@@ -1,3 +1,4 @@
+import { datamark } from '../guardrails/input.util';
 import type { Comment } from '../services/context.service';
 import { type ChangedFile, LOCKFILE, matches } from './auto-pick.util';
 
@@ -40,7 +41,7 @@ export const trustedComments = (comments: Comment[]): string =>
   comments
     // Only people inside the repo reach the prompt: anyone else could write instructions aimed at the model.
     .filter((c) => c.trusted)
-    .map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? '?'}` : ''}: ${c.body.slice(0, 2000)}`)
+    .map((c) => `- ${c.author}${c.path ? ` on ${c.path}:${c.line ?? '?'}` : ''}: ${datamark(c.body.slice(0, 2000))}`)
     .join('\n');
 
 /**

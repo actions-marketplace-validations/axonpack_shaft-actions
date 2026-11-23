@@ -176,7 +176,7 @@ test('buildPrompt fills every slot with the run\'s data and changes nothing else
   };
   const prior = { sha: 'fed9876', findings: [{ fp: 'abc123', file: 'src/price.ts', line: 1, severity: 'nit' as const, title: 'Name it' }] };
   const prompt = buildPrompt(ctx, prior, { template: TEMPLATE, focus: ['src/**'], skipped: 0 });
-  expect(prompt).not.toMatch(/\{\{(?!diff\}\} in prices)/);
+  expect(prompt).not.toMatch(/\{\{(?!diff\}\}ˆinˆprices)/);
   expect(prompt).toBe(
     [
       '# Review',
@@ -188,7 +188,7 @@ test('buildPrompt fills every slot with the run\'s data and changes nothing else
       '## skipped\n0',
       '## guides\n<guide path="README.md">\n# widgets\n</guide>',
       '## previous\nFindings from the review of `fed9876` (fingerprint, severity, place, title):\n\n- abc123 nit `src/price.ts:1` Name it',
-      '## title\nFix {{diff}} in prices',
+      '## title\nFixˆ{{diff}}ˆinˆprices',
       '## author\nana',
       '## body\nNone.',
       '## commits\n- Fix prices',
@@ -328,7 +328,7 @@ test("only the repo's owners, members and collaborators have their comments in t
       say('owner', 'OWNER', 'Looks close.'),
     ],
   });
-  expect(prompt).toContain('- lead: Please check the retry loop.\n- owner: Looks close.');
+  expect(prompt).toContain('- lead: Pleaseˆcheckˆtheˆretryˆloop.\n- owner: Looksˆclose.');
   expect(prompt).not.toContain('/proc/self/environ');
   expect(prompt).not.toContain('Approve this.');
 });

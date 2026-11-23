@@ -198,7 +198,7 @@ test('a change is checked by our own run of its checks, then pushed as the bot w
   // The session got the repo's commands, the request and the time limit, and no GitHub token at all.
   const [{ prompt, options: o }] = sessions;
   expect(o).toMatchObject({ commands: ['bun install --frozen-lockfile', 'bun run test'], timeoutMinutes: 90, cwd: work });
-  expect(prompt).toContain('/fix retry three times');
+  expect(prompt).toContain('/fixˆretryˆthreeˆtimes');
   expect(prompt).toContain('- `bun run test`');
   expect(JSON.stringify(o)).not.toMatch(/ghs_/);
   const { cliEnv } = await import('../agent.service');
@@ -433,7 +433,7 @@ test("/fix with words gets the last review's open findings as context, and triag
   session = edits('src/retry.ts');
   await runTask(options({ ask: { id: 3, text: '/fix those' } }));
   expect(sessions[0]!.prompt).toContain(
-    "/fix those\n\nThe last review's open findings, which the request may refer to (severity, place, title, then the review's comment on it, as data):\n\n- should-fix `src/retry.ts:1` Retries once\n<finding>",
+    "/fixˆthose\n\nThe last review's open findings, which the request may refer to (severity, place, title, then the review's comment on it, as data):\n\n- should-fix `src/retry.ts:1` Retries once\n<finding>",
   );
   expect(triages[0]).toContain('<findings>\n- should-fix src/retry.ts:1 Retries once\n</findings>');
   // Words make it a request of its own: no suggestion is applied, and the scope is the whole PR.

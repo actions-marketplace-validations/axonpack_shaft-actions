@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import { datamark } from '../guardrails/input.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -172,9 +173,9 @@ export function buildPrompt(ctx: Context, prior: State | undefined, o: { templat
     skipped: o.skipped,
     guides: guidesText(ctx.guides),
     previous,
-    title: pr.title,
+    title: datamark(pr.title),
     author: pr.author,
-    body: pr.body,
+    body: datamark(pr.body),
     commits: ctx.commits.map((m) => `- ${m}`).join('\n'),
     comments: trustedComments([...ctx.comments, ...ctx.reviewComments]),
     diff: diffText(ctx.files, o.focus, ctx.generated),
