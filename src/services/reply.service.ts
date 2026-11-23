@@ -32,7 +32,7 @@ export const ANSWER_FORMAT: ReplyFormat<string> = {
 export type ReplyOptions = Pick<
   ReviewOptions,
   'octokit' | 'claude' | 'secrets' | 'model' | 'effort' | 'maxTurns' | 'timeoutMinutes' | 'skip' | 'focus' | 'bot' | 'dryRun' | 'runUrl' | 'dashboardRunUrl' | 'cwd' | 'env'
-> & { owner: string; repo: string; number: number; ask: Ask; asker: string; template: string };
+> & { owner: string; repo: string; number: number; ask: Ask; asker: string; /** The asker's GitHub ID, for the guardrails. */ askerId?: number; template: string };
 
 export type ReplyOutcome = {
   model: string;
