@@ -1,5 +1,28 @@
 # shaft
 
+## 1.11.0
+
+### Minor Changes
+
+- c17ba95: - **Dismiss a finding**: reply `/dismiss <reason>` on a finding's inline comment, or resolve its thread, and the finding stops counting on that pull request. It isn't posted again, doesn't count toward the verdict or its check run, and shows under "Dismissed" in the summary with who and why. `/undismiss` or reopening the thread brings it back. No model runs. Only people with write access can dismiss.
+- 8c97968: - **Follow-up commands**: `/tests` writes tests for the changed code, `/simplify` simplifies it, `/docstrings` documents the changed public functions, and `/resolve` merges the base branch and resolves the conflicts. Each runs as a Task with its built-in template from the API and pushes one commit, with the same write access, fork and check rules as `/fix`. `/resolve` with no conflicts runs no model, and stops with a reply when a conflict needs a person (`merge_needs_decision`). The review summary lists the commands the project keeps on, `/resolve` only when the pull request has conflicts.
+- addd43e: - **Guardrails**: the action checks the PR's text, comments and commands against fixed rules before the model runs, and asks Haiku once about text that only looks suspicious. Harmful PR text is replaced in the prompt, and a harmful command is refused (`guardrail_blocked`). Text from people reaches the model marked as data. A reply that repeats the system prompt's line isn't posted (`guardrail_leak`). Token shapes, outside links and mentions are made inert before posting, the model can't read `.env` files or keys, and a `/fix` that pipes a download into a shell or sends the environment out isn't pushed. Each clear hit is a strike against the person who wrote the text, and the action reports it to the API. The summary flags people with strikes, and after 3 the API stops runs for them (`user_blocked`).
+  - **Main pass for supply chain and workflows**: the `supply-chain` and `workflows` checklists always run in the main session, even when marked light.
+- 52281c9: - **Incremental review**: the summary's state keeps a hash of each file's diff. A rerun or a rebase with the same diff makes no model call: the summary says nothing changed, and the check runs carry the last result to the new commit. On a push that changes some files, only the checklists whose paths match them run again, and the others keep their findings. New settings, a new action version or a summary from an older action get a full review.
+- 364e62f: - **Light pass**: checklists marked `light` run in their own session on Haiku, with only the files their paths match and their scripts' facts, 6 turns, and Read and Grep. The main session keeps the other checklists, the merge gates and the verdict. When the light session fails, times out or comes back partial, the main session runs its checklists and the job log says so. The footer and the run's page show each session's model, turn limit and tokens.
+- 1caf49f: - **Repo-wide ignores**: findings that match an `ignore` entry in the repo's `.github/axonshaft.yml`, by checklist, path glob or text in the title, aren't posted and don't count toward the verdict or a check run. The summary says how many were left out. When the API reports that the file has problems, the summary shows them in a warning under the card, and the review runs on the dashboard's settings.
+- 818b138: - **Four new script checklists**: `focused-tests` (`.only`, `fdescribe` and `fit` left in tests are blocking, `.skip` is a nit), `large-files` (files over the size limit, added binaries, committed `node_modules/` or `dist/`), `install-hooks` (a new or changed `preinstall`, `install` or `postinstall`) and `debug-output` (`console.log`, `debugger`, `print(` and `dbg!` outside tests, scripts and CLIs, as nits). None of them calls the model. Their size limit and globs come from the API as `data`, and the action keeps defaults for an older API.
+  - **Up to 50 checks reported**: the run's report to the API carries up to 50 checks, up from 40, to match the longer job lists.
+
+### Patch Changes
+
+- 21e8c71: - **One finding per line**: when two checklists flag the same lines of a file, the review keeps one finding, from the checklist earlier in the job's order, at the higher severity, and says which other checklist also found it.
+- 703706a: - **No "Reviewing" comment**: a review on a later push no longer edits the summary comment to "Reviewing" while it runs. The comment changes only when the review is done, and the check runs show the progress. A cancelled run leaves the comment as the last review left it.
+- 4ce2729: - **👀 on the pull request**: a review started by a pull request event puts 👀 on the pull request while it runs and takes it off when the run ends, however it ends. If GitHub refuses the reaction, the job log warns and the review carries on.
+- d225177: - **Outcome on the pull request**: when a review started by a pull request event ends, its 👀 on the pull request is replaced with 🚀 if the review was posted, or 😕 if it failed or was cancelled, the same as on a `/review` comment.
+- 5cdff3d: - **Trimmed diff**: lockfiles, snapshots, minified files, `dist/` and files the base branch's `.gitattributes` marks `linguist-generated` show in the review prompt as one line each with their line counts, so they no longer fill the prompt. Scripts still read their full diff.
+- c8f2617: - **Turn limit by checklists**: under 500 changed lines, each checklist the main pass runs after the first adds 2 turns to the limit, up to 30. A limit set on the dashboard still wins.
+
 ## 1.10.1
 
 ### Patch Changes

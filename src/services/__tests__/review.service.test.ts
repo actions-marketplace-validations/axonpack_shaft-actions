@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ShaftFailure } from '../../utils/failure.util';
-import { parseState } from '../../utils/render.util';
+import { parseState, stateLine } from '../../utils/render.util';
 import type { Checklist } from '../api.service';
 
 const logs: string[] = [];
@@ -19,22 +19,23 @@ vi.doMock('@actions/core', () => ({
 }));
 /** The findings the mocked review returns. */
 let found: object[] = [];
-const runs: { prompt: string; model: string; effort: string; passes?: unknown[]; steps?: string[] }[] = [];
+const runs: { prompt: string; model: string; effort: string; passes?: unknown[]; steps?: string[]; maxTurns?: number; allowed?: string[] }[] = [];
 /** What the Agent SDK reports in modelUsage; empty means just the model asked for. */
 let usage: string[] = [];
 /** When set, the review fails with it. */
 let agentError: Error | undefined;
-/** What each attempt's reply changes, in order; by default it checked every checklist it ran, at 90% confidence. */
-let replies: object[] = [];
+/** What each attempt's reply changes, in order, or the error it throws; by default it checked every checklist it ran, at 90% confidence. */
+let replies: (object | Error)[] = [];
 vi.doMock('../agent.service', async (actual) => ({
   ...(await actual<typeof import('../agent.service')>()),
   // `steps` is what the reply's schema limits `step` to: unset for 1.5's fixed steps.
-  runAgent: async (prompt: string, o: { model: string; effort: string; passes?: unknown[] }, format: { schema: any }) => {
+  runAgent: async (prompt: string, o: { model: string; effort: string; passes?: unknown[]; maxTurns?: number; allowed?: string[] }, format: { schema: any }) => {
     const step = format.schema.properties.findings.items.properties.step;
     const steps = format.schema === (await actual<typeof import('../agent.service')>()).SCHEMA ? undefined : (step.enum ?? []);
-    runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes, steps });
+    runs.push({ prompt, model: o.model, effort: o.effort, passes: o.passes, steps, maxTurns: o.maxTurns, allowed: o.allowed });
     if (agentError) throw agentError;
-    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: steps ?? ['correctness', 'tests'], not_checked: 'n', ...replies.shift() };
+    if (replies[0] instanceof Error) throw replies.shift();
+    const review = { verdict: 'looks-good', type: 'feature', confidence: 90, headline: 'h', claim: 'c', impact: 'i', scope: 's', findings: found, resolved: [], checked: steps ?? ['correctness', 'tests'], not_checked: 'n', ...(replies.shift() as object) };
     return { reply: review, models: usage.length ? usage : [o.model], costUsd: 0.42, tokens: { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 } };
   },
 }));
@@ -121,6 +122,7 @@ async function review(
     checklists?: Checklist[];
     open?: string;
     advisories?: boolean;
+    ignore?: { checklist?: string; path?: string; title?: string }[];
   } = {},
 ) {
   fake = octokit(files, extra.comments, extra.guides, extra.refuseChecks);
@@ -146,6 +148,7 @@ async function review(
     cwd: '.',
     gates: extra.gates,
     advisories: extra.advisories,
+    ignore: extra.ignore,
   });
   return { refs: fake.refs, prompt: runs.at(-1)?.prompt ?? '', run: runs.at(-1)!, summary: logs.find((l) => l.startsWith('--- summary'))!, outcome };
 }
@@ -173,7 +176,7 @@ test('buildPrompt fills every slot with the run\'s data and changes nothing else
   };
   const prior = { sha: 'fed9876', findings: [{ fp: 'abc123', file: 'src/price.ts', line: 1, severity: 'nit' as const, title: 'Name it' }] };
   const prompt = buildPrompt(ctx, prior, { template: TEMPLATE, focus: ['src/**'], skipped: 0 });
-  expect(prompt).not.toMatch(/\{\{(?!diff\}\} in prices)/);
+  expect(prompt).not.toMatch(/\{\{(?!diff\}\}ˆinˆprices)/);
   expect(prompt).toBe(
     [
       '# Review',
@@ -185,7 +188,7 @@ test('buildPrompt fills every slot with the run\'s data and changes nothing else
       '## skipped\n0',
       '## guides\n<guide path="README.md">\n# widgets\n</guide>',
       '## previous\nFindings from the review of `fed9876` (fingerprint, severity, place, title):\n\n- abc123 nit `src/price.ts:1` Name it',
-      '## title\nFix {{diff}} in prices',
+      '## title\nFixˆ{{diff}}ˆinˆprices',
       '## author\nana',
       '## body\nNone.',
       '## commits\n- Fix prices',
@@ -282,12 +285,11 @@ test('a refused progress update warns once, skips the later ones, and the review
   expect(warnings[0]).toContain("Couldn't post the Axon Shaft / review check");
 });
 
-test('a later review edits its summary to Reviewing at the start, which emails no one', async () => {
+test('a later review leaves its summary as it was until the result, then edits it', async () => {
   const summary = { id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body: '<!-- shaft:summary -->\nold' };
   await review([file('src/a.ts')], { dryRun: false, comments: [summary] });
   expect(progress()).toEqual([
     STARTED,
-    'update: ![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)',
     ...STEPS,
     expect.stringMatching(/^update: > \[!TIP\]/),
     `check update: Axon Shaft / review success "Reviewed abc1234" ${SUMMARY_URL}`,
@@ -326,7 +328,7 @@ test("only the repo's owners, members and collaborators have their comments in t
       say('owner', 'OWNER', 'Looks close.'),
     ],
   });
-  expect(prompt).toContain('- lead: Please check the retry loop.\n- owner: Looks close.');
+  expect(prompt).toContain('- lead: Pleaseˆcheckˆtheˆretryˆloop.\n- owner: Looksˆclose.');
   expect(prompt).not.toContain('/proc/self/environ');
   expect(prompt).not.toContain('Approve this.');
 });
@@ -427,6 +429,34 @@ test("a fixed finding resolves only the bot's own thread, never one a stranger s
   expect(resolved).toEqual(['ours']);
 });
 
+test("a dismissed finding found again a line away isn't posted or counted: it shows under Dismissed, and the verdict drops", async () => {
+  const d = { fp: 'ddd444', file: 'src/a.ts', line: 2, severity: 'blocking', title: 'Wrong sum', step: 'correctness', by: 'maintainer', reason: 'on purpose' };
+  const body = `<!-- shaft:summary -->\nold\n${stateLine({ sha: 'fed9876', findings: [], dismissed: [d as any] })}`;
+  found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' }];
+  replies = [{ verdict: 'blocking' }];
+  const { summary, outcome } = await review([file('src/a.ts')], { comments: [{ id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body }] });
+  expect(logs.filter((l) => l.startsWith('--- inline'))).toEqual([]);
+  expect(outcome.verdict).toBe('looks-good');
+  expect(outcome.bySeverity.blocking).toBe(0);
+  expect(summary).toContain('| 🔴 | `src/a.ts:2` | Wrong sum | maintainer | on purpose |');
+  expect(parseState(summary)).toMatchObject({ findings: [], dismissed: [d] });
+  expect(outcome.output.dismissed).toEqual([{ severity: 'blocking', file: 'src/a.ts', line: 2, title: 'Wrong sum', by: 'maintainer', reason: 'on purpose' }]);
+  expect(outcome.output.checks.find((c) => c.key === 'correctness')?.state).toBe('passed');
+});
+
+test("a finding the repo config file's ignore matches isn't posted, counted or checked, and the summary counts it", async () => {
+  found = [
+    { severity: 'blocking', step: 'correctness', file: 'legacy/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' },
+    { severity: 'should-fix', step: 'standards', file: 'src/a.ts', line: 1, title: 'Name it', body: 'Short name.' },
+  ];
+  replies = [{ verdict: 'blocking' }];
+  const { summary, outcome } = await review([file('legacy/a.ts'), file('src/a.ts')], { ignore: [{ path: 'legacy/**' }] });
+  expect(outcome.verdict).toBe('needs-changes');
+  expect(outcome.bySeverity.blocking).toBe(0);
+  expect(summary).toContain("**Ignored:** 1 finding matched `ignore` in the repo's config file.");
+  expect(parseState(summary)?.findings.map((f) => f.file)).toEqual(['src/a.ts']);
+});
+
 test('the outcome has the card for the dashboard, and each step is a group in the log', async () => {
   found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.', suggestion: 'b' }];
   const { outcome } = await review([file('src/a.ts')]);
@@ -514,7 +544,7 @@ test('with checklists, only those whose paths match run: their steps after the d
     { key: 'secrets', label: 'The secrets list', state: 'not_checked', reason: "This version of the action doesn't have this checklist's script yet" },
     { key: 'own-1', label: 'The own-1 list', state: 'passed' },
   ]);
-  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'] }]);
+  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'], max_turns: 1 }]);
   expect(summary).toContain('<kbd>❌ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
 });
 
@@ -570,7 +600,7 @@ test('script checklists stay out of the prompt and the schema, and their finding
   expect(prompt).not.toContain('**secrets.**');
   expect(outcome.verdict).toBe('blocking');
   expect(outcome.output.checks.map((c) => `${c.key}:${c.state}`)).toEqual(['correctness:passed', 'secrets:failed']);
-  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness'] }]);
+  expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness'], max_turns: 1 }]);
 });
 
 test('a script checklist with no findings passes', async () => {
@@ -625,7 +655,8 @@ describe('private draft advisories', () => {
   test("on a public repo the inline comment, summary, state marker, check run and run report carry only the short note, and the log never has the finding's text", async () => {
     advisoryApi(() => Response.json({ ghsa_id: 'GHSA-1234-5678-9abc', html_url: url, withhold: true }));
     const { outcome } = await review([file('src/a.ts')], { dryRun: false, advisories: true });
-    const posted = [...fake.inline, ...fake.written, ...fake.summaries, JSON.stringify(outcome.output)].join('\n');
+    // The state's hex hashes could hold `b2` by chance.
+    const posted = [...fake.inline, ...fake.written, ...fake.summaries, JSON.stringify(outcome.output)].join('\n').replace(/"files":\{[^}]*\},"config":"\w+"/g, '');
     for (const secret of ['Token sent in the URL', 'query string', 'b2']) expect(posted).not.toContain(secret);
     expect(fake.inline).toEqual([expect.stringContaining(`The details are in a [private draft security advisory](${url})`)]);
     const summary = fake.written.at(-1)!;
@@ -680,4 +711,116 @@ test("a partial review below the last rung moves up one, says why in the footer 
   replies = [{ checked: ['correctness', 'own-1'] }];
   await review([file('src/a.ts'), file('README.md')], { checklists: [...CHECKLISTS, checklist('docs', ['**/*.md'])], open: OPEN });
   expect(runs.map((r) => r.model)).toEqual(['sonnet']);
+});
+
+describe('incremental review', () => {
+  /** The summary a first review wrote, as the bot's comment the next run reads. */
+  const asComment = (summary: string) => [{ id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body: summary.replace('--- summary comment\n', '') }];
+  const BUG = { severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.' };
+
+  test('a rebase with the same diff on a new base changes nothing: no model call, the findings and checks carry over', async () => {
+    found = [BUG];
+    replies = [{ verdict: 'blocking' }];
+    const first = await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN });
+    expect(parseState(first.summary)).toMatchObject({ files: { 'src/a.ts': expect.any(String) }, checked: ['correctness'], verdict: 'blocking' });
+    logs.length = 0;
+    const before = runs.length;
+    const { outcome, summary } = await review([file('src/a.ts', '@@ -40 +40 @@\n-a\n+b')], { checklists: CHECKLISTS, open: OPEN, comments: asComment(first.summary) });
+    expect(runs.length).toBe(before);
+    expect(outcome).toMatchObject({ verdict: 'blocking', model: 'none', costUsd: 0, bySeverity: { blocking: 1, should_fix: 0, nit: 0 } });
+    expect(summary).toContain("Nothing changed since the last review, so `abc1234` got no model call.");
+    expect(summary).toContain('Wrong sum');
+    expect(parseState(summary)!.findings).toEqual(parseState(first.summary)!.findings);
+    expect(willPost()).toContain('Would post the Axon Shaft / correctness check: failure');
+  });
+
+  test('a summary from an older action, without file hashes, gets a full review', async () => {
+    const body = `<!-- shaft:summary -->\nold\n${stateLine({ sha: 'fed9876', findings: [] })}`;
+    const before = runs.length;
+    await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN, comments: [{ id: 1, user: { login: 'axonshaft[bot]' }, author_association: 'NONE', body }] });
+    expect(runs.length).toBe(before + 1);
+  });
+
+  test('changed settings, or a changed file, mean a model call', async () => {
+    const first = await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN });
+    const before = runs.length;
+    await review([file('src/a.ts')], { checklists: CHECKLISTS, open: OPEN, focus: ['src/**'], comments: asComment(first.summary) });
+    await review([file('src/a.ts', '@@ -1 +1 @@\n-a\n+c')], { checklists: CHECKLISTS, open: OPEN, comments: asComment(first.summary) });
+    expect(runs.length).toBe(before + 2);
+  });
+
+  test('a push re-runs only the checklists whose paths it touches; the others keep their findings and checks', async () => {
+    found = [BUG];
+    const first = await review([file('src/a.ts'), file('README.md')], { checklists: CHECKLISTS, open: OPEN });
+    found = [];
+    logs.length = 0;
+    const { run, outcome, summary } = await review([file('src/a.ts'), file('README.md', '@@ -1 +1 @@\n-a\n+changed')], { checklists: CHECKLISTS, open: OPEN, comments: asComment(first.summary) });
+    expect(run.steps).toEqual(['own-1']);
+    expect(run.prompt).not.toContain('Wrong sum');
+    expect(outcome.verdict).toBe('blocking');
+    expect(summary).toContain('Wrong sum');
+    expect(outcome.output.checks.slice(0, 1).concat(outcome.output.checks.slice(3))).toEqual([
+      { key: 'correctness', label: 'The correctness list', state: 'failed' },
+      { key: 'own-1', label: 'The own-1 list', state: 'passed' },
+    ]);
+    expect(parseState(summary)).toMatchObject({ checked: ['own-1', 'correctness'] });
+  });
+});
+
+describe('the light pass', () => {
+  const docs: Checklist = { ...checklist('docs', ['**/*.md']), model: 'light' };
+  const lists = [checklist('correctness', ['**/*.ts']), docs];
+  const files = () => [file('src/a.ts'), file('README.md', '@@ -1 +1 @@\n-old\n+new docs line')];
+
+  test("runs the light checklists first on Haiku, with their hunks only, Read and Grep and 6 turns; its findings and tokens join the main pass's", async () => {
+    replies = [{ findings: [{ severity: 'should-fix', step: 'docs', file: 'README.md', line: 1, title: 'Stale docs', body: 'The page says old.' }] }];
+    const { outcome, summary } = await review(files(), { checklists: lists, open: OPEN });
+    expect(runs.map((r) => [r.model, r.steps, r.maxTurns, r.allowed])).toEqual([
+      ['haiku', ['docs'], 6, ['Read', 'Grep']],
+      ['sonnet', ['correctness'], 1, undefined],
+    ]);
+    expect(runs[0]!.prompt).toContain('+new docs line');
+    expect(runs[0]!.prompt).not.toContain('src/a.ts');
+    expect(runs[0]!.prompt).toContain('1. **docs.** Look.\n2. **Verify.** Each finding.\n');
+    expect(runs[1]!.prompt).not.toContain('**docs.** Look.');
+    // The main pass said looks-good; the light pass's should-fix raises it, as a script's does.
+    expect(outcome.verdict).toBe('needs-changes');
+    expect(outcome.output.findings.map((f) => [f.check, f.file, f.title])).toEqual([['docs', 'README.md', 'Stale docs']]);
+    const each = { input: 120000, output: 6000, cache_read: 50000, cache_write: 6000 };
+    expect(outcome.tokens).toEqual({ input: 240000, output: 12000, cache_read: 100000, cache_write: 12000 });
+    expect(outcome.output.passes).toEqual([
+      { name: 'main', model: 'sonnet', tokens: each, checklists: ['correctness'], max_turns: 1 },
+      { name: 'light', model: 'haiku', tokens: each, checklists: ['docs'], max_turns: 6 },
+    ]);
+    expect(summary).toContain('| Light pass | `haiku`, up to 6 turns, 182k tokens: The docs list |');
+  });
+
+  test('supply-chain and workflows run in the main pass even when marked light', async () => {
+    const chain: Checklist = { ...checklist('supply-chain', ['**/*.md']), model: 'light' };
+    await review(files(), { checklists: [checklist('correctness', ['**/*.ts']), chain], open: OPEN });
+    expect(runs.map((r) => [r.model, r.steps])).toEqual([['sonnet', ['correctness', 'supply-chain']]]);
+  });
+
+  test('when the light pass fails, or comes back partial, the main pass runs its checklists and the log says so', async () => {
+    replies = [new ShaftFailure('review_timed_out', 'It ran past its time limit.')];
+    const failed = await review(files(), { checklists: lists, open: OPEN });
+    expect(runs.map((r) => r.steps)).toEqual([['docs'], ['correctness', 'docs']]);
+    expect(warnings).toContain("The light pass didn't work (It ran past its time limit.), so the main pass runs its checklists");
+    expect(failed.outcome.output.passes!.map((p) => [p.name, p.checklists])).toEqual([['main', ['correctness', 'docs']], ['light', []]]);
+    expect(failed.summary).toContain("| Light pass | Didn't work, so the main pass ran The docs list |");
+    runs.length = 0;
+    replies = [{ checked: [] }];
+    const partial = await review(files(), { checklists: lists, open: OPEN });
+    expect(runs.map((r) => r.steps)).toEqual([['docs'], ['correctness', 'docs']]);
+    // What the partial light pass used still counts.
+    expect(partial.outcome.tokens.input).toBe(240000);
+  });
+
+  test('with only light checklists to run and no gates, one session runs them; a deep review keeps them in the main pass', async () => {
+    await review([file('README.md')], { checklists: lists, open: OPEN });
+    expect(runs.map((r) => r.steps)).toEqual([['docs']]);
+    runs.length = 0;
+    await review(files(), { checklists: lists, open: OPEN, depth: 'deep' });
+    expect(runs.map((r) => r.steps)).toEqual([['correctness', 'docs']]);
+  });
 });

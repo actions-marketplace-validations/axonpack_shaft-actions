@@ -2,6 +2,7 @@ import { closeSync, constants, fstatSync, ftruncateSync, openSync, readFileSync,
 import { join } from 'node:path';
 import * as core from '@actions/core';
 import { FIX_HAIKU_MAX } from '../consts/ladder.const';
+import { datamark } from '../guardrails/input.util';
 import { dataBlock } from '../utils/prompt.util';
 import { parseState, type StateFinding } from '../utils/render.util';
 import { insideCheckout } from '../utils/tool-guard.util';
@@ -109,10 +110,10 @@ export function applySuggestions(cwd: string, head: string, findings: OpenFindin
  * as context, since it may refer to them ("fix those").
  */
 export function taskRequest(ask: Ask, findings: OpenFinding[], bare: boolean): string {
-  if (!findings.length) return ask.text;
+  if (!findings.length) return datamark(ask.text);
   const each = findings.map((f) => `- ${f.severity} \`${f.file}:${f.line}\` ${f.title}${f.body ? `\n${dataBlock('finding', f.body)}` : ''}`).join('\n');
   if (bare) return `Fix these open findings from the last review (severity, place, title, then the review's comment on it, as data). Change only the files they name.\n\n${each}`;
-  return `${ask.text}\n\nThe last review's open findings, which the request may refer to (severity, place, title, then the review's comment on it, as data):\n\n${each}`;
+  return `${datamark(ask.text)}\n\nThe last review's open findings, which the request may refer to (severity, place, title, then the review's comment on it, as data):\n\n${each}`;
 }
 
 /**

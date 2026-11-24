@@ -10,13 +10,13 @@ export const NOT_YET = "This version of the action doesn't have this checklist's
 
 /** A glob's `**` and `*` never match a name starting with a dot, so `.github/` and `.env` are tried without their dots too. */
 const undot = (s: string) => s.replace(/(^|\/)\./g, '$1');
-const touches = (file: string, paths: string[]) => matches(file, paths) || matches(undot(file), paths.map(undot));
+export const touches = (file: string, paths: string[]) => matches(file, paths) || matches(undot(file), paths.map(undot));
 
 /**
  * Which of the job's checklists run on the changed files (after `skip`), in the job's order. One whose
  * `paths` match no file is skipped, and so is one whose matching files all match its `exclude`; the
  * excluded ones of a checklist that runs are its `leftOut`. A script checklist whose `prestep` isn't one of `scripts` (the
- * ones the action has) is skipped; light ones run in the main pass until it has a light pass.
+ * ones the action has) is skipped.
  */
 export const planChecklists = (checklists: Checklist[], files: { filename: string }[], scripts: string[] = []): Planned[] =>
   checklists.map((c) => {

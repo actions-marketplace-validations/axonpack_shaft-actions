@@ -1,7 +1,7 @@
 import type { Octokit } from '../types/octokit.type';
 
 /** The skips the action decides itself, which end with a notice. */
-export type SkipCode = 'fork_pull_request' | 'not_a_pull_request';
+export type SkipCode = 'fork_pull_request' | 'not_a_pull_request' | 'not_a_finding';
 
 /** The pull request event, as the Code review job's `on` choices name it. */
 export type ReviewEvent = 'opened' | 'push' | 'ready';
@@ -12,10 +12,15 @@ export type Route =
    * none, and its `actor` needs write access. `fork` is undefined when the payload doesn't say.
    */
   | { mode: 'review'; number: number; event?: ReviewEvent; fork?: boolean; actor?: string }
-  /** `/fix` or `/axonshaft <prompt>`: make the change. `bare`: a `/fix` with nothing else, which fixes the last review's findings. */
-  | { mode: 'task'; number: number; actor: string; ask: Ask; bare: boolean }
+  /**
+   * `/fix` or `/axonshaft <prompt>`: make the change. `bare`: a `/fix` with nothing else, which fixes the last review's findings.
+   * `follow`: a follow-up command, a Task the API sends its template's prompt for.
+   */
+  | { mode: 'task'; number: number; actor: string; ask: Ask; bare: boolean; follow?: FollowUp }
   /** `/ask`: answer, never change code. */
   | { mode: 'reply'; number: number; actor: string; ask: Ask }
+  /** `/dismiss <reason>` or `/undismiss` (`undo`) in a finding's thread: runs no model. */
+  | { mode: 'dismiss'; number: number; actor: string; ask: Ask; undo: boolean; reason: string }
   /** `/help`: post the list of commands. */
   | { mode: 'help'; number: number; actor: string }
   /** With a `code`, the run ends with a notice that links to the code's docs; without one, only a log line. */
@@ -34,17 +39,21 @@ const REVIEW_EVENTS: Record<string, ReviewEvent> = { opened: 'opened', reopened:
 /** A comment with this in it starts a review of its pull request. */
 export const REVIEW_COMMAND = '/review';
 
+/** The follow-up commands: each a Task with its own built-in template. */
+export const FOLLOW_UPS = ['tests', 'simplify', 'docstrings', 'resolve'] as const;
+export type FollowUp = (typeof FOLLOW_UPS)[number];
+
 /** `prompt` is `/axonshaft <prompt>`: anything, answered or done. */
-export type Command = 'review' | 'fix' | 'ask' | 'help' | 'prompt';
+export type Command = 'review' | 'fix' | 'ask' | 'help' | 'prompt' | 'dismiss' | 'undismiss' | FollowUp;
 
 /**
- * The slash command a comment gives: `/review`, `/fix`, `/ask`, `/help` or `/axonshaft` at the start of a line.
+ * The slash command a comment gives: `/review`, `/fix`, `/ask`, `/help`, `/dismiss`, `/undismiss`, a follow-up or `/axonshaft` at the start of a line.
  * Lines in a quote or a code block don't count, so quoting someone's command doesn't run it again.
  */
 export function commandIn(text: string): Command | undefined {
   const lines = text.replace(/```[\s\S]*?(```|$)/g, '').replace(/`[^`\n]*`/g, '').split('\n');
   for (const line of lines) {
-    const m = /^\s*\/(review|fix|ask|help|axonshaft)(?![\w-])/.exec(line);
+    const m = /^\s*\/(review|fix|ask|help|dismiss|undismiss|tests|simplify|docstrings|resolve|axonshaft)(?![\w-])/.exec(line);
     if (m && !line.trimStart().startsWith('>')) return m[1] === 'axonshaft' ? 'prompt' : (m[1] as Command);
   }
   return undefined;
@@ -83,6 +92,12 @@ export function route(eventName: string, payload: any): Route {
   if (command === 'review' && onPr) return { mode: 'review', number: number!, fork: pr ? isFork(pr) : undefined, actor };
   if (command === 'review') return { mode: 'skip', reason: '/review works on a pull request, not an issue.', code: 'not_a_pull_request' };
   if (command === 'help') return { mode: 'help', number: number!, actor };
+  if (command === 'dismiss' || command === 'undismiss') {
+    if (eventName !== 'pull_request_review_comment') return { mode: 'skip', reason: `/${command} works as a reply on a finding's inline comment.`, code: 'not_a_finding' };
+    const c = payload.comment;
+    const reason = (/^\s*\/dismiss\b(.*)$/m.exec(text)?.[1] ?? '').trim().slice(0, 300);
+    return { mode: 'dismiss', number: number!, actor, ask: { id: c.id, text, path: c.path, line: c.line ?? c.original_line ?? undefined, thread: c.in_reply_to_id ?? c.id }, undo: command === 'undismiss', reason };
+  }
   const c = eventName === 'pull_request_review' ? payload.review : payload.comment;
   const ask: Ask =
     eventName === 'pull_request_review_comment'
@@ -90,15 +105,16 @@ export function route(eventName: string, payload: any): Route {
       : { id: c.id, text };
   if (command === 'ask' && !onPr) return { mode: 'skip', reason: '/ask works on a pull request, not an issue.', code: 'not_a_pull_request' };
   if (command === 'ask') return { mode: 'reply', number: number!, actor, ask };
-  if (!onPr) return { mode: 'skip', reason: `/${command === 'fix' ? 'fix' : 'axonshaft'} works on a pull request, not an issue.`, code: 'not_a_pull_request' };
-  return { mode: 'task', number: number!, actor, ask, bare: command === 'fix' && !text.replace('/fix', '').trim() };
+  if (!onPr) return { mode: 'skip', reason: `/${command === 'prompt' ? 'axonshaft' : command} works on a pull request, not an issue.`, code: 'not_a_pull_request' };
+  const follow = (FOLLOW_UPS as readonly string[]).includes(command) ? (command as FollowUp) : undefined;
+  return { mode: 'task', number: number!, actor, ask, bare: command === 'fix' && !text.replace('/fix', '').trim(), ...(follow && { follow }) };
 }
 
 /**
  * The pull request the run is for, as `POST /v1/token` takes it. `base` (the branch it goes into),
  * `association` (GitHub's `author_association`), `bot` and `labels` (their names) are for the review job's filters.
  */
-export type PullRequest = { number: number; title: string; branch?: string; author: string; base?: string; association?: string; bot?: boolean; labels?: string[] };
+export type PullRequest = { number: number; title: string; branch?: string; author: string; /** The author's GitHub ID, which the API keys guardrail strikes by. */ author_id?: number; base?: string; association?: string; bot?: boolean; labels?: string[] };
 
 const labelsOf = (item: any): string[] => (item.labels ?? []).map((l: { name: string }) => l.name);
 
@@ -114,13 +130,14 @@ export function pullRequestOf(payload: any): PullRequest | undefined {
       title: pr.title,
       branch: pr.head.ref,
       author: pr.user.login,
+      author_id: pr.user.id,
       base: pr.base.ref,
       association: pr.author_association,
       bot: pr.user.type === 'Bot',
       labels: labelsOf(pr),
     };
   const issue = payload.issue;
-  if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login, labels: labelsOf(issue) };
+  if (issue?.pull_request) return { number: issue.number, title: issue.title, author: issue.user.login, author_id: issue.user.id, labels: labelsOf(issue) };
   return undefined;
 }
 

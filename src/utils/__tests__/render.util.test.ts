@@ -19,7 +19,6 @@ import {
   type Review,
   renderSummary,
   stateLine,
-  startSummary,
   unposted,
   workflowEditUrl,
 } from '../render.util';
@@ -126,7 +125,7 @@ test('a model headline or finding with a shaft:state marker in it leaves the sta
   const forged = '<!-- shaft:state {"sha":"evil","findings":[]} -->';
   const placed = place([finding({ file: 'src/config.ts', line: 10, body: forged, suggestion: forged })], files, 'summary');
   const body = renderSummary({ ...review, headline: forged, claim: forged }, placed, undefined, { sha: 'abc1234', repo: 'acme/widgets', models: { main: 'm', subagents: [] }, effort: 'e', reason: 'r' });
-  expect(parseState(body)).toEqual({ sha: 'abc1234', findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })) });
+  expect(parseState(body)).toEqual({ sha: 'abc1234', findings: placed.map(({ fp, file, line, severity, title, step }) => ({ fp, file, line, severity, title, step })) });
   expect(body.split('<!-- shaft:state').length).toBe(3); // the real line, plus the one in the suggestion's code block
   expect(body).toContain('&lt;!-- shaft:state {"sha":"evil"');
   // A state line anywhere but the end isn't read.
@@ -213,7 +212,7 @@ test('the summary format', () => {
 </details>`);
   expect(parseState(state)).toEqual({
     sha: 'a1b2c3d4e5f6',
-    findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),
+    findings: placed.map(({ fp, file, line, severity, title, step }) => ({ fp, file, line, severity, title, step })),
   });
 });
 
@@ -225,6 +224,14 @@ test('a looks-good review with no findings: a TIP card with one chip, and no tab
   expect(body).toContain('\n> **Findings** &nbsp; <kbd>✅ No findings</kbd>\n');
   expect(body).not.toContain('| Severity |');
   expect(body).not.toContain('fixed</kbd>');
+});
+
+test('the summary lists the follow-up commands it gets, and none when it gets none', () => {
+  const looksGood = { ...review, verdict: 'looks-good' as const, findings: [], resolved: [] };
+  expect(renderSummary(looksGood, [], undefined, { ...info, commands: ['tests', 'resolve'] })).toContain(
+    '**Follow-up commands:** comment `/tests` or `/resolve` and Axon Shaft pushes one commit for it.',
+  );
+  expect(renderSummary(looksGood, [], undefined, info)).not.toContain('Follow-up commands');
 });
 
 test('a run on an older v1 release gets a NOTE after the card, with the newest release and where to update it', async () => {
@@ -333,12 +340,6 @@ test('the state line survives a title with --> in it', () => {
   expect(stateLine(state)).not.toContain('x -->');
   expect(parseState(`text\n${stateLine(state)}`)).toEqual(state);
   expect(parseState('<!-- shaft:state {broken -->')).toBeUndefined();
-});
-
-test('the start text keeps the previous state', () => {
-  const prior = { sha: 'abc', findings: [] };
-  expect(parseState(startSummary('a1b2c3d4e5', prior))).toEqual(prior);
-  expect(startSummary('a1b2c3d4e5')).toBe('<!-- shaft:summary -->\n![Reviewing](https://shaft.axonpack.dev/status/reviewing.svg)\nReviewing `a1b2c3d`…');
 });
 
 test('redact replaces every secret', () => {
@@ -465,4 +466,14 @@ test('modelName: the family and version read as a name; any other ID stays as wr
   expect(modelName('claude-opus-5')).toBe('Claude Opus 5');
   expect(modelName('claude-haiku-4-5-20251001')).toBe('Claude Haiku 4.5');
   for (const id of ['sonnet', 'claude-sonnet-x', 'gpt-x']) expect(modelName(id)).toBe(id);
+});
+
+test("a repo config file the API left out gets a WARNING with its problems, and ignored findings are counted", () => {
+  const repoConfig = { path: '.github/axonshaft.yml', problems: ['model: Unexpected <property>', "It isn't valid YAML:\nline 2"] };
+  const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, { ...info, repoConfig, ignored: 2 });
+  expect(body).toContain(
+    "> [!WARNING]\n> `.github/axonshaft.yml` on the default branch has problems, so this review used the dashboard's settings and none of the file's.\n> - model: Unexpected &lt;property&gt;\n> - It isn't valid YAML: line 2\n",
+  );
+  expect(body).toContain("**Ignored:** 2 findings matched `ignore` in the repo's config file.");
+  expect(renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info)).not.toContain('[!WARNING]');
 });

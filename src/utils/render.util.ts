@@ -59,8 +59,25 @@ export type Review = {
 };
 
 /** The review memory kept in the summary comment's hidden state line. */
-export type StateFinding = { fp: string; file: string; line: number; severity: Severity; title: string };
-export type State = { sha: string; findings: StateFinding[] };
+export type StateFinding = { fp: string; file: string; line: number; severity: Severity; title: string; step?: string };
+/** A finding someone with write access dismissed on this pull request, with who and why (`reason` may be empty). */
+export type Dismissed = StateFinding & { by: string; reason: string };
+/**
+ * `dismissed` stays out of `findings`, from the review that found them on. An action from 1.11 on
+ * also keeps what lets the next push build on this review (`incremental.util`): each file's diff
+ * hash, the settings' hash, the checklists it checked, its verdict and its gates. A state without
+ * them gets a full review.
+ */
+export type State = {
+  sha: string;
+  findings: StateFinding[];
+  dismissed?: Dismissed[];
+  files?: Record<string, string>;
+  config?: string;
+  checked?: string[];
+  verdict?: Review['verdict'];
+  gates?: Gate[];
+};
 
 /** A finding after our code decided where it goes. */
 export type Placed = Finding & { fp: string; inline: boolean };
@@ -194,6 +211,8 @@ export function prose(text: string): string {
   return s;
 }
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+/** "a, b or c". */
+const either = (words: string[]) => (words.length > 1 ? `${words.slice(0, -1).join(', ')} or ${words.at(-1)}` : (words[0] ?? ''));
 
 export function inlineBody(f: Placed): string {
   const parts = [`**${SEVERITY_LABEL[f.severity]}** · ${f.step}`, prose(f.body)];
@@ -234,6 +253,8 @@ export type Footer = {
   /** The `auto` ladder's rungs that didn't work before the one that ran, and why each moved up. */
   tried?: { model: string; effort: string; why: string }[];
   maxTurns?: number;
+  /** The review's light pass on Haiku: its tokens are in `tokens` too. `failed`: the main pass ran its checklists. */
+  light?: { model: string; maxTurns: number; tokens: { input: number; output: number; cache_read: number; cache_write: number }; checklists: string[]; failed: boolean };
   /** The changed lines and files the review read, after `skip`. */
   lines?: number;
   files?: number;
@@ -244,6 +265,8 @@ export type Footer = {
   skipped?: number;
   /** The catalog checks the project keeps on, from the Axon Shaft API; the others show as off. */
   checks?: string[];
+  /** The diff hashes and settings' hash for the state line, so the next push can build on this review. */
+  memo?: { files?: Record<string, string>; config: string };
   /** The job's checklists, when the API sends them: the card shows these in place of the checks. */
   checklists?: { key: string; name: string; skip?: string }[];
   /** A newer v1 release than this run's, when the API says the run is pinned to an older one. */
@@ -252,8 +275,16 @@ export type Footer = {
   workflowEditUrl?: string;
   /** Why a private draft advisory couldn't be opened, for one line in the summary. */
   advisories?: string;
+  /** Findings left out by the repo config file's `ignore`. */
+  ignored?: number;
+  /** The repo config file the API left out, and why. */
+  repoConfig?: { path: string; problems: string[] };
+  /** The guardrails' lines for people with strikes (`flaggedLines`). */
+  flagged?: string[];
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];
+  /** The follow-up commands someone can comment on this pull request now, without the slash. */
+  commands?: string[];
 };
 
 /**
@@ -304,6 +335,13 @@ export function footer(f: Footer): string {
     ['Triage', f.triage],
     ['Tried first', f.tried?.map((t) => `${t.model}, ${t.effort} effort: ${t.why}`).join('; ')],
     ['Turn limit', f.maxTurns],
+    [
+      'Light pass',
+      f.light &&
+        (f.light.failed
+          ? `Didn't work, so the main pass ran ${f.light.checklists.join(', ')}`
+          : `${modelCell(f.light.model)}, up to ${f.light.maxTurns} turns, ${formatTokens(Object.values(f.light.tokens).reduce((a, b) => a + b, 0))} tokens: ${f.light.checklists.join(', ')}`),
+    ],
     ['Changed lines', f.lines],
     ['Changed files', f.files],
     ['Skipped by `skip`', f.skipped && plural(f.skipped, 'file')],
@@ -432,10 +470,6 @@ function walkthrough(w: Walkthrough): string {
   return details('Walkthrough', ['| Area | Files | What changed |', '|---|---|---|', ...rows, ...diagram].join('\n'));
 }
 
-export function startSummary(sha: string, prior?: State): string {
-  return [SUMMARY_MARKER, statusCard('reviewing', 'Reviewing'), `Reviewing \`${sha.slice(0, 7)}\`…`, prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
-}
-
 /** The summary when none of the job's checklists ran: one chip each, and no model was asked. */
 export function idleSummary(states: CheckItem[], prior: State | undefined, f: Footer): string {
   return [
@@ -454,7 +488,18 @@ export function failedSummary(failure: ShaftFailure, prior?: State): string {
   return [SUMMARY_MARKER, failureMarkdown(failure), prior ? stateLine(prior) : ''].filter(Boolean).join('\n');
 }
 
-export function renderSummary(raw: Review, placed: Placed[], prior: State | undefined, f: Footer): string {
+/** Marks the summary's dismissed section, so `/dismiss` can swap it without a review. */
+export const DISMISSED_START = '<!-- shaft:dismissed -->';
+export const DISMISSED_END = '<!-- /shaft:dismissed -->';
+
+/** The findings dismissed on this pull request, with who and why: a table between the markers, or nothing. */
+export function dismissedSection(dismissed: Dismissed[]): string {
+  if (!dismissed.length) return '';
+  const rows = dismissed.map((d) => `| ${SEVERITY_DOT[d.severity]} | ${cell(where(d))} | ${cell(prose(d.title))} | ${cell(d.by)} | ${cell(html(prose(d.reason))) || '-'} |`);
+  return [DISMISSED_START, `**Dismissed:** ${dismissed.length}`, '', '| | Where | Finding | By | Why |', '|---|---|---|---|---|', ...rows, DISMISSED_END].join('\n');
+}
+
+export function renderSummary(raw: Review, placed: Placed[], prior: State | undefined, f: Footer, dismissed: Dismissed[] = []): string {
   const { headline, claim, impact, scope, not_checked } = raw;
   const review = { ...raw, headline: prose(headline), claim: prose(claim), impact: prose(impact), scope: prose(scope), not_checked: prose(not_checked) };
   const shown = placed.map((p) => ({ ...p, title: prose(p.title), body: prose(p.body) }));
@@ -466,6 +511,11 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
     const links = [f.workflowEditUrl && `[Update the workflow](${f.workflowEditUrl})`, `[Update from the dashboard](${f.dashboardRunUrl ?? DASHBOARD_URL})`];
     out.push('', '> [!NOTE]', `> Axon Shaft [v${version}](${url}) is out. This run used v${ACTION_VERSION}.`, `> ${links.filter(Boolean).join(' · ')}`);
   }
+  if (f.repoConfig) {
+    const { path, problems } = f.repoConfig;
+    out.push('', '> [!WARNING]', `> \`${path}\` on the default branch has problems, so this review used the dashboard's settings and none of the file's.`, ...problems.map((p) => `> - ${html(prose(p)).replace(/\s+/g, ' ')}`));
+  }
+  if (f.flagged?.length) out.push('', '> [!WARNING]', ...f.flagged.map((l) => `> ${l}`));
   if (raw.gates?.length) {
     const met = raw.gates.filter((g) => g.status !== 'not_met').length;
     out.push('', `**Merge gates:** ${met} of ${raw.gates.length} met or not applicable`, '', gatesTable(raw.gates));
@@ -482,6 +532,8 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   if (f.advisories) out.push('', `**Draft advisories:** ${f.advisories}`);
 
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
+  if (dismissed.length) out.push('', dismissedSection(dismissed));
+  if (f.ignored) out.push('', `**Ignored:** ${plural(f.ignored, 'finding')} matched \`ignore\` in the repo's config file.`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
   // A run with no model call has no claim to show.
@@ -494,10 +546,13 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
       ),
     );
   }
+  if (f.commands?.length) out.push('', `**Follow-up commands:** comment ${either(f.commands.map((c) => `\`/${c}\``))} and Axon Shaft pushes one commit for it.`);
   out.push('', footer(f));
   const state: State = {
     sha: f.sha,
-    findings: placed.map(({ fp, file, line, severity, title }) => ({ fp, file, line, severity, title })),
+    findings: placed.map(({ fp, file, line, severity, title, step }) => ({ fp, file, line, severity, title, step })),
+    ...(dismissed.length && { dismissed }),
+    ...(f.memo?.files && { files: f.memo.files, config: f.memo.config, checked: raw.checked, verdict: raw.verdict, ...(raw.gates && { gates: raw.gates }) }),
   };
   // GitHub caps a comment at 65,536 characters; the state line must survive.
   return `${out.join('\n').slice(0, 60_000)}\n${stateLine(state)}`;

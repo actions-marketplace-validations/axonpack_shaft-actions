@@ -88,6 +88,21 @@ test('/ask on a line: a reply under the first comment of its thread, at the line
   });
 });
 
+test("/dismiss and /undismiss in a finding's thread: no model, the reason after the command; anywhere else a notice", () => {
+  const says = (body: string, c: object = {}) => route('pull_request_review_comment', { ...reviewComment, comment: { ...reviewComment.comment, body, in_reply_to_id: 600, ...c } });
+  expect(says('/dismiss  the API checks this first\nthanks')).toEqual({
+    mode: 'dismiss',
+    number: 12,
+    actor: 'maintainer',
+    ask: { id: 601, text: '/dismiss  the API checks this first\nthanks', path: 'src/retry.ts', line: 42, thread: 600 },
+    undo: false,
+    reason: 'the API checks this first',
+  });
+  expect(says('/undismiss')).toMatchObject({ mode: 'dismiss', undo: true, reason: '' });
+  expect(says('/dismissal')).toMatchObject({ mode: 'skip' });
+  expect(route('issue_comment', { ...comment, comment: { ...comment.comment, body: '/dismiss no' } })).toMatchObject({ mode: 'skip', code: 'not_a_finding' });
+});
+
 test('a comment without the mention, an edit, or a bot comment exits quietly', () => {
   expect(quiet(route('issue_comment', { ...comment, comment: { ...comment.comment, body: 'thanks!' } }))).toBe(true);
   expect(quiet(route('issue_comment', { ...comment, action: 'edited' }))).toBe(true);
@@ -164,6 +179,15 @@ test('a bare /fix fixes the last review; anything else after it, or /axonshaft, 
   const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
   for (const body of ['/fix', '  /fix  \n', '\n/fix\n']) expect(route('issue_comment', says(body)), body).toMatchObject({ mode: 'task', bare: true });
   for (const body of ['/fix the null check', 'Thanks.\n/fix', '/axonshaft']) expect(route('issue_comment', says(body)), body).toMatchObject({ mode: 'task', bare: false });
+});
+
+test('a follow-up command is a task that names it, and only on a pull request', () => {
+  const says = (body: string) => ({ ...comment, comment: { ...comment.comment, body } });
+  for (const c of ['tests', 'simplify', 'docstrings', 'resolve']) expect(route('issue_comment', says(`/${c}`)), c).toMatchObject({ mode: 'task', follow: c, bare: false });
+  expect(route('issue_comment', says('/fix it'))).not.toHaveProperty('follow');
+  expect(route('issue_comment', says('/testsuite'))).toMatchObject({ mode: 'skip' });
+  const onIssue = { ...says('/resolve'), issue: { ...comment.issue, pull_request: undefined } };
+  expect(route('issue_comment', onIssue)).toEqual({ mode: 'skip', reason: '/resolve works on a pull request, not an issue.', code: 'not_a_pull_request' });
 });
 
 test('a command inside a sentence, a quote, inline code or a code block, or a longer word, starts nothing', () => {

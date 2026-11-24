@@ -2,12 +2,16 @@ import * as core from '@actions/core';
 import type { ChangedFile } from '../utils/auto-pick.util';
 import type { Octokit } from '../types/octokit.type';
 import { GUIDE_FILES } from '../consts/settings.const';
+import { generatedGlobs } from '../utils/prompt.util';
 import { SUMMARY_MARKER } from '../utils/render.util';
+import { guardContext } from '../guardrails/classify.service';
 import { hasWriteAccess } from './route.service';
 
 export type Comment = {
   id: number;
   author: string;
+  /** The author's GitHub ID, for the guardrails. */
+  authorId?: number;
   /** Whether the author is inside the repo (`insider`), so the review reads the comment. */
   trusted: boolean;
   body: string;
@@ -22,8 +26,11 @@ export type Comment = {
 export type Context = {
   owner: string;
   repo: string;
-  /** `fork`: the head branch lives in another repo, or one that was deleted. `defaultBranch` is the base repo's. */
-  pr: { number: number; title: string; body: string; author: string; headSha: string; base: string; head: string; fork: boolean; defaultBranch: string };
+  /**
+   * `fork`: the head branch lives in another repo, or one that was deleted. `defaultBranch` is the base repo's.
+   * `conflicts`: GitHub says it can't merge into the base; unset while GitHub is still working it out.
+   */
+  pr: { number: number; title: string; body: string; author: string; authorId?: number; headSha: string; base: string; head: string; fork: boolean; defaultBranch: string; conflicts?: boolean };
   commits: string[];
   files: (ChangedFile & { status: string })[];
   /** Issue comments, without our own summary. */
@@ -33,11 +40,14 @@ export type Context = {
   summary?: Comment;
   /** The repo's guides (`GUIDE_FILES`) the base branch has, in that order. */
   guides: { path: string; text: string }[];
+  /** The globs the base branch's `.gitattributes` marks `linguist-generated`: their diffs stay out of the prompt. */
+  generated?: string[];
 };
 
 const toComment = (c: any, trusted: boolean): Comment => ({
   id: c.id,
   author: c.user?.login ?? 'ghost',
+  authorId: c.user?.id,
   trusted,
   body: c.body ?? '',
   html_url: c.html_url,
@@ -110,7 +120,7 @@ export async function collectContext(
   const comment = async (c: any) => toComment(c, await trusted(c));
   const comments = await Promise.all(issueComments.map(comment));
   const summary = comments.find((c) => c.author === bot && c.body.startsWith(SUMMARY_MARKER));
-  return {
+  const ctx: Context = {
     owner,
     repo,
     pr: {
@@ -118,11 +128,13 @@ export async function collectContext(
       title: pr.title,
       body: pr.body ?? '',
       author: pr.user.login,
+      authorId: pr.user.id,
       headSha: pr.head.sha,
       base: pr.base.ref,
       head: pr.head.ref,
       fork: pr.head.repo?.full_name !== pr.base.repo.full_name,
       defaultBranch: pr.base.repo.default_branch,
+      conflicts: pr.mergeable === false,
     },
     commits: commits.map((c) => c.commit.message),
     files: files.map((f) => ({ filename: f.filename, status: f.status, additions: f.additions, deletions: f.deletions, patch: f.patch })),
@@ -132,5 +144,9 @@ export async function collectContext(
     guides: (await Promise.all(GUIDE_FILES.map(async (path) => ({ path, text: await baseFile(octokit, owner, repo, pr.base.ref, path) })))).filter(
       (g): g is { path: string; text: string } => typeof g.text === 'string' && !!g.text.trim(),
     ),
+    // From the base branch, so a pull request can't mark its own files generated to hide them.
+    generated: generatedGlobs(await baseFile(octokit, owner, repo, pr.base.ref, '.gitattributes')),
   };
+  await guardContext({ ...ctx, comments: [...ctx.comments, ...ctx.reviewComments] }, bot);
+  return ctx;
 }

@@ -1,18 +1,23 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
-import type { PullRequest, ReviewEvent } from './route.service';
+import { guardrailEvents } from '../guardrails/classify.service';
+import type { Flagged } from '../guardrails/output.util';
+import type { FollowUp, PullRequest, ReviewEvent } from './route.service';
 
 /**
  * What `POST /v1/token` takes: the job the event routed to, for a pull request event which one, for
  * a review whether the PR comes from a fork, and the pull request when the payload has it.
- * `help` asks for the list of commands to post; the rest are a job kind.
+ * `help` asks for the list of commands to post, and `dismiss` or `undismiss` for a token to change a
+ * finding's state with; the rest are a job kind.
  */
 export type GrantRequest = {
-  job: 'review' | 'task' | 'reply' | 'help';
+  job: 'review' | 'task' | 'reply' | 'help' | 'dismiss' | 'undismiss';
   event?: ReviewEvent;
   fork?: boolean;
   pull_request?: PullRequest;
+  /** With `job: 'task'`, the follow-up command that asked for it. An older API ignores it and runs a plain Task. */
+  command?: FollowUp;
   /** The comment on a line of the diff that asked for the run, so the API can reply on its thread when it refuses it. An older API ignores it. */
   comment?: { id: number };
 };
@@ -35,6 +40,8 @@ export type Checklist = {
   exclude?: string[];
   prestep: string | null;
   prompt: string;
+  /** Its script's settings, as plain data (a size limit, globs). Older APIs send none, and each script keeps its own defaults. */
+  data?: Record<string, unknown>;
 };
 
 /**
@@ -64,10 +71,11 @@ export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
  * What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's
  * tokens. A fork's PR on a job set to ask a maintainer first also gets the `comment` to post, and the
  * GitHub token to post it with. `code` names why nothing runs (`paused`, `filtered`, `skip_label`, …), for
- * the notice to link to its docs; older APIs send none, or only `notice: 'spending_cap'`.
+ * the notice to link to its docs; older APIs send none, or only `notice: 'spending_cap'`. A `/dismiss`
+ * or `/undismiss` the API allows gets `dismiss: true` and the token to post with: no run, no model.
  */
 export type Grant =
-  | { run: false; reason: string; code?: string; notice?: string; comment?: string; github_token?: string }
+  | { run: false; reason: string; code?: string; notice?: string; comment?: string; github_token?: string; dismiss?: boolean }
   | {
       run: true;
       github_token: string;
@@ -84,6 +92,8 @@ export type Grant =
       latest_action?: LatestAction;
       /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
       missing_permissions?: MissingPermission[];
+      /** The users in this run (the actor, the pull request's author) with 1 or 2 active guardrail strikes. Older APIs don't send it. */
+      guardrail?: { flagged: Flagged[] };
     };
 
 /** A permission the AxonShaft app wants at `wanted` that the installation approved only at `granted`, or not at all. */
@@ -101,15 +111,20 @@ export type RunOutput = {
   comment_url: string;
   checks: { key: string; label: string; state: string }[];
   /** Each model session the run made, with the checklists it ran. Only when the job has checklists. */
-  passes?: { name: string; model: string; tokens: { input: number; output: number; cache_read: number; cache_write: number }; checklists: string[] }[];
+  passes?: { name: string; model: string; tokens: { input: number; output: number; cache_read: number; cache_write: number }; checklists: string[]; max_turns?: number }[];
   findings: { severity: string; check: string; file: string; line: number; end_line?: number; title: string; body: string; suggestion?: string; url?: string; inline: boolean }[];
   fixed: number;
+  /** The findings dismissed on the pull request, with who and why. Only when there are any. */
+  dismissed?: { severity: string; file: string; line: number; title: string; by: string; reason: string }[];
 };
 
 /** What `POST /v1/runs` takes: a finished review, reply or task, or a run that failed after it opened. */
 export type RunSummary = RunDone | ReplyDone | { error: { code: string; message: string }; duration_ms: number };
 /** A finished reply or task: no verdict or findings, and what it posted as `output`. */
-type ReplyDone = Pick<RunDone, 'model' | 'effort' | 'duration_ms' | 'tokens' | 'cost_usd'> & { output: { answer: string; comment_url: string } };
+type ReplyDone = Pick<RunDone, 'model' | 'effort' | 'duration_ms' | 'tokens' | 'cost_usd'> & {
+  /** `command` is the follow-up that ran, and `commit` the sha it pushed, when it pushed one. */
+  output: { answer: string; comment_url: string; command?: FollowUp; commit?: string };
+};
 type RunDone = {
   verdict: string;
   model: string;
@@ -201,10 +216,14 @@ export async function fetchPushToken(): Promise<PushGrant> {
   return grant;
 }
 
-/** Record the run on the dashboard. Best effort: a failure is logged and never fails the run. */
+/**
+ * Record the run on the dashboard, with this run's guardrail events (`guardrail`, only when there are
+ * any; an older API ignores it). Best effort: a failure is logged and never fails the run.
+ */
 export async function reportRun(summary: RunSummary): Promise<void> {
+  const guardrail = guardrailEvents();
   try {
-    const res = await post('/v1/runs', summary);
+    const res = await post('/v1/runs', { ...summary, ...(guardrail.length && { guardrail }) });
     if (!res.ok) throw new Error(`the API answered ${res.status}`);
   } catch (e) {
     core.warning(`Couldn't record the run on the Axon Shaft API: ${(e as Error).message}`);

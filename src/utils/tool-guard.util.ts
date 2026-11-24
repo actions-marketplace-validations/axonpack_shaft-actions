@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { SECRET_FILES } from '../guardrails/guardrail.const';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 /**
@@ -57,6 +58,8 @@ export function toolDenial(tool: string, input: Record<string, unknown>, cwd: st
   if (input.run_in_background) return 'Nothing runs in the background: run it in the foreground.';
   const outside = (p: unknown) => typeof p === 'string' && !insideCheckout(p, cwd);
   if (tool === 'Read' && (typeof input.file_path !== 'string' || outside(input.file_path))) return 'Only files in the checkout can be read.';
+  // ponytail: refused even when a task's request names the file; pass the request in if one ever needs it.
+  if (tool === 'Read' && SECRET_FILES.test(basename(input.file_path as string))) return "Files that hold credentials (.env, keys, .npmrc) aren't read.";
   if ((tool === 'Grep' || tool === 'Glob') && outside(input.path)) return 'Only the checkout can be searched.';
   if (tool === 'Glob' && typeof input.pattern === 'string' && (isAbsolute(input.pattern) || input.pattern.includes('..') || input.pattern.startsWith('~'))) {
     return 'Glob patterns stay inside the checkout.';

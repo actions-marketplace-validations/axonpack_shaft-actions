@@ -4,6 +4,8 @@ import { APP_BOT, DASHBOARD_URL } from './consts/api.const';
 import { stopAgents, type Tokens } from './services/agent.service';
 import { fetchGrant, reportRun } from './services/api.service';
 import { checkoutHead } from './services/checkout.service';
+import { dismissFinding } from './services/dismiss.service';
+import { ignoresOf } from './utils/dismiss.util';
 import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
@@ -13,6 +15,9 @@ import { step } from './services/step.service';
 import { runTask } from './services/task.service';
 import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util';
 import { redact, workflowEditUrl } from './utils/render.util';
+import { classifierTokens, configureGuardrails, guardrailEvents, guardTexts, ruleName } from './guardrails/classify.service';
+import { CANARY, SIZE_MAX } from './guardrails/guardrail.const';
+import { type Flagged, flaggedLines } from './guardrails/output.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
 function oneOf(name: string, allowed: string[], value: unknown): string {
@@ -27,10 +32,15 @@ function positive(name: string, value: unknown): number {
 }
 
 const globs = (v: unknown) => (Array.isArray(v) ? v.filter((g): g is string => typeof g === 'string') : []);
+/** The API's report of a repo config file it left out: its path and problems, as text only. */
+const repoConfigOf = (v: unknown) => {
+  const c = v as { path?: unknown; problems?: unknown } | undefined;
+  return typeof c?.path === 'string' ? { path: c.path, problems: globs(c.problems).slice(0, 5) } : undefined;
+};
 
 /** Set once the API has opened the run's row: a failure after that is reported to it, so the dashboard shows it. */
 let reportFailure: ((e: unknown) => Promise<void>) | undefined;
-/** The 👀 on the comment that started the run, swapped at the end for 🚀 when `done` is set, or 😕. */
+/** The 👀 on the comment that started the run, or on the pull request, swapped at the end for 🚀 when `done` is set, or 😕. */
 let reaction: Reaction | undefined;
 let done = false;
 
@@ -48,9 +58,26 @@ async function run(): Promise<void> {
       r.mode === 'review'
         ? { job: 'review', event: r.event, fork: r.fork, pull_request }
         : // A comment on a line of the diff: the API replies on its thread itself when it refuses the run.
-          { job: r.mode, pull_request, ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }) },
+          {
+            job: r.mode === 'dismiss' && r.undo ? 'undismiss' : r.mode,
+            ...(r.mode === 'task' && r.follow && { command: r.follow }),
+            pull_request,
+            ...(context.eventName === 'pull_request_review_comment' && 'ask' in r && { comment: { id: r.ask.id } }),
+          },
     ),
   );
+  // `/dismiss` and `/undismiss` run no model: the API sends only a token to change the finding's state with.
+  if (r.mode === 'dismiss' && !grant.run && grant.dismiss && typeof grant.github_token === 'string') {
+    const gh = getOctokit(grant.github_token);
+    if (!(await hasWriteAccess(gh, owner, repo, r.actor)))
+      return core.notice(noticeText(`${r.actor} has no write access, so nothing was dismissed. Only people with write access can use /dismiss and /undismiss.`, 'no_write_access'));
+    reaction = await reactStart(gh, context, dryRun);
+    const out = await step(r.undo ? 'Bring the finding back' : 'Dismiss the finding', () =>
+      dismissFinding({ octokit: gh, owner, repo, number: r.number, ask: r.ask, actor: r.actor, undo: r.undo, reason: r.reason, bot: APP_BOT, dryRun, secrets: [grant.github_token!] }),
+    );
+    done = out.done;
+    return out.done ? core.info(out.message) : core.notice(noticeText(out.message, 'not_a_finding'));
+  }
   if (!grant.run) {
     // The API's comment to post once: how to start a fork's review, or the list of commands for /help.
     if (typeof grant.github_token === 'string') {
@@ -64,7 +91,7 @@ async function run(): Promise<void> {
     }
     const code = grant.code ?? grant.notice;
     // The cap stops every run until an admin acts, so it gets a card in the job summary like a failure.
-    if (code === 'spending_cap') await writeSummary(failureMarkdown(new ShaftFailure(code, grant.reason)));
+    if (code === 'spending_cap' || code === 'user_blocked') await writeSummary(failureMarkdown(new ShaftFailure(code, grant.reason)));
     return core.notice(noticeText(grant.reason, code));
   }
   const octokit = getOctokit(grant.github_token);
@@ -79,20 +106,32 @@ async function run(): Promise<void> {
         ? `no review was started. Only people with write access can start one with ${REVIEW_COMMAND}`
         : r.mode === 'reply'
           ? "the question wasn't answered. Only people with write access can ask with /ask"
-          : 'nothing was changed. Only people with write access can start a change with /fix or /axonshaft';
+          : `nothing was changed. Only people with write access can start a change with ${r.mode === 'task' && r.follow ? `/${r.follow}` : '/fix or /axonshaft'}`;
     return core.notice(noticeText(`${r.actor} has no write access, so ${what}.`, 'no_write_access'));
   }
-  reaction = await reactStart(octokit, context, dryRun);
+  // A review no comment started gets its 👀 on the pull request, swapped like a comment's at the end.
+  reaction = await reactStart(octokit, context, dryRun, r.mode === 'review' ? r.number : undefined);
   // The project's own variables pass to the model's commands and the checks, so their values are
   // masked in the log and taken out of anything posted, like the tokens.
   const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
   for (const v of envValues) core.setSecret(v);
-  const secrets = [grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64'), ...envValues];
+  const secrets = [CANARY, grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64'), ...envValues];
   reportFailure = (e) =>
     reportRun({
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
       duration_ms: Date.now() - started,
     });
+  configureGuardrails({ claude: grant.claude_token, cwd, secrets });
+  const flagged = Array.isArray(grant.guardrail?.flagged) ? grant.guardrail.flagged : [];
+  // The commenter's own command: a harmful one never reaches the model, and strikes them.
+  const sender = context.payload.comment?.user ?? context.payload.sender;
+  const askerId = typeof sender?.id === 'number' ? sender.id : undefined;
+  if ((r.mode === 'task' || r.mode === 'reply') && (await guardTexts([{ text: r.ask.text, where: 'command', user: askerId ? { id: askerId, login: r.actor } : undefined }], { text: SIZE_MAX.command, line: SIZE_MAX.line }))[0]!.blocked) {
+    const why = 'A guardrail rule refused this command, so no model ran. An admin can see the rule on the dashboard.';
+    core.notice(noticeText(why, 'guardrail_blocked'));
+    await writeGuardrailSummary(flagged);
+    return reportRun({ error: { code: 'guardrail_blocked', message: why }, duration_ms: Date.now() - started });
+  }
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
   trackRun({ token: grant.github_token, owner, repo, runUrl, started, secrets });
   // On pull_request the checkout is the PR merged into its base; anywhere else it's the base branch.
@@ -124,7 +163,7 @@ async function run(): Promise<void> {
   // What the run used, for the dashboard; the cost only on an API key.
   const usage = (o: { tokens: Tokens; costUsd: number }) => ({
     duration_ms: Date.now() - started,
-    tokens: o.tokens,
+    tokens: addTokens(o.tokens, classifierTokens()),
     ...(grant.claude_token.kind === 'api_key' ? { cost_usd: o.costUsd } : {}),
   });
 
@@ -133,11 +172,15 @@ async function run(): Promise<void> {
       ...common,
       ask: r.ask,
       asker: r.actor,
+      askerId,
       bare: r.bare,
+      follow: r.follow,
       template: job.prompt.template,
       pushMode: String(settings.pushMode),
+      githubToken: grant.github_token,
       repoUrl: `${context.serverUrl}/${owner}/${repo}`,
     });
+    await writeGuardrailSummary(flagged);
     if (!('refused' in out)) {
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
@@ -146,7 +189,8 @@ async function run(): Promise<void> {
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === 'reply') {
-    const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, template: job.prompt.template });
+    await writeGuardrailSummary(flagged);
+    const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, askerId, template: job.prompt.template });
     done = true;
     return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
   }
@@ -161,8 +205,13 @@ async function run(): Promise<void> {
     latestAction: grant.latest_action,
     missingPermissions: missing,
     advisories: settings.advisories === true,
+    ignore: ignoresOf(settings.ignore),
+    repoConfig: repoConfigOf(settings.repoConfig),
+    commands: globs(settings.commands),
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
+    flagged,
   });
+  await writeGuardrailSummary(flagged);
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
@@ -175,6 +224,14 @@ async function fail(e: unknown): Promise<void> {
   core.setFailed(e instanceof Error ? e.message : String(e));
   await reportFailure?.(e);
   if (e instanceof ShaftFailure) await writeSummary(failureMarkdown(e));
+}
+
+const addTokens = (a: Tokens, b: Tokens): Tokens => ({ input: a.input + b.input, output: a.output + b.output, cache_read: a.cache_read + b.cache_read, cache_write: a.cache_write + b.cache_write });
+
+/** The guardrail lines for people with strikes, in the job summary. */
+async function writeGuardrailSummary(flagged: Flagged[]): Promise<void> {
+  const lines = flaggedLines(flagged, guardrailEvents(), ruleName);
+  if (lines.length) await writeSummary(lines.join('\n\n'));
 }
 
 function writeSummary(markdown: string): Promise<unknown> {
