@@ -1,8 +1,8 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
-import { injectionEvents } from '../injection/classify.service';
-import type { Flagged } from '../injection/output.util';
+import { abuseEvents } from '../abuse/classify.service';
+import type { Flagged } from '../abuse/output.util';
 import type { FollowUp, PullRequest, ReviewEvent } from './route.service';
 
 /**
@@ -93,13 +93,13 @@ export type Grant =
       /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
       missing_permissions?: MissingPermission[];
       /**
-       * The users in this run (the actor, the pull request's author) with 1 or 2 active prompt injection strikes,
+       * The users in this run (the actor, the pull request's author) with 1 or 2 active abuse strikes,
        * and `rules`, extra input rules (regex strings) the action adds to its own. Older APIs send neither.
        */
-      injection?: { flagged: Flagged[]; rules?: unknown };
+      abuse?: { flagged: Flagged[]; rules?: unknown };
       /** The project's guardrails, org rules then project rules. Older APIs don't send them. */
       guardrails?: unknown;
-      /** The old name of `injection`, which an API from before the rename sends instead. */
+      /** The old name of `abuse`, which an API from before the rename sends instead. */
       guardrail?: { flagged: Flagged[]; rules?: unknown };
     };
 
@@ -224,14 +224,14 @@ export async function fetchPushToken(): Promise<PushGrant> {
 }
 
 /**
- * Record the run on the dashboard, with this run's injection events (`injection`, and the same under the old name
+ * Record the run on the dashboard, with this run's abuse events (`abuse`, and the same under the old name
  * `guardrail`, only when there are any). Best effort: a failure is logged and never fails the run.
  */
 export async function reportRun(summary: RunSummary): Promise<void> {
-  const injection = injectionEvents();
+  const abuse = abuseEvents();
   try {
-    // ponytail: `guardrail` duplicates `injection` for an API from before the rename; drop it once every deployed API reads `injection`.
-    const res = await post('/v1/runs', { ...summary, ...(injection.length && { injection, guardrail: injection }) });
+    // ponytail: `guardrail` duplicates `abuse` for an API from before the rename; drop it once every deployed API reads `abuse`.
+    const res = await post('/v1/runs', { ...summary, ...(abuse.length && { abuse, guardrail: abuse }) });
     if (!res.ok) throw new Error(`the API answered ${res.status}`);
   } catch (e) {
     core.warning(`Couldn't record the run on the Axon Shaft API: ${(e as Error).message}`);

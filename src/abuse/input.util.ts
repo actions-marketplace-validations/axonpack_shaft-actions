@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { CODE_GROUPS, RULES, type Rule, THRESHOLDS } from './injection.const';
+import { CODE_GROUPS, RULES, type Rule, THRESHOLDS } from './abuse.const';
 
 export type Verdict = 'clean' | 'suspicious' | 'harmful';
 export type Scan = { score: number; hits: string[]; verdict: Verdict };
@@ -57,7 +57,7 @@ let extra: Rule[] = [];
 export const serverRules = (): Rule[] => extra;
 
 /**
- * Take the grant's extra rules (`injection.rules`), which are untrusted data. Each needs an `id`,
+ * Take the grant's extra rules (`abuse.rules`), which are untrusted data. Each needs an `id`,
  * `name`, known `group`, a `weight` from 1 to `HARMFUL` and a `pattern` that compiles with flags from
  * `imsu` and has no nested quantifier; any other is skipped with a warning. Built-in IDs can't be
  * reused, so the server can only add checks, never replace or weaken one. Nothing sent (an older
@@ -69,7 +69,7 @@ export function setServerRules(raw: unknown) {
   const taken = new Set(RULES.map((r) => r.id));
   for (const r of raw.slice(0, SERVER_RULES_MAX.count)) {
     const rule = parseRule(r, taken);
-    if (typeof rule === 'string') core.warning(`Injection protection: skipped a rule from the API (${rule}).`);
+    if (typeof rule === 'string') core.warning(`Abuse protection: skipped a rule from the API (${rule}).`);
     else {
       taken.add(rule.id);
       extra.push(rule);

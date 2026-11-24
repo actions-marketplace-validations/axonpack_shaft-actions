@@ -1,8 +1,8 @@
 import * as core from '@actions/core';
-import { datamark } from '../injection/input.util';
+import { datamark } from '../abuse/input.util';
 import { guardrails, matchesAny } from '../utils/guardrails.util';
-import { injectionEvents, ruleName } from '../injection/classify.service';
-import { type Flagged, flaggedLines } from '../injection/output.util';
+import { abuseEvents, ruleName } from '../abuse/classify.service';
+import { type Flagged, flaggedLines } from '../abuse/output.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -94,7 +94,7 @@ export type ReviewOptions = {
   ignore?: Ignore[];
   /** Why the API left the repo's config file out, for a warning in the summary. */
   repoConfig?: { path: string; problems: string[] };
-  /** The users the API says have active strikes, for the summary's injection protection lines. */
+  /** The users the API says have active strikes, for the summary's Abuse protection lines. */
   flagged?: Flagged[];
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
@@ -554,7 +554,7 @@ async function postReview(
     ignored: unguarded.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     guardrailed: all.length - unguarded.length,
     repoConfig: o.repoConfig,
-    flagged: flaggedLines(o.flagged ?? [], injectionEvents(), ruleName),
+    flagged: flaggedLines(o.flagged ?? [], abuseEvents(), ruleName),
     // `/resolve` only when GitHub says the pull request has conflicts.
     commands: o.commands?.filter((c) => c !== 'resolve' || ctx.pr.conflicts),
     ...(models && {

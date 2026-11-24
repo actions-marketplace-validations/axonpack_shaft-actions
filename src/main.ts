@@ -16,11 +16,11 @@ import { step } from './services/step.service';
 import { runTask } from './services/task.service';
 import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util';
 import { redact, workflowEditUrl } from './utils/render.util';
-import { classifierTokens, configureInjection, injectionEvents, guardTexts, ruleName } from './injection/classify.service';
-import { CANARY, SIZE_MAX } from './injection/injection.const';
-import { setServerRules } from './injection/input.util';
+import { classifierTokens, configureAbuse, abuseEvents, guardTexts, ruleName } from './abuse/classify.service';
+import { CANARY, SIZE_MAX } from './abuse/abuse.const';
+import { setServerRules } from './abuse/input.util';
 import { setGuardrails } from './utils/guardrails.util';
-import { type Flagged, flaggedLines } from './injection/output.util';
+import { type Flagged, flaggedLines } from './abuse/output.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
 function oneOf(name: string, allowed: string[], value: unknown): string {
@@ -124,22 +124,22 @@ async function run(): Promise<void> {
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
       duration_ms: Date.now() - started,
     });
-  configureInjection({ claude: grant.claude_token, cwd, secrets });
+  configureAbuse({ claude: grant.claude_token, cwd, secrets });
   // The API's extra input rules, added to the built-in ones (never in place of them).
-  // `guardrail` is the field's name before the rename to injection, for an API that hasn't deployed it.
-  const injection = grant.injection ?? grant.guardrail;
-  setServerRules(injection?.rules);
+  // `guardrail` is the field's name before the rename to abuse, for an API that hasn't deployed it.
+  const abuse = grant.abuse ?? grant.guardrail;
+  setServerRules(abuse?.rules);
   // The project's guardrails (org rules, then project rules): limits the tool guard, the push check and the prompt add.
   setGuardrails(grant.guardrails);
-  const flagged = Array.isArray(injection?.flagged) ? injection.flagged : [];
+  const flagged = Array.isArray(abuse?.flagged) ? abuse.flagged : [];
   // The commenter's own command: a harmful one never reaches the model, and strikes them.
   const sender = context.payload.comment?.user ?? context.payload.sender;
   const askerId = typeof sender?.id === 'number' ? sender.id : undefined;
   if ((r.mode === 'task' || r.mode === 'reply') && (await guardTexts([{ text: r.ask.text, where: 'command', user: askerId ? { id: askerId, login: r.actor } : undefined }], { text: SIZE_MAX.command, line: SIZE_MAX.line }))[0]!.blocked) {
-    const why = 'A prompt injection rule refused this command, so no model ran. An admin can see the rule on the dashboard.';
-    core.notice(noticeText(why, 'injection_blocked'));
-    await writeInjectionSummary(flagged);
-    return reportRun({ error: { code: 'injection_blocked', message: why }, duration_ms: Date.now() - started });
+    const why = 'An abuse rule refused this command, so no model ran. An admin can see the rule on the dashboard.';
+    core.notice(noticeText(why, 'abuse_blocked'));
+    await writeAbuseSummary(flagged);
+    return reportRun({ error: { code: 'abuse_blocked', message: why }, duration_ms: Date.now() - started });
   }
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
   trackRun({ token: grant.github_token, owner, repo, runUrl, started, secrets });
@@ -189,7 +189,7 @@ async function run(): Promise<void> {
       githubToken: grant.github_token,
       repoUrl: `${context.serverUrl}/${owner}/${repo}`,
     });
-    await writeInjectionSummary(flagged);
+    await writeAbuseSummary(flagged);
     if (!('refused' in out)) {
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
@@ -198,7 +198,7 @@ async function run(): Promise<void> {
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === 'reply') {
-    await writeInjectionSummary(flagged);
+    await writeAbuseSummary(flagged);
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, askerId, template: job.prompt.template });
     done = true;
     return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
@@ -222,7 +222,7 @@ async function run(): Promise<void> {
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
     flagged,
   });
-  await writeInjectionSummary(flagged);
+  await writeAbuseSummary(flagged);
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
@@ -239,9 +239,9 @@ async function fail(e: unknown): Promise<void> {
 
 const addTokens = (a: Tokens, b: Tokens): Tokens => ({ input: a.input + b.input, output: a.output + b.output, cache_read: a.cache_read + b.cache_read, cache_write: a.cache_write + b.cache_write });
 
-/** The injection protection lines for people with strikes, in the job summary. */
-async function writeInjectionSummary(flagged: Flagged[]): Promise<void> {
-  const lines = flaggedLines(flagged, injectionEvents(), ruleName);
+/** The Abuse protection lines for people with strikes, in the job summary. */
+async function writeAbuseSummary(flagged: Flagged[]): Promise<void> {
+  const lines = flaggedLines(flagged, abuseEvents(), ruleName);
   if (lines.length) await writeSummary(lines.join('\n\n'));
 }
 

@@ -281,7 +281,7 @@ export type Footer = {
   guardrailed?: number;
   /** The repo config file the API left out, and why. */
   repoConfig?: { path: string; problems: string[] };
-  /** The injection protection lines for people with strikes (`flaggedLines`). */
+  /** The Abuse protection lines for people with strikes (`flaggedLines`). */
   flagged?: string[];
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];

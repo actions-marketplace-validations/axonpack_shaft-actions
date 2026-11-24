@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { SECRET_FILES } from '../injection/injection.const';
+import { SECRET_FILES } from '../abuse/abuse.const';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { guardrails, matchesAny, searchReaches } from './guardrails.util';
 

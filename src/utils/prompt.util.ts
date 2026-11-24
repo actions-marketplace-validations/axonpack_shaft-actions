@@ -1,4 +1,4 @@
-import { datamark } from '../injection/input.util';
+import { datamark } from '../abuse/input.util';
 import type { Comment } from '../services/context.service';
 import { type ChangedFile, LOCKFILE, matches } from './auto-pick.util';
 

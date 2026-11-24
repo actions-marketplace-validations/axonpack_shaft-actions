@@ -8,8 +8,8 @@ import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TY
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
 import { guardrailPrompt } from '../utils/guardrails.util';
-import { CANARY, SYSTEM_PROMPT } from '../injection/injection.const';
-import { scanOutput } from '../injection/output.util';
+import { CANARY, SYSTEM_PROMPT } from '../abuse/abuse.const';
+import { scanOutput } from '../abuse/output.util';
 import { sandboxPrefix } from './sandbox.service';
 import { claudeBinary, claudeConfigDir } from './claude-binary.service';
 
@@ -267,10 +267,10 @@ export function bashFailure(command: string, content: unknown): string {
   return line.length > 300 ? `${line.slice(0, 299)}…` : line;
 }
 
-/** The reply's schema with `injection_seen`, the asks the model noticed and ignored, as a warning only. */
-const withInjectionSeen = (schema: Record<string, unknown>) => ({
+/** The reply's schema with `abuse_seen`, the asks the model noticed and ignored, as a warning only. */
+const withAbuseSeen = (schema: Record<string, unknown>) => ({
   ...schema,
-  properties: { ...(schema.properties as object), injection_seen: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 5 } },
+  properties: { ...(schema.properties as object), abuse_seen: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 5 } },
 });
 
 async function once(prompt: string, o: AgentOptions, schema: Record<string, unknown>, controller: AbortController): Promise<SDKResultMessage | undefined> {
@@ -300,9 +300,9 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       // settings only from the folder the action wrote for this run (claudeConfigDir), outside the checkout.
       settingSources: claudeConfigDir() ? ['user'] : [],
       persistSession: false,
-      // Spotlighting and the canary (`SYSTEM_PROMPT`); the reply may list asks it ignored in `injection_seen`.
+      // Spotlighting and the canary (`SYSTEM_PROMPT`); the reply may list asks it ignored in `abuse_seen`.
       systemPrompt: SYSTEM_PROMPT + guardrailPrompt(),
-      outputFormat: { type: 'json_schema', schema: withInjectionSeen(schema) },
+      outputFormat: { type: 'json_schema', schema: withAbuseSeen(schema) },
       agents: deep ? deepAgents(o.subagentModel!, o.effort as EffortLevel, o.passes!) : undefined,
       abortController: controller,
       env: cliEnv(o.claude, o.env),
@@ -353,9 +353,9 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
       }
       if (result?.subtype === 'success') {
         const out = scanOutput(result.structured_output as Record<string, unknown> | undefined, CANARY);
-        if (out.leak) throw new ShaftFailure('injection_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
-        if (out.hits.length) core.warning(`Injection protection: took ${out.hits.join(', ')} out of the ${format.name} before posting.`);
-        const { injection_seen: seen, ...rest } = out.reply ?? {};
+        if (out.leak) throw new ShaftFailure('abuse_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
+        if (out.hits.length) core.warning(`Abuse protection: took ${out.hits.join(', ')} out of the ${format.name} before posting.`);
+        const { abuse_seen: seen, ...rest } = out.reply ?? {};
         // Only a count: the job log is public, and the model can be steered into accusing anyone.
         if (Array.isArray(seen) && seen.length) core.warning(`The model saw ${seen.length} instruction${seen.length === 1 ? '' : 's'} aimed at it in the pull request's text and ignored ${seen.length === 1 ? 'it' : 'them'}.`);
         const reply = format.parse(rest);

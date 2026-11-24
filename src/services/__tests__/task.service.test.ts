@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeEach, expect, test, vi } from 'vitest';
-import { injectionEvents } from '../../injection/classify.service';
+import { abuseEvents } from '../../abuse/classify.service';
 import { stateLine } from '../../utils/render.util';
 
 vi.doMock('@actions/core', () => ({ info: () => {}, warning: () => {}, setSecret: () => {}, group: (_name: string, fn: () => Promise<unknown>) => fn() }));
@@ -492,8 +492,8 @@ test('a change that pipes a download into a shell is never pushed, even when ask
   const before = remote('pr');
   await runTask(options({ askerId: 42, ask: { id: 3, text: '/fix add setup.sh' } }));
   expect(remote('pr')).toBe(before);
-  expect(fake.posted[0]).toContain('Nothing was pushed: a prompt injection rule refused the change (pipes a download into a shell in `setup.sh`).');
-  expect(injectionEvents()).toMatchObject([{ user_id: 42, severity: 'strike', where: 'push', rule: 'push.pipe_shell' }]);
+  expect(fake.posted[0]).toContain('Nothing was pushed: an abuse rule refused the change (pipes a download into a shell in `setup.sh`).');
+  expect(abuseEvents()).toMatchObject([{ user_id: 42, severity: 'strike', where: 'push', rule: 'push.pipe_shell' }]);
 });
 
 test('overlapping suggestions are neither applied: their findings go to the model, and the reply says why', async () => {

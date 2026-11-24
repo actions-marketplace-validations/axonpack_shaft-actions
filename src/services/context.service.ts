@@ -4,13 +4,13 @@ import type { Octokit } from '../types/octokit.type';
 import { GUIDE_FILES } from '../consts/settings.const';
 import { generatedGlobs } from '../utils/prompt.util';
 import { SUMMARY_MARKER } from '../utils/render.util';
-import { guardContext } from '../injection/classify.service';
+import { guardContext } from '../abuse/classify.service';
 import { hasWriteAccess } from './route.service';
 
 export type Comment = {
   id: number;
   author: string;
-  /** The author's GitHub ID, for injection protection. */
+  /** The author's GitHub ID, for Abuse protection. */
   authorId?: number;
   /** Whether the author is inside the repo (`insider`), so the review reads the comment. */
   trusted: boolean;
