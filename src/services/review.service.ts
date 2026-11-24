@@ -1,7 +1,8 @@
 import * as core from '@actions/core';
-import { datamark } from '../guardrails/input.util';
-import { guardrailEvents, ruleName } from '../guardrails/classify.service';
-import { type Flagged, flaggedLines } from '../guardrails/output.util';
+import { datamark } from '../abuse/input.util';
+import { guardrails, matchesAny } from '../utils/guardrails.util';
+import { abuseEvents, ruleName } from '../abuse/classify.service';
+import { type Flagged, flaggedLines } from '../abuse/output.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -93,7 +94,7 @@ export type ReviewOptions = {
   ignore?: Ignore[];
   /** Why the API left the repo's config file out, for a warning in the summary. */
   repoConfig?: { path: string; problems: string[] };
-  /** The users the API says have active strikes, for the summary's guardrail lines. */
+  /** The users the API says have active strikes, for the summary's Abuse protection lines. */
   flagged?: Flagged[];
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
@@ -496,7 +497,10 @@ async function postReview(
   // A carried finding goes through `place` again, so it keeps its fingerprint and only its first inline comment.
   const kept = (prior?.findings ?? []).filter((f) => carried.includes(f.step ?? '')).map((f): Finding => ({ ...f, step: f.step!, body: 'Found by an earlier review. Its checklist had nothing new to check on this push.' }));
   const all = place([...review.findings, ...kept], files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
-  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
+  // A finding on a file the project's guardrails cover is never posted, nor its suggestion.
+  const { no_edit, no_read } = guardrails();
+  const unguarded = all.filter((p) => !matchesAny(p.file, [...no_edit, ...no_read]));
+  const placed = unguarded.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length) review.verdict = verdictAfter(review.verdict, placed) as Review['verdict'];
   // A carried finding raises the verdict as a script's does.
   const old = placed.filter((p) => carried.includes(p.step));
@@ -547,9 +551,10 @@ async function postReview(
     checklists: planned,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
-    ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    ignored: unguarded.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    guardrailed: all.length - unguarded.length,
     repoConfig: o.repoConfig,
-    flagged: flaggedLines(o.flagged ?? [], guardrailEvents(), ruleName),
+    flagged: flaggedLines(o.flagged ?? [], abuseEvents(), ruleName),
     // `/resolve` only when GitHub says the pull request has conflicts.
     commands: o.commands?.filter((c) => c !== 'resolve' || ctx.pr.conflicts),
     ...(models && {

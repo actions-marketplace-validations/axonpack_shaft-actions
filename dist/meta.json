@@ -47,6 +47,10 @@
       "kind": "failure",
       "message": "The Claude Code binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run."
     },
+    "mcp_unavailable": {
+      "kind": "failure",
+      "message": "The action couldn't get its MCP token from the Axon Shaft API, or Axon Shaft's MCP server didn't answer `tools/list`, so the review didn't start."
+    },
     "push_failed": {
       "kind": "both",
       "message": "A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out, the change touched `.github/`, or GitHub refused the push."
@@ -91,17 +95,17 @@
       "kind": "notice",
       "message": "`/dismiss` or `/undismiss` wasn't a reply in the thread of a finding from the last review, or the finding was already as asked, so nothing changed."
     },
-    "guardrail_blocked": {
+    "abuse_blocked": {
       "kind": "notice",
-      "message": "A guardrail rule refused a command or a push: the request or the change looked like an attempt to misuse Axon Shaft, such as asking for its secrets or piping a download into a shell."
+      "message": "An abuse rule refused a command or a push: the request or the change looked like an attempt to misuse Axon Shaft, such as asking for its secrets or piping a download into a shell."
     },
-    "guardrail_leak": {
+    "abuse_leak": {
       "kind": "failure",
       "message": "The model's reply repeated Axon Shaft's system prompt or its canary line, so nothing was posted."
     },
     "user_blocked": {
       "kind": "notice",
-      "message": "The person who opened the pull request or wrote the command has 3 active guardrail strikes on this account, so Axon Shaft doesn't run for them. An admin can clear the strikes on the dashboard."
+      "message": "The person who opened the pull request or wrote the command has 3 active abuse strikes on this account, so Axon Shaft doesn't run for them. An admin can clear the strikes on the dashboard."
     },
     "no_write_access": {
       "kind": "notice",

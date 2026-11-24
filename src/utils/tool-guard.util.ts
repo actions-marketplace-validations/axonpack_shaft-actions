@@ -1,7 +1,8 @@
 import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { SECRET_FILES } from '../guardrails/guardrail.const';
+import { SECRET_FILES } from '../abuse/abuse.const';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { guardrails, matchesAny, searchReaches } from './guardrails.util';
 
 /**
  * The path the file system will open: symlinks followed, so a link added by the PR can't lead out
@@ -31,6 +32,36 @@ export function insideCheckout(path: string, cwd: string): boolean {
   return under(target, root) && !DENIED.some((d) => under(target, real(d)));
 }
 
+/** `path` relative to the checkout's root, symlinks followed, as `insideCheckout` resolves it. */
+function repoPath(path: string, cwd: string): string {
+  const root = real(resolve(cwd));
+  return relative(root, real(resolve(root, path))).split(sep).join('/');
+}
+
+/**
+ * Why the project's guardrails refuse this call, or undefined: `no_read` globs refuse a Read of a
+ * matching file, a Grep that could reach one, a Glob inside one and a git command naming one;
+ * `no_edit` globs refuse an edit of a matching file. They only add refusals to `toolDenial`'s.
+ */
+function guardrailDenial(tool: string, input: Record<string, unknown>, cwd: string): string | undefined {
+  const { no_read, no_edit } = guardrails();
+  const path = input.file_path ?? input.notebook_path;
+  if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tool) && typeof path === 'string' && matchesAny(repoPath(path, cwd), no_edit))
+    return `The project's guardrails say ${repoPath(path, cwd)} is never edited.`;
+  if (!no_read.length) return;
+  if (tool === 'Read' && typeof path === 'string' && matchesAny(repoPath(path, cwd), no_read)) return `The project's guardrails say ${repoPath(path, cwd)} is never read.`;
+  const dir = typeof input.path === 'string' ? repoPath(input.path, cwd) : '';
+  // ponytail: a Grep is refused when its folder could hold a never-read file, since its results can't be filtered here; narrow `path` to search.
+  if (tool === 'Grep' && searchReaches(dir, no_read)) return `The project's guardrails say some files are never read (${no_read.join(', ')}), so search a folder that can't hold them.`;
+  if (tool === 'Glob' && dir && matchesAny(dir, no_read)) return `The project's guardrails say ${dir} is never read.`;
+  if (tool === 'Bash' && typeof input.command === 'string') {
+    // ponytail: a git command naming no path (a whole diff) still shows those files; the review's diff already holds them.
+    const named = input.command.trim().split(/\s+/).slice(2).map((a) => a.replace(/^['"]|['"]$/g, '').replace(/^[^:]*:/, '')).filter((a) => a && !a.startsWith('-'));
+    const hit = named.find((a) => matchesAny(repoPath(a, cwd), no_read));
+    if (hit) return `The project's guardrails say ${hit} is never read.`;
+  }
+}
+
 /** git options that read files outside the repo or write a file. */
 const GIT_DENIED = /^--(no-in|ou|ext)/;
 
@@ -56,6 +87,8 @@ export const isRepoCommand = (command: string, commands: string[]): boolean =>
 export function toolDenial(tool: string, input: Record<string, unknown>, cwd: string, commands?: string[]): string | undefined {
   // A background command would keep repo code running while the file tools act, racing their checks.
   if (input.run_in_background) return 'Nothing runs in the background: run it in the foreground.';
+  const guarded = guardrailDenial(tool, input, cwd);
+  if (guarded) return guarded;
   const outside = (p: unknown) => typeof p === 'string' && !insideCheckout(p, cwd);
   if (tool === 'Read' && (typeof input.file_path !== 'string' || outside(input.file_path))) return 'Only files in the checkout can be read.';
   // ponytail: refused even when a task's request names the file; pass the request in if one ever needs it.

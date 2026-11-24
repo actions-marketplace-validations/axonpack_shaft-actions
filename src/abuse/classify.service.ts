@@ -3,28 +3,28 @@ import { type AgentResult, type ReplyFormat, runAgent, type Tokens } from '../se
 import type { ClaudeToken } from '../services/api.service';
 import { dataBlock } from '../utils/prompt.util';
 import { redact } from '../utils/render.util';
-import { CLASSIFY_MAX, PUSH_RULES, removedMarker, RULES } from './guardrail.const';
+import { CLASSIFY_MAX, PUSH_RULES, removedMarker, RULES } from './abuse.const';
 import { capText, datamark, scanInput, serverRules, withoutQuotes } from './input.util';
 
 /** Who wrote a text: their GitHub ID, which never changes, and their login now. */
 export type Author = { id: number; login: string };
 /** Where a guarded text came from, as the API's report names it. */
 export type Where = 'pr_body' | 'command' | 'diff' | 'output' | 'push';
-/** One guardrail event, as `POST /v1/runs` takes it. */
-export type GuardrailEvent = { user_id: number; login: string; rule: string; severity: 'warning' | 'strike'; where: Where; excerpt: string };
+/** One abuse event, as `POST /v1/runs` takes it. */
+export type AbuseEvent = { user_id: number; login: string; rule: string; severity: 'warning' | 'strike'; where: Where; excerpt: string };
 
 let setup: { claude: ClaudeToken; cwd: string; secrets: string[] } | undefined;
 let classified = false;
-const events: GuardrailEvent[] = [];
+const events: AbuseEvent[] = [];
 const spent: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 
 /** What the classifier needs, set once the grant is in. Without it (`/dismiss`, tests) suspicious text is a warning and nothing is classified. */
-export const configureGuardrails = (s: typeof setup) => {
+export const configureAbuse = (s: typeof setup) => {
   setup = s;
 };
 
 /** This run's events for the report. */
-export const guardrailEvents = (): GuardrailEvent[] => [...events];
+export const abuseEvents = (): AbuseEvent[] => [...events];
 /** What the classifier used, for the run's usage. */
 export const classifierTokens = (): Tokens => ({ ...spent });
 
@@ -38,30 +38,30 @@ export const ruleName = (id: string) => {
  * Record an event, at most one strike per user per run: a later strike for the same user is kept as
  * a warning. The excerpt is redacted and at most 200 characters.
  */
-export function recordEvent(user: Author | undefined, e: Omit<GuardrailEvent, 'user_id' | 'login'>): void {
+export function recordEvent(user: Author | undefined, e: Omit<AbuseEvent, 'user_id' | 'login'>): void {
   if (!user?.id) return;
   const struck = events.some((x) => x.user_id === user.id && x.severity === 'strike');
   const excerpt = redact(e.excerpt, setup?.secrets ?? []).replace(/\s+/g, ' ').slice(0, 200);
   events.push({ user_id: user.id, login: user.login, ...e, severity: struck ? 'warning' : e.severity, excerpt });
-  core.warning(`Guardrail: ${e.severity === 'strike' && !struck ? 'strike' : 'warning'} for @${user.login} (${ruleName(e.rule)}, in the ${e.where.replace('_', ' ')}).`);
+  core.warning(`Abuse protection: ${e.severity === 'strike' && !struck ? 'strike' : 'warning'} for @${user.login} (${ruleName(e.rule)}, in the ${e.where.replace('_', ' ')}).`);
 }
 
-type Verdict = { verdict: 'benign' | 'injection'; reason: string };
+type Verdict = { verdict: 'benign' | 'abuse'; reason: string };
 const FORMAT: ReplyFormat<Verdict> = {
-  name: 'guardrail check',
-  schema: { type: 'object', additionalProperties: false, required: ['verdict', 'reason'], properties: { verdict: { enum: ['benign', 'injection'] }, reason: { type: 'string', maxLength: 120 } } },
+  name: 'Abuse check',
+  schema: { type: 'object', additionalProperties: false, required: ['verdict', 'reason'], properties: { verdict: { enum: ['benign', 'abuse'] }, reason: { type: 'string', maxLength: 120 } } },
   parse: (x) => {
     const v = x as Partial<Verdict> | undefined;
-    return v && (v.verdict === 'benign' || v.verdict === 'injection') && typeof v.reason === 'string' ? (v as Verdict) : undefined;
+    return v && (v.verdict === 'benign' || v.verdict === 'abuse') && typeof v.reason === 'string' ? (v as Verdict) : undefined;
   },
 };
 
 /**
  * One Haiku call with no tools on the joined suspicious texts: does any try to instruct an AI agent?
- * At most one per run. Anything but a clear `injection` (an error, a broken reply, no setup) is benign,
+ * At most one per run. Anything but a clear `abuse` (an error, a broken reply, no setup) is benign,
  * since the hard limits hold either way.
  */
-export async function classify(text: string): Promise<'benign' | 'injection'> {
+export async function classify(text: string): Promise<'benign' | 'abuse'> {
   if (!setup || classified) return 'benign';
   classified = true;
   const prompt = [
@@ -77,7 +77,7 @@ export async function classify(text: string): Promise<'benign' | 'injection'> {
   } catch (e) {
     const used = (e as { spent?: Omit<AgentResult<Verdict>, 'reply'> }).spent?.tokens;
     if (used) for (const k of Object.keys(spent) as (keyof Tokens)[]) spent[k] += used[k];
-    core.warning(`The guardrail check didn't answer, so the suspicious text counts as benign: ${(e as Error).message}`);
+    core.warning(`The abuse check didn't answer, so the suspicious text counts as benign: ${(e as Error).message}`);
     return 'benign';
   }
 }
@@ -101,14 +101,14 @@ export async function guardTexts(pieces: Piece[], max = { text: 20_000, line: 2_
   const verdict = suspicious.length ? await classify(suspicious.map((p) => p.text).join('\n---\n')) : 'benign';
   return scanned.map((p) => {
     const rule = p.scan.hits[0] ?? '';
-    const block = p.scan.verdict === 'harmful' || (p.scan.verdict === 'suspicious' && verdict === 'injection');
-    if (p.scan.verdict !== 'clean') recordEvent(p.user, { rule: p.scan.verdict === 'suspicious' && verdict === 'injection' ? `${rule}+classifier` : rule, severity: block ? 'strike' : 'warning', where: p.where, excerpt: p.text });
+    const block = p.scan.verdict === 'harmful' || (p.scan.verdict === 'suspicious' && verdict === 'abuse');
+    if (p.scan.verdict !== 'clean') recordEvent(p.user, { rule: p.scan.verdict === 'suspicious' && verdict === 'abuse' ? `${rule}+classifier` : rule, severity: block ? 'strike' : 'warning', where: p.where, excerpt: p.text });
     return block ? { text: removedMarker(ruleName(rule)), blocked: true } : { text: p.text, blocked: false };
   });
 }
 
 /** Forget this run's state: for tests. */
-export function resetGuardrails(): void {
+export function resetAbuse(): void {
   setup = undefined;
   classified = false;
   events.length = 0;

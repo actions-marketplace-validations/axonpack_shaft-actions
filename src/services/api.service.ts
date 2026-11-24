@@ -1,8 +1,8 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
-import { guardrailEvents } from '../guardrails/classify.service';
-import type { Flagged } from '../guardrails/output.util';
+import { abuseEvents } from '../abuse/classify.service';
+import type { Flagged } from '../abuse/output.util';
 import type { FollowUp, PullRequest, ReviewEvent } from './route.service';
 
 /**
@@ -93,9 +93,13 @@ export type Grant =
       /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
       missing_permissions?: MissingPermission[];
       /**
-       * The users in this run (the actor, the pull request's author) with 1 or 2 active guardrail strikes,
+       * The users in this run (the actor, the pull request's author) with 1 or 2 active abuse strikes,
        * and `rules`, extra input rules (regex strings) the action adds to its own. Older APIs send neither.
        */
+      abuse?: { flagged: Flagged[]; rules?: unknown };
+      /** The project's guardrails, org rules then project rules. Older APIs don't send them. */
+      guardrails?: unknown;
+      /** The old name of `abuse`, which an API from before the rename sends instead. */
       guardrail?: { flagged: Flagged[]; rules?: unknown };
     };
 
@@ -220,13 +224,14 @@ export async function fetchPushToken(): Promise<PushGrant> {
 }
 
 /**
- * Record the run on the dashboard, with this run's guardrail events (`guardrail`, only when there are
- * any; an older API ignores it). Best effort: a failure is logged and never fails the run.
+ * Record the run on the dashboard, with this run's abuse events (`abuse`, and the same under the old name
+ * `guardrail`, only when there are any). Best effort: a failure is logged and never fails the run.
  */
 export async function reportRun(summary: RunSummary): Promise<void> {
-  const guardrail = guardrailEvents();
+  const abuse = abuseEvents();
   try {
-    const res = await post('/v1/runs', { ...summary, ...(guardrail.length && { guardrail }) });
+    // ponytail: `guardrail` duplicates `abuse` for an API from before the rename; drop it once every deployed API reads `abuse`.
+    const res = await post('/v1/runs', { ...summary, ...(abuse.length && { abuse, guardrail: abuse }) });
     if (!res.ok) throw new Error(`the API answered ${res.status}`);
   } catch (e) {
     core.warning(`Couldn't record the run on the Axon Shaft API: ${(e as Error).message}`);

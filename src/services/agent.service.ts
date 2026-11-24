@@ -7,10 +7,11 @@ import { ShaftFailure } from '../utils/failure.util';
 import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
-import { CANARY, SYSTEM_PROMPT } from '../guardrails/guardrail.const';
-import { scanOutput } from '../guardrails/output.util';
+import { guardrailPrompt } from '../utils/guardrails.util';
+import { CANARY, SYSTEM_PROMPT } from '../abuse/abuse.const';
+import { scanOutput } from '../abuse/output.util';
 import { sandboxPrefix } from './sandbox.service';
-import { claudeBinary } from './claude-binary.service';
+import { claudeBinary, claudeConfigDir } from './claude-binary.service';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -190,6 +191,8 @@ export function cliEnv(claude: ClaudeToken, names: string[] = []): Record<string
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
     CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}`,
+    // Only with the action's own config folder; without it the CLI's default, as before.
+    ...(claudeConfigDir() && { CLAUDE_CONFIG_DIR: claudeConfigDir() }),
   };
 }
 
@@ -264,10 +267,10 @@ export function bashFailure(command: string, content: unknown): string {
   return line.length > 300 ? `${line.slice(0, 299)}…` : line;
 }
 
-/** The reply's schema with `injection_seen`, the asks the model noticed and ignored, as a warning only. */
-const withInjectionSeen = (schema: Record<string, unknown>) => ({
+/** The reply's schema with `abuse_seen`, the asks the model noticed and ignored, as a warning only. */
+const withAbuseSeen = (schema: Record<string, unknown>) => ({
   ...schema,
-  properties: { ...(schema.properties as object), injection_seen: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 5 } },
+  properties: { ...(schema.properties as object), abuse_seen: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 5 } },
 });
 
 async function once(prompt: string, o: AgentOptions, schema: Record<string, unknown>, controller: AbortController): Promise<SDKResultMessage | undefined> {
@@ -293,12 +296,13 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       disallowedTools: DENIED,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
-      // No project or user settings: a PR could otherwise add hooks or MCP servers that run its code.
-      settingSources: [],
+      // Never the project's settings: a PR could otherwise add hooks or MCP servers that run its code. User
+      // settings only from the folder the action wrote for this run (claudeConfigDir), outside the checkout.
+      settingSources: claudeConfigDir() ? ['user'] : [],
       persistSession: false,
-      // Spotlighting and the canary (`SYSTEM_PROMPT`); the reply may list asks it ignored in `injection_seen`.
-      systemPrompt: SYSTEM_PROMPT,
-      outputFormat: { type: 'json_schema', schema: withInjectionSeen(schema) },
+      // Spotlighting and the canary (`SYSTEM_PROMPT`); the reply may list asks it ignored in `abuse_seen`.
+      systemPrompt: SYSTEM_PROMPT + guardrailPrompt(),
+      outputFormat: { type: 'json_schema', schema: withAbuseSeen(schema) },
       agents: deep ? deepAgents(o.subagentModel!, o.effort as EffortLevel, o.passes!) : undefined,
       abortController: controller,
       env: cliEnv(o.claude, o.env),
@@ -349,9 +353,9 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
       }
       if (result?.subtype === 'success') {
         const out = scanOutput(result.structured_output as Record<string, unknown> | undefined, CANARY);
-        if (out.leak) throw new ShaftFailure('guardrail_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
-        if (out.hits.length) core.warning(`Guardrail: took ${out.hits.join(', ')} out of the ${format.name} before posting.`);
-        const { injection_seen: seen, ...rest } = out.reply ?? {};
+        if (out.leak) throw new ShaftFailure('abuse_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
+        if (out.hits.length) core.warning(`Abuse protection: took ${out.hits.join(', ')} out of the ${format.name} before posting.`);
+        const { abuse_seen: seen, ...rest } = out.reply ?? {};
         // Only a count: the job log is public, and the model can be steered into accusing anyone.
         if (Array.isArray(seen) && seen.length) core.warning(`The model saw ${seen.length} instruction${seen.length === 1 ? '' : 's'} aimed at it in the pull request's text and ignored ${seen.length === 1 ? 'it' : 'them'}.`);
         const reply = format.parse(rest);

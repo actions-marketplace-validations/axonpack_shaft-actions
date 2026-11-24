@@ -457,6 +457,24 @@ test("a finding the repo config file's ignore matches isn't posted, counted or c
   expect(parseState(summary)?.findings.map((f) => f.file)).toEqual(['src/a.ts']);
 });
 
+test("a finding on a file the project's guardrails cover isn't posted, and the summary counts it", async () => {
+  const { setGuardrails } = await import('../../utils/guardrails.util');
+  setGuardrails({ no_edit: ['billing/**'], no_read: ['secrets/*.pem'] });
+  found = [
+    { severity: 'blocking', step: 'correctness', file: 'billing/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.', suggestion: 'b' },
+    { severity: 'should-fix', step: 'standards', file: 'src/a.ts', line: 1, title: 'Name it', body: 'Short name.' },
+  ];
+  replies = [{ verdict: 'blocking' }];
+  try {
+    const { summary, outcome } = await review([file('billing/a.ts'), file('src/a.ts')]);
+    expect(outcome.bySeverity.blocking).toBe(0);
+    expect(summary).toContain("**Guardrails:** 1 finding on files the project's guardrails cover weren't posted.");
+    expect(parseState(summary)?.findings.map((f) => f.file)).toEqual(['src/a.ts']);
+  } finally {
+    setGuardrails(undefined);
+  }
+});
+
 test('the outcome has the card for the dashboard, and each step is a group in the log', async () => {
   found = [{ severity: 'blocking', step: 'correctness', file: 'src/a.ts', line: 1, title: 'Wrong sum', body: 'It adds twice.', suggestion: 'b' }];
   const { outcome } = await review([file('src/a.ts')]);

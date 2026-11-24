@@ -277,9 +277,11 @@ export type Footer = {
   advisories?: string;
   /** Findings left out by the repo config file's `ignore`. */
   ignored?: number;
+  /** Findings on files the project's guardrails cover, which weren't posted. */
+  guardrailed?: number;
   /** The repo config file the API left out, and why. */
   repoConfig?: { path: string; problems: string[] };
-  /** The guardrails' lines for people with strikes (`flaggedLines`). */
+  /** The Abuse protection lines for people with strikes (`flaggedLines`). */
   flagged?: string[];
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];
@@ -569,6 +571,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (dismissed.length) out.push('', dismissedSection(dismissed));
   if (f.ignored) out.push('', `**Ignored:** ${plural(f.ignored, 'finding')} matched \`ignore\` in the repo's config file.`);
+  if (f.guardrailed) out.push('', `**Guardrails:** ${plural(f.guardrailed, 'finding')} on files the project's guardrails cover weren't posted.`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
   // A run with no model call has no claim to show.
