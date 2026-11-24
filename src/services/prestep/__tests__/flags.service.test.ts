@@ -31,5 +31,5 @@ test('flags added lines read, with where the repo names them, and flags only rem
 test('with no flag in the diff, it only says whether the repo reads flags', async () => {
   const files = [changed('src/a.ts', ['const a = 1;'])];
   expect(await flags(input(files, { 'src/a.ts': 'x', 'src/b.ts': "getFeatureFlag('x')" }))).toBe('The repo reads feature flags, such as in src/b.ts.');
-  expect(await flags(input(files, { 'src/a.ts': 'const flags = parse(argv);' }))).toBe('No feature flag reads found in the repo.');
+  expect(await flags(input(files, { 'src/a.ts': 'const flags = parse(argv);' }))).toBe('');
 });

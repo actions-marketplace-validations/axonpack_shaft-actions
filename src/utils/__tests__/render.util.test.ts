@@ -157,13 +157,21 @@ test('the summary format', () => {
   expect(text).toBe(`<!-- shaft:summary -->
 > [!WARNING]
 > ![Needs changes](https://shaft.axonpack.dev/status/needs-changes.svg)
+>
 > \`retry()\` never retries, so the fix this PR is for does not take effect.
 >
-> **Findings** &nbsp; <kbd>🔴 1 blocking</kbd> <kbd>🟡 2 should fix</kbd> <kbd>⚪ 2 nits</kbd> <kbd>✅ 1 fixed</kbd>
+> \`Checks     \` $\\color{#1a7f37}{\\rule{100px}{8px}}\\color{#bf8700}{\\rule{25px}{8px}}\\color{#d1242f}{\\rule{25px}{8px}}$ &nbsp;4 of 6 clean · 2 with findings<br>
+> \`Findings   \` $\\color{#d1242f}{\\rule{30px}{8px}}\\color{#bf8700}{\\rule{60px}{8px}}\\color{#8c959f}{\\rule{60px}{8px}}$ &nbsp;🔴 1 blocking · 🟡 2 should fix · ⚪ 2 nits · ✅ 1 fixed<br>
+> \`Confidence \` $\\color{#0969da}{\\rule{128px}{8px}}\\color{#8c959f}{\\rule{23px}{8px}}$ &nbsp;85%
 >
-> **Checks** &nbsp; <kbd>❌ Correctness</kbd> <kbd>✅ Breakage</kbd> <kbd>✅ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>✅ Docs</kbd> <kbd>✅ Security</kbd>
+> <details><summary>2 checks with findings</summary>
 >
-> <sub>Bug fix · 85% confidence · reviewed [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
+> ❌ **Correctness** · 1 blocking, 1 should fix, 2 nits<br>
+> ⚠️ **Tests** · 1 should fix
+>
+> </details>
+>
+> <sub>Bug fix · reviewed [\`a1b2c3d\`](https://github.com/acme/widgets/commit/a1b2c3d4e5f6)</sub>
 
 | Severity | Where | Finding | Details |
 |---|---|---|---|
@@ -218,12 +226,14 @@ test('the summary format', () => {
 
 const info = { sha: 'abc1234', repo: 'acme/widgets', models: { main: 'claude-haiku-4', subagents: [] }, effort: 'low', reason: '3 lines' };
 
-test('a looks-good review with no findings: a TIP card with one chip, and no table', () => {
+test('a looks-good review with no findings: a TIP card, no findings bar and no fold, and no table', () => {
   const body = renderSummary({ ...review, verdict: 'looks-good', findings: [], resolved: [] }, [], undefined, info);
-  expect(body).toContain('> [!TIP]\n> ![Looks good](https://shaft.axonpack.dev/status/looks-good.svg)\n');
-  expect(body).toContain('\n> **Findings** &nbsp; <kbd>✅ No findings</kbd>\n');
+  expect(body).toContain('> [!TIP]\n> ![Looks good](https://shaft.axonpack.dev/status/looks-good.svg)\n>\n');
+  expect(body).toContain('\n> `Findings   ` &nbsp;✅ none<br>\n');
+  expect(body).toContain('&nbsp;6 of 6 clean<br>');
+  expect(body).not.toContain('<details><summary>1 check');
   expect(body).not.toContain('| Severity |');
-  expect(body).not.toContain('fixed</kbd>');
+  expect(body).not.toContain('fixed');
 });
 
 test('the summary lists the follow-up commands it gets, and none when it gets none', () => {
@@ -258,19 +268,20 @@ test('the workflow edit link takes the branch from the workflow ref, else the de
   expect(workflowEditUrl(undefined, 'main')).toBeUndefined();
 });
 
-test('blocking is a CAUTION card; a check the project turned off shows ➖', () => {
+test('blocking is a CAUTION card; a check the project turned off is left out of the checks bar', () => {
   const placed = place([finding({ severity: 'blocking', step: 'security' })], files, 'summary');
   const body = renderSummary({ ...review, verdict: 'blocking' }, placed, undefined, { ...info, checks: ['correctness', 'tests'] });
   expect(body).toContain('> [!CAUTION]\n> ![Blocking](https://shaft.axonpack.dev/status/blocking.svg)\n');
-  expect(body).toContain('> **Findings** &nbsp; <kbd>🔴 1 blocking</kbd>\n');
-  expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>➖ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>✅ Tests</kbd> <kbd>➖ Docs</kbd> <kbd>❌ Security</kbd>\n');
+  expect(body).toContain('&nbsp;🔴 1 blocking<br>');
+  expect(body).toContain('&nbsp;2 of 3 clean · 1 with findings<br>');
+  expect(body).toContain('> <details><summary>1 check with findings</summary>\n>\n> ❌ **Security** · 1 blocking\n');
 });
 
-test("the repo's own checks get a chip only when they found something", () => {
-  const chip = (findings: Finding[]) => renderSummary(review, place(findings, files, 'summary'), undefined, info).match(/<kbd>\S+ 📌 Your checks<\/kbd>/)?.[0];
-  expect(chip([finding({ step: 'rules' })])).toBe('<kbd>⚠️ 📌 Your checks</kbd>');
-  expect(chip([finding({ step: 'rules', severity: 'blocking' })])).toBe('<kbd>❌ 📌 Your checks</kbd>');
-  expect(chip([finding({})])).toBeUndefined();
+test("the repo's own checks show in the fold only when they found something", () => {
+  const line = (findings: Finding[]) => renderSummary(review, place(findings, files, 'summary'), undefined, info).match(/> \S+ \*\*📌 Your checks\*\* · [^<\n]+/)?.[0];
+  expect(line([finding({ step: 'rules' })])).toBe('> ⚠️ **📌 Your checks** · 1 should fix');
+  expect(line([finding({ step: 'rules', severity: 'blocking' })])).toBe('> ❌ **📌 Your checks** · 1 blocking');
+  expect(line([finding({})])).toBeUndefined();
 });
 
 test("the headline can't close the alert or add HTML", () => {
@@ -355,10 +366,11 @@ test('parseReview accepts the schema and rejects a bad reply', () => {
   expect(parseReview('not json')).toBeUndefined();
 });
 
-test('a check the model left out of checked shows ⬜, not ✅', () => {
+test('a check the model left out of checked counts as not checked, not clean', () => {
   const placed = place([finding({ step: 'tests' })], files, 'summary');
   const body = renderSummary({ ...review, checked: ['correctness', 'tests'] }, placed, undefined, { ...info, checks: ['correctness', 'breakage', 'tests', 'docs', 'security'] });
-  expect(body).toContain('<kbd>✅ Correctness</kbd> <kbd>⬜ Breakage</kbd> <kbd>➖ Standards</kbd> <kbd>⚠️ Tests</kbd> <kbd>⬜ Docs</kbd> <kbd>⬜ Security</kbd>');
+  expect(body).toContain('&nbsp;1 of 2 clean · 1 with findings · 3 not checked<br>');
+  expect(body).toContain('> ⚠️ **Tests** · 1 should fix<br>\n> ⬜ **Breakage** · not checked<br>\n> ⬜ **Docs** · not checked<br>\n> ⬜ **Security** · not checked\n');
 });
 
 test("with checklists, each one gets a state in the job's order under its own name, and one that didn't run says why", () => {
@@ -376,7 +388,7 @@ test("with checklists, each one gets a state in the job's order under its own na
     { key: 'correctness', label: 'Correctness', state: 'not_checked' },
   ]);
   expect(renderSummary(review, placed, undefined, { ...info, checklists })).toContain(
-    '<kbd>✅ Security</kbd> <kbd>⚠️ Our API rules</kbd> <kbd>⬜ Database migrations</kbd> <kbd>✅ Correctness</kbd>',
+    '> ⚠️ **Our API rules** · 1 should fix<br>\n> ⬜ **Database migrations** · not checked: No matching files changed\n',
   );
 });
 

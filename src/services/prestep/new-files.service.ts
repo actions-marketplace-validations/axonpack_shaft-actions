@@ -32,5 +32,5 @@ export const newFiles: Facts = async ({ files }) => {
       const components = /\.[jt]sx$/.test(name) ? [...diffLines(f.patch, true).values()].filter((l) => COMPONENT.test(l)).length : 0;
       return `- ${f.filename} (${f.status === 'added' ? 'added' : 'moved here'}): folder ${dirname(f.filename)}/, suffix ${suffix || 'none'}, ${style}${components > 1 ? `, exports ${components} components` : ''}`;
     });
-  return factsText(lines.length ? ['Added and moved files:', ...lines] : [], 'The pull request adds or moves no files.');
+  return factsText(lines.length ? ['Added and moved files:', ...lines] : [], '');
 };

@@ -25,5 +25,5 @@ test('exports removed, changed and added per file, package entry and version lin
 });
 
 test('no export, entry point or bump changed says so', async () => {
-  expect(await exportsDiff(input([changed('src/a.ts', ['const x = 1;'])]))).toBe('The pull request changes no exported name, no package entry point or version, and no changeset bump.');
+  expect(await exportsDiff(input([changed('src/a.ts', ['const x = 1;'])]))).toBe('');
 });

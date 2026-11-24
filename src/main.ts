@@ -17,6 +17,7 @@ import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util'
 import { redact, workflowEditUrl } from './utils/render.util';
 import { classifierTokens, configureGuardrails, guardrailEvents, guardTexts, ruleName } from './guardrails/classify.service';
 import { CANARY, SIZE_MAX } from './guardrails/guardrail.const';
+import { setServerRules } from './guardrails/input.util';
 import { type Flagged, flaggedLines } from './guardrails/output.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
@@ -122,6 +123,8 @@ async function run(): Promise<void> {
       duration_ms: Date.now() - started,
     });
   configureGuardrails({ claude: grant.claude_token, cwd, secrets });
+  // The API's extra input rules, added to the built-in ones (never in place of them).
+  setServerRules(grant.guardrail?.rules);
   const flagged = Array.isArray(grant.guardrail?.flagged) ? grant.guardrail.flagged : [];
   // The commenter's own command: a harmful one never reaches the model, and strikes them.
   const sender = context.payload.comment?.user ?? context.payload.sender;

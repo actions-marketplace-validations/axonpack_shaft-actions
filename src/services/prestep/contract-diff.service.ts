@@ -64,5 +64,5 @@ async function proto({ files, checkout, base }: Parameters<Facts>[0]): Promise<s
 export const contractDiff: Facts = async (input) => {
   const lines = [...(await openapi(input)), ...(await proto(input))];
   if (changedFiles(input.files, /\.graphql$/).length) lines.push('GraphQL schemas changed: no tool compares them here, so read their diff.');
-  return factsText(lines, 'No OpenAPI or .proto file changed.');
+  return factsText(lines, '');
 };

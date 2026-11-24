@@ -47,6 +47,7 @@ export const flags: Facts = async ({ files, checkout }) => {
     }
     for (const n of wanted) if (text.includes(n)) mentions.get(n)!.push(path);
   }
+  if (!using && !wanted.length) return '';
   const listed = (paths: string[]) => `${paths.slice(0, SHOWN).join(', ')}${paths.length > SHOWN ? ` and ${paths.length - SHOWN} more` : ''}`;
   return factsText(
     [

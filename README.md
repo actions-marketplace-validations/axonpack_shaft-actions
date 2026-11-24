@@ -352,23 +352,24 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
 
 #### The card
 
-The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. The comment is written only when the review is done: the first review creates it, and a later push edits it in place, which GitHub sends no email for. While a review runs, the comment stays as the last review left it. Under it are the headline and these chips:
+The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. The comment is written only when the review is done: the first review creates it, and a later push edits it in place, which GitHub sends no email for. While a review runs, the comment stays as the last review left it. Under it are the headline and three bars, drawn with GitHub's math so no image is fetched:
 
-- **Findings**: the number of blocking, should-fix and nit findings, and how many earlier findings this push fixed.
-- **Checks**: one chip per check:
+- **Checks**: one bar for every check the review ran or should have run, and a count such as `5 of 7 clean · 2 with findings · 1 not checked`. The line keeps the same length however many checks find something.
 
-  | Chip | Meaning |
+  | Colour | Meaning |
   |---|---|
-  | ✅ | Checked, nothing found. |
-  | ⚠️ | Only should-fix or nit findings. |
-  | ❌ | A blocking finding. |
-  | ⬜ | Not checked: the model says it didn't do that check, and "What this PR does" names it. |
-  | ➖ | Turned off on the dashboard. |
+  | Green | Checked, nothing found. |
+  | Grey | Not checked: the model says it didn't do that check, or its checklist didn't run. |
+  | Amber | Only should-fix or nit findings. |
+  | Red | A blocking finding. |
 
-- Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
-- When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
+  A check turned off on the dashboard is left out.
+- **Findings**: the blocking, should-fix and nit findings as red, amber and grey, then their counts and how many earlier findings this push fixed.
+- **Confidence**: how sure the review is, in blue.
 
-The card's last line gives the kind of change, the model's confidence and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · 85% confidence · reviewed a1b2c3d`.
+Under the bars, a folded list names each check with findings, blocking first, with its counts, then each check that wasn't checked and why. Checks the repo added on the dashboard show there as "Your checks", only when they found something. When the job has [checklists](#checklists), the bars and the list count checklists instead, under their names.
+
+The card's last line gives the kind of change and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · reviewed a1b2c3d`.
 
 ### What a push reviews again
 
@@ -410,15 +411,15 @@ When the project has merge gates, the action also posts a check run named `Axon 
 
 The action also posts one check run per review check on the reviewed commit, named after the check's key: `Axon Shaft / correctness`, `Axon Shaft / breakage`, `Axon Shaft / standards`, `Axon Shaft / tests`, `Axon Shaft / docs`, `Axon Shaft / security`, and `Axon Shaft / rules` for the checks the repo added. Each one's summary is a table of that check's findings.
 
-| Card chip | Conclusion |
+| The check on the card | Conclusion |
 |---|---|
-| ❌ A blocking finding | `failure` |
-| ⚠️ Only should-fix or nit findings | `neutral` |
-| ✅ Checked, nothing found | `success` |
-| ⬜ Not checked | `skipped` |
-| ➖ Turned off on the dashboard | no check run |
+| A blocking finding (red) | `failure` |
+| Only should-fix or nit findings (amber) | `neutral` |
+| Checked, nothing found (green) | `success` |
+| Not checked (grey) | `skipped` |
+| Turned off on the dashboard | no check run |
 
-- `Axon Shaft / rules` is posted only when the repo's own checks found something, as the card's chip is.
+- `Axon Shaft / rules` is posted only when the repo's own checks found something, the same as their line in the card's list.
 - Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
 - The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run. Until an admin approves Checks (write) on the installation, the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.
@@ -485,7 +486,7 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 
 The limits above hold even when the model is fooled. The guardrails also check what people write, and tie each attempt they catch to the person who made it.
 
-- Before the model runs, the action checks the PR's title, description and commit messages, the comments that reach the prompt, and a `/ask` or `/fix` command against fixed rules: asks to ignore earlier instructions, to print the environment or tokens, `/proc/self/environ`, fake role or tool tags such as `<tool_result>`, invisible or direction-changing characters, and instructions hidden in HTML comments. Diff lines are checked only for hidden characters, fake tags and lines that tell an AI reviewer what to conclude, since code may mention a system prompt for real reasons. Quoted lines (`> `) are never judged.
+- Before the model runs, the action checks the PR's title, description and commit messages, the comments that reach the prompt, and a `/ask` or `/fix` command against fixed rules: asks to ignore earlier instructions, to print the environment or tokens, `/proc/self/environ`, fake role or tool tags such as `<tool_result>`, invisible or direction-changing characters, and instructions hidden in HTML comments. Diff lines are checked only for hidden characters, fake tags and lines that tell an AI reviewer what to conclude, since code may mention a system prompt for real reasons. Quoted lines (`> `) are never judged. The API may send extra rules as regular expressions. The action adds them to its own and never drops or weakens a built-in one. It skips any rule that doesn't compile, reuses a built-in rule's ID or has a nested quantifier such as `(a+)+`, takes at most 50, and runs them on the first 20,000 characters of each text.
 - A text that clearly breaks a rule is replaced in the prompt with `[removed by guardrail: <rule>]`, and the rest of the PR is still reviewed. A command that does is refused before any model runs (`guardrail_blocked`).
 - A text that only looks suspicious goes to one Haiku call with no tools, at most once per run, which says whether it's an injection. If that call fails, the text counts as harmless and stays in.
 - Text from people (title, description, comments, commands) reaches the model with its words joined by `ˆ`, and the system prompt says such text is data. It also carries a random line for the run. A reply that repeats it isn't posted (`guardrail_leak`).
@@ -588,7 +589,7 @@ An Axon Shaft API that sends the job's checklists also sends the prompt with its
 - A script checklist's settings, such as a size limit or globs, come from the API as `data`. They're plain values, never code, and the script checks each one. An older API sends none, and each script uses its own defaults.
 - A checklist the API sends with `exclude` globs, as a community checklist can, never looks at the changed files that match them. When every file it would cover matches one, it's skipped. Otherwise its step tells the model to leave those files out.
 - A script checklist runs a script built into the action in place of the model. The script reads the diff, the pull request's description, the guides and files in the checkout. It never runs the repo's code, and only `osv`, `licences` and `code-quality` call the network. Its findings are posted like the model's, inline and in the summary, and set its check run. A blocking or should-fix finding from a script raises the review's verdict. When only script checklists run, no model is called. The action has these scripts so far:
-  - `secrets` (Secrets): keys and tokens in a known format on added lines, such as AWS, GitHub, Anthropic, OpenAI, Stripe, Slack, Google and npm keys, and private keys. A finding names the kind of key and the line, never the value. Blocking.
+  - `secrets` (Secrets): keys and tokens in a known format on added lines, such as AWS, GitHub, Anthropic, OpenAI, Stripe, Slack, Google and npm keys, and private keys. A finding names the kind of key and the line, never the value. Blocking. A long string that looks random on any other added line (Shannon entropy of 4.5 bits a character or more, 20 characters or longer, unless the API sends `data.entropy` and `data.minLength`) is should-fix, since entropy alone is noisy. Lockfiles are left out of that rule.
   - `pr-meta` (Pull request basics): each section of `.github/pull_request_template.md` that the description leaves out or leaves empty, no linked issue when the template asks for one, and a title that isn't a Conventional Commit when a guide asks for them. Nits.
   - `env-vars` (Config and env vars): an env var read in an added line that no `.env.*` example file or Markdown doc in the repo names. Names the platform sets, such as `NODE_ENV`, `CI` and `GITHUB_*`, are left out. Should fix.
   - `schema-pairs` (Schema and migration in step): a database schema file changed with no migration in the pull request, or a migration with no schema change in a repo that has a schema file. Blocking.
@@ -596,6 +597,11 @@ An Axon Shaft API that sends the job's checklists also sends the prompt with its
   - `large-files` (Large files): an added or changed file over the size limit (1 MB unless the API sends `maxBytes`), an added binary file, and files added under `node_modules/` or `dist/`, one finding per folder. `dist/` is left alone in a repo with an `action.yml`. Should fix.
   - `install-hooks` (Install scripts): a `preinstall`, `install` or `postinstall` script that a `package.json` adds or changes. Should fix.
   - `debug-output` (Debug output): `console.log` and `debugger` in JavaScript and TypeScript, `print(` in Python and `dbg!` in Rust, on added lines. Test files are left out, and so are scripts and CLIs (`scripts/`, `bin/`, `cli/` and `cli.*`), or the `exclude` globs the API sends. Nits.
+  - `todo-refs` (TODO notes): a `TODO` or `FIXME` comment on an added line that links no issue (`#123`, an issue URL or a key such as `ENG-12`). Nits.
+  - `licence-header` (Licence header): a source file the pull request adds whose first 10 lines don't hold the first line of the repo's header. The header is the project's own rules on the checklist, which the API sends as `data.rules`. With no header set, it finds nothing. Should fix.
+  - `doc-links` (Links in docs): a relative link or image on an added line of a changed Markdown file. One that points at a file missing from the checkout is blocking. One whose `#anchor` matches no heading in the target file is should-fix, since docs sites build anchors their own way. Web URLs and site-rooted `/paths` aren't checked.
+  - `commit-format` (Commit format): the pull request's title and each commit subject that isn't a Conventional Commit (`type(scope)!: subject`). Subjects git writes, such as merges, reverts and `fixup!`, are left out. It's off until a project turns it on. Nits.
+  - `migration-down` (Migration rollback): a migration the pull request adds with no down or rollback step. An `up` file (`1_x.up.sql`, `1_x/up.sql`) needs its `down` file; any other file needs a line that matches one of the down patterns (`down`, `downgrade`, `rollback`, Rails' `def change`). The API can send its own migration globs as `data.paths` and patterns as `data.down`. It's off until a project turns it on. Should fix.
   - `osv` (Known vulnerabilities): each package version a lockfile adds or changes (from `deps-diff` below) is checked against the advisories on osv.dev, which the Axon Shaft API looks up. A finding names the advisory (its `GHSA-` ID when it has one), the package, its version, the versions that fix it and the line in the lockfile. Each advisory ID links to its page: GitHub's advisory page for a `GHSA-` ID, else the record on osv.dev. The finding's row in the summary and on its check run links to its most severe advisory, and the check run's details link goes there too. Blocking for an advisory rated high or critical, or a known malicious package; should fix for anything lower or unrated.
     - Sent to the Axon Shaft API, in one `POST /v1/packages/check` (one per 1,000 versions), with the run's OIDC token: the ecosystem, name and version of each public package the pull request adds or changes, each once. The API asks osv.dev, with GitHub's advisory database as its fallback, and keeps each version's answer for a day. A version it couldn't check counts as unchecked: when some are and nothing was found, the checklist is skipped. When the API refuses, the checklist is skipped with the API's reason, and never passes.
     - With an Axon Shaft API older than `POST /v1/packages/check` (it answers `404`, or `403` without a JSON error), the action asks osv.dev itself, as 1.9 did: one `POST /v1/querybatch` per 1,000 versions with the same names and versions, then one `GET /v1/vulns/<id>` for each advisory found, to get its rating and fixed versions.
@@ -610,7 +616,7 @@ An Axon Shaft API that sends the job's checklists also sends the prompt with its
     - When the API refuses (Code Quality isn't on for the repo, or the installation hasn't approved Code quality (read)), the checklist is skipped with the API's reason, and never passes.
     - It's in no template, so add it to the job on the dashboard to use it. Code Quality is a paid GitHub feature for organization repos on GitHub Team and Enterprise Cloud.
 - A script checklist whose script the action doesn't have yet is skipped. So is one whose script can't do its check, with the reason on its check run.
-- A `script+model` checklist runs in the model like any other checklist, and its pre-step adds facts for the model after the steps, under "Facts from the pre-steps". Each pre-step runs once, however many checklists use it, and its facts are cut at about 4,000 tokens. When a pre-step fails, its facts say why and the checklist still runs. The action has these pre-steps so far:
+- A `script+model` checklist runs in the model like any other checklist, and its pre-step adds facts for the model after the steps, under "Facts from the pre-steps". Each pre-step runs once, however many checklists use it, and its facts are cut at about 4,000 tokens. When a pre-step fails, its facts say why and the checklist still runs. When a pre-step finds nothing to judge (its facts are empty: no dependency change, no type escape, no new export, no log call and so on), its checklist passes with no model call, except What else it can break (`breakage`), Does what it says (`scope`) and Access control (`access-control`), which the model always judges. The action has these pre-steps so far:
   - `deps-diff` (Dependencies, Supply chain): each package a lockfile adds, removes or changes, with its versions before and after and its line in the lockfile. It compares the base branch's copy, read through the GitHub API, with the checkout's, and never runs a package manager. It reads `package-lock.json` and `npm-shrinkwrap.json` (npm 7 and later), `bun.lock`, `yarn.lock` (Yarn 1 and 2+), `pnpm-lock.yaml` (pnpm 8 and later), the pinned `==` lines of `requirements*.txt`, `poetry.lock`, `uv.lock`, `Cargo.lock` and `go.sum`. A version that doesn't come from the public registry is marked as such.
   - `changeset` (Changelog and changeset): each package the pull request changes, found by the nearest `package.json`, with whether it's private, the changesets that name it and their bumps, and whether its `CHANGELOG.md` or version changed. Then each changeset in the pull request with the packages and bumps it names, and any package a changeset names that the pull request doesn't change.
   - `docs-touched` (Docs): the docs, README and `notes/` files the pull request changes, and the nearest README above the changed code that it leaves alone. Changelogs and changesets are left to `changeset`.
@@ -628,6 +634,8 @@ An Axon Shaft API that sends the job's checklists also sends the prompt with its
   - `locale-keys` (Translations): the keys each changed JSON locale file adds, against the base branch's copy, and which of them each other locale lacks. Locale files sit under a `locales`, `locale`, `i18n`, `lang`, `langs`, `translations` or `messages` folder, named by locale (`en.json`) or in a folder per locale (`en/common.json`).
   - `raw-values` (Theme and design tokens): hex, `rgb()` and `hsl()` colours, pixel sizes and React Native sizes such as `marginTop: 8` on added lines of UI and style files, and the repo's theme and token files. Lines in the theme and token files themselves are left out.
   - `native-changes` (Native and store): the native files the pull request changes (`ios/`, `android/`, `app.json`, `app.config.*`, `eas.json`, podspecs, entitlements and privacy manifests), the React Native, Expo and Capacitor packages its `package.json` files add, remove or change, and each app config's `runtimeVersion` and `version` before and after.
+  - `sql-strings` (SQL built from strings): each added line outside tests that builds SQL from strings (a template literal with `${}`, an f-string, `%`, `.format(` or `+` into `query(`, `execute(`, `raw(` and the like, or `SELECT`, `INSERT`, `UPDATE` or `DELETE` text joined with a value), with the two lines either side. Tagged `sql` templates are left out. With no such line the model isn't called; otherwise it judges whether the value can come from a user.
+  - `dead-flags` (Dead feature flags): from the `flags` pre-step, each flag the pull request stops reading that the repo still names, such as a default or a definition left behind. With none, the model isn't called; otherwise it judges whether the flag is dead or read some way grep can't see, such as from remote config.
   - Five pre-steps run a pinned linter (below) and hand the model its report:
     - `actionlint` (GitHub workflows): each third-party action an added line in a workflow or `action.yml` uses without pinning it to a commit SHA (`actions/*`, local and `docker://` actions left out), each added `permissions: write-all`, then actionlint's report on the changed workflows, with the repo's `.github/actionlint.yaml` and without shellcheck or pyflakes. When actionlint can't run, the scan still comes back, with the reason.
     - `hadolint` (Containers): hadolint's report on the changed Dockerfiles, with the repo's `.hadolint.yaml`. Compose files are left to the model.

@@ -33,5 +33,5 @@ test('a source with no test anywhere says so, and a PR with no code says so', as
   expect(await testPairs(input([changed('src/Button.kt', ['x'])]))).toBe(
     'Changed source files with a changed test: none\nChanged source files with no changed test:\n- src/Button.kt: no test with its name in the repo',
   );
-  expect(await testPairs(input([changed('docs/a.md', ['x'])]))).toBe('The pull request changes no source or test files.');
+  expect(await testPairs(input([changed('docs/a.md', ['x'])]))).toBe('');
 });

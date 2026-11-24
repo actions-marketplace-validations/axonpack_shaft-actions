@@ -36,6 +36,13 @@ import { focusedTests } from './focused-tests.service';
 import { largeFiles } from './large-files.service';
 import { installHooks } from './install-hooks.service';
 import { debugOutput } from './debug-output.service';
+import { todoRefs } from './todo-refs.service';
+import { licenceHeader } from './licence-header.service';
+import { docLinks } from './doc-links.service';
+import { commitFormat } from './commit-format.service';
+import { migrationDown } from './migration-down.service';
+import { sqlStrings } from './sql-strings.service';
+import { deadFlags } from './dead-flags.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = {
@@ -50,6 +57,11 @@ export const SCRIPTS: Record<string, Script | NetworkScript> = {
   'large-files': largeFiles,
   'install-hooks': installHooks,
   'debug-output': debugOutput,
+  'todo-refs': todoRefs,
+  'licence-header': licenceHeader,
+  'doc-links': docLinks,
+  'commit-format': commitFormat,
+  'migration-down': migrationDown,
 };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */
@@ -77,6 +89,8 @@ export const FACTS: Record<string, Facts> = {
   'migration-lint': migrationLint,
   tflint,
   'contract-diff': contractDiff,
+  'sql-strings': sqlStrings,
+  'dead-flags': deadFlags,
 };
 
 /**
@@ -99,6 +113,25 @@ export async function runScripts(run: Planned[], input: ScriptInput): Promise<Fi
   return found.flat();
 }
 
+/** The `script+model` checklists the model judges even when their script finds nothing, since a quiet script isn't proof the change is safe. */
+export const ALWAYS_MODEL = ['breakage', 'scope', 'access-control'];
+
+/** Each pre-step's facts, once per run: the check for quiet scripts and the prompt read the same text. */
+const ran = new WeakMap<ScriptInput, Map<string, Promise<string>>>();
+function factsOf(key: string, input: ScriptInput): Promise<string> {
+  const m = ran.get(input) ?? new Map<string, Promise<string>>();
+  ran.set(input, m);
+  if (!m.has(key)) m.set(key, FACTS[key]!(input).catch((e: Error) => `Not available: ${e.message}`));
+  return m.get(key)!;
+}
+
+/** The `script+model` checklists whose script found nothing (its facts are empty): no hit, no model call. They pass with no findings. */
+export async function quietChecklists(run: Planned[], input: ScriptInput): Promise<Planned[]> {
+  const asked = run.filter((c) => c.mode === 'script+model' && c.prestep && FACTS[c.prestep] && !ALWAYS_MODEL.includes(c.key));
+  const empty = await Promise.all(asked.map(async (c) => (await factsOf(c.prestep!, input)) === ''));
+  return asked.filter((_, i) => empty[i]);
+}
+
 /**
  * The facts for the `script+model` checklists that run, after the steps: each pre-step once, under
  * the checklists that use it. A pre-step that fails says so in its place, and its checklists still run.
@@ -106,10 +139,7 @@ export async function runScripts(run: Planned[], input: ScriptInput): Promise<Fi
 export async function factsBlock(run: Checklist[], input: ScriptInput): Promise<string> {
   const keys = [...new Set(run.filter((c) => c.mode === 'script+model' && c.prestep && FACTS[c.prestep]).map((c) => c.prestep!))];
   const parts = await Promise.all(
-    keys.map(async (k) => {
-      const facts = await FACTS[k]!(input).catch((e: Error) => `Not available: ${e.message}`);
-      return `### ${k}, for ${run.filter((c) => c.prestep === k).map((c) => c.key).join(', ')}\n\n${facts}`;
-    }),
+    keys.map(async (k) => `### ${k}, for ${run.filter((c) => c.prestep === k).map((c) => c.key).join(', ')}\n\n${await factsOf(k, input)}`),
   );
   return parts.length ? `\n## Facts from the pre-steps\n\n${parts.join('\n\n')}\n` : '';
 }

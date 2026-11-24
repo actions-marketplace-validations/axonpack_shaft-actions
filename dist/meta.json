@@ -119,7 +119,12 @@
     "focused-tests",
     "large-files",
     "install-hooks",
-    "debug-output"
+    "debug-output",
+    "todo-refs",
+    "licence-header",
+    "doc-links",
+    "commit-format",
+    "migration-down"
   ],
   "facts": [
     "deps-diff",
@@ -143,7 +148,9 @@
     "hadolint",
     "migration-lint",
     "tflint",
-    "contract-diff"
+    "contract-diff",
+    "sql-strings",
+    "dead-flags"
   ],
   "guideFiles": [
     "CLAUDE.md",

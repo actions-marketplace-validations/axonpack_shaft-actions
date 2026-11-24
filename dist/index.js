@@ -58050,30 +58050,58 @@ function checkStates(review, placed, checks, checklists) {
 }
 function card(review, placed, fixed, f) {
   const n = (s) => placed.filter((p) => p.severity === s).length;
-  const countChips = [
-    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
-    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
-    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
-    !placed.length && chip("✅ No findings"),
-    fixed && chip(`✅ ${fixed} fixed`)
+  const counts = [
+    n("blocking") && `\uD83D\uDD34 ${n("blocking")} blocking`,
+    n("should-fix") && `\uD83D\uDFE1 ${n("should-fix")} should fix`,
+    n("nit") && `⚪ ${plural(n("nit"), "nit")}`,
+    !placed.length && "✅ none",
+    fixed && `✅ ${fixed} fixed`
   ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
+  const states = checkStates(review, placed, f.checks, f.checklists);
+  const ran = states.filter((c) => c.state !== "off" && c.state !== "not_checked");
+  const clean = ran.filter((c) => c.state === "passed").length;
+  const flagged = states.filter((c) => c.state === "failed" || c.state === "warned").sort((a, b) => a.state === b.state ? 0 : a.state === "failed" ? -1 : 1);
+  const unchecked = states.filter((c) => c.state === "not_checked");
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
   const alert = VERDICT_ALERT[review.verdict];
+  const checksLine = [`${clean} of ${ran.length} clean`, flagged.length && `${flagged.length} with findings`, unchecked.length && `${unchecked.length} not checked`].filter(Boolean).join(" · ");
+  const foundLine = (c) => {
+    const mine = placed.filter((p) => p.step === c.key);
+    const by = SEVERITIES.map((s) => [s, mine.filter((p) => p.severity === s).length]).filter(([, k]) => k);
+    return `${CHECK_MARK[c.state]} **${c.label}** · ${by.map(([s, k]) => s === "nit" ? plural(k, "nit") : `${k} ${s === "blocking" ? "blocking" : "should fix"}`).join(", ")}`;
+  };
+  const fold = [...flagged.map(foundLine), ...unchecked.map((c) => `${CHECK_MARK.not_checked} **${c.label}** · not checked${c.reason ? `: ${html(c.reason)}` : ""}`)];
+  const summary = [flagged.length && plural(flagged.length, "check") + " with findings", unchecked.length && `${unchecked.length} not checked`].filter(Boolean).join(", ");
   return [
     `> [!${alert}]`,
     `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
+    ">",
     ...headline.map((l) => `> ${l}`),
     ">",
-    `> **Findings** &nbsp; ${countChips.join(" ")}`,
+    `> ${meter("Checks", checksBar(states))} &nbsp;${checksLine}<br>`,
+    `> ${meter("Findings", mathBar(SEVERITIES.map((s) => [SEVERITY_COLOR[s], n(s)])))} &nbsp;${counts.join(" · ")}<br>`,
+    `> ${meter("Confidence", mathBar([[METER_BLUE, review.confidence], [METER_GREY, 100 - review.confidence]]))} &nbsp;${review.confidence}%`,
+    ...fold.length ? [">", `> <details><summary>${summary}</summary>`, ">", ...fold.map((l, i) => `> ${l}${i < fold.length - 1 ? "<br>" : ""}`), ">", "> </details>"] : [],
     ">",
-    `> **Checks** &nbsp; ${checkChips.join(" ")}`,
-    ">",
-    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
+    `> <sub>${[type, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
   ].join(`
 `);
 }
+var METER_PX = 150;
+var METER_BLUE = "#0969da";
+var METER_GREY = "#8c959f";
+var CHECK_COLOR = { passed: "#1a7f37", not_checked: METER_GREY, warned: "#bf8700", failed: "#d1242f" };
+var SEVERITY_COLOR = { blocking: "#d1242f", "should-fix": "#bf8700", nit: METER_GREY };
+function mathBar(parts) {
+  const total = parts.reduce((a, [, k]) => a + k, 0);
+  if (!total)
+    return "";
+  const rules = parts.filter(([, k]) => k > 0).map(([c, k]) => `\\color{${c}}{\\rule{${Math.max(4, Math.round(k / total * METER_PX))}px}{8px}}`);
+  return `$${rules.join("")}$`;
+}
+var checksBar = (states) => mathBar(["passed", "not_checked", "warned", "failed"].map((s) => [CHECK_COLOR[s], states.filter((c) => c.state === s).length]));
+var meter = (label, bar) => `\`${label.padEnd(11, " ")}\`${bar && ` ${bar}`}`;
 function table(rows, f) {
   const link = (p) => {
     const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : "";
@@ -58819,8 +58847,12 @@ var INVISIBLE = /[​-‏‪-‮⁦-⁩]/g;
 function scanInput(text, kind = "prose") {
   const raw = text.normalize("NFKC").replace(EMOJI_ZWJ, "$1");
   const plain = raw.replace(INVISIBLE, "");
-  const rules = kind === "code" ? RULES.filter((r) => CODE_GROUPS.includes(r.group)) : RULES;
-  const hit = rules.filter((r) => r.pattern.test(r.group === "concealment" ? raw : plain));
+  const all = [...RULES, ...extra];
+  const rules = kind === "code" ? all.filter((r) => CODE_GROUPS.includes(r.group)) : all;
+  const hit = rules.filter((r) => {
+    const t = r.group === "concealment" ? raw : plain;
+    return r.pattern.test(RULES.includes(r) ? t : t.slice(0, SERVER_RULES_MAX.input));
+  });
   const score = hit.reduce((n, r) => n + r.weight, 0);
   return { score, hits: hit.map((r) => r.id), verdict: score >= THRESHOLDS.HARMFUL ? "harmful" : score >= THRESHOLDS.SUSPICIOUS ? "suspicious" : "clean" };
 }
@@ -58836,6 +58868,48 @@ function capText(text, max, line) {
 (cut by Axon Shaft: the text was over its size limit)`, cut: true };
 }
 var datamark = (text) => text.replace(/(?<=\S)[ \t]+(?=\S)/g, "ˆ");
+var SERVER_RULES_MAX = { count: 50, pattern: 300, input: 20000 };
+var GROUPS = ["override", "exfiltration", "destructive", "concealment", "spoofing", "steering"];
+var NESTED = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]/;
+var extra = [];
+var serverRules = () => extra;
+function setServerRules(raw) {
+  extra = [];
+  if (!Array.isArray(raw))
+    return;
+  const taken = new Set(RULES.map((r) => r.id));
+  for (const r of raw.slice(0, SERVER_RULES_MAX.count)) {
+    const rule = parseRule(r, taken);
+    if (typeof rule === "string")
+      warning(`Guardrail: skipped a rule from the API (${rule}).`);
+    else {
+      taken.add(rule.id);
+      extra.push(rule);
+    }
+  }
+}
+function parseRule(r, taken) {
+  if (!r || typeof r !== "object")
+    return "not an object";
+  const { id, name, group, weight, pattern, flags = "" } = r;
+  if (typeof id !== "string" || !/^[\w.-]{1,64}$/.test(id) || taken.has(id))
+    return `bad or taken id ${String(id).slice(0, 64)}`;
+  if (typeof name !== "string" || !name || name.length > 120)
+    return `${id}: bad name`;
+  if (!GROUPS.includes(group))
+    return `${id}: unknown group`;
+  if (typeof weight !== "number" || !Number.isInteger(weight) || weight < 1 || weight > THRESHOLDS.HARMFUL)
+    return `${id}: bad weight`;
+  if (typeof pattern !== "string" || !pattern || pattern.length > SERVER_RULES_MAX.pattern || NESTED.test(pattern))
+    return `${id}: bad or risky pattern`;
+  if (typeof flags !== "string" || !/^[imsu]*$/.test(flags))
+    return `${id}: bad flags`;
+  try {
+    return { id, name, group, weight, pattern: new RegExp(pattern, flags) };
+  } catch {
+    return `${id}: pattern doesn't compile`;
+  }
+}
 
 // src/utils/auto-pick.util.ts
 import { matchesGlob } from "node:path";
@@ -59004,7 +59078,7 @@ var guardrailEvents = () => [...events];
 var classifierTokens = () => ({ ...spent });
 var ruleName = (id) => {
   const base = id.split("+")[0];
-  return RULES.find((r) => r.id === base)?.name ?? PUSH_RULES.find((r) => r.id === base)?.name ?? base;
+  return [...RULES, ...serverRules()].find((r) => r.id === base)?.name ?? PUSH_RULES.find((r) => r.id === base)?.name ?? base;
 };
 function recordEvent(user, e) {
   if (!user?.id)
@@ -59876,7 +59950,7 @@ var depsDiffFacts = async (input) => {
     })
   ]);
   if (!lines.length)
-    return "No lockfile in the pull request adds, removes or changes a package.";
+    return "";
   let text = "";
   for (const [i, l] of lines.entries()) {
     if (text.length + l.length > FACTS_MAX)
@@ -60186,16 +60260,38 @@ var KINDS = [
   ["an npm token", /\bnpm_[A-Za-z0-9]{36}\b/]
 ];
 var PLACEHOLDER = /(.)\1{5}|example/i;
-var secrets2 = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => KINDS.filter(([, format]) => {
-  const m = format.exec(text);
-  return m && !PLACEHOLDER.test(m[0]);
-}).map(([kind]) => ({
-  severity: "blocking",
-  file: f.filename,
-  line,
-  title: `Possible ${kind.replace(/^an? /, "")} in an added line`,
-  body: `This line adds what looks like ${kind}. The value isn't shown here. If it's real, rotate it now, since it's already in the branch's history, and load it from a secret or an env var instead.`
-}))));
+var ENTROPY = { entropy: 4.5, minLength: 20 };
+var VALUE = /["'`]([A-Za-z0-9+/=_\-.~]+)["'`]|[=:]\s*([A-Za-z0-9+/=_\-.~]+)\s*$/g;
+function shannon(s) {
+  const counts = new Map;
+  for (const ch of s)
+    counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  return [...counts.values()].reduce((h, n) => h - n / s.length * Math.log2(n / s.length), 0);
+}
+var num = (v, fallback) => typeof v === "number" && v > 0 ? v : fallback;
+var secrets2 = ({ files }, data) => {
+  const min = num(data?.entropy, ENTROPY.entropy);
+  const length = num(data?.minLength, ENTROPY.minLength);
+  return files.flatMap((f) => {
+    const lockfile = LOCKFILES.some(([name]) => name.test(f.filename));
+    return [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+      const known = KINDS.filter(([, format]) => {
+        const m = format.exec(text);
+        return m && !PLACEHOLDER.test(m[0]);
+      }).map(([kind]) => ({
+        severity: "blocking",
+        file: f.filename,
+        line,
+        title: `Possible ${kind.replace(/^an? /, "")} in an added line`,
+        body: `This line adds what looks like ${kind}. The value isn't shown here. If it's real, rotate it now, since it's already in the branch's history, and load it from a secret or an env var instead.`
+      }));
+      if (known.length || lockfile || KINDS.some(([, format]) => format.test(text)))
+        return known;
+      const random = [...text.matchAll(VALUE)].map((m) => m[1] ?? m[2]).find((v) => v.length >= length && !PLACEHOLDER.test(v) && !/^[a-z]+:\/\//i.test(v) && shannon(v) >= min);
+      return random ? [{ severity: "should-fix", file: f.filename, line, title: "Possible secret: a long random string", body: `This line adds a ${random.length}-character string that looks random (${shannon(random).toFixed(1)} bits a character). The value isn't shown here. If it's a key or a token, rotate it and load it from a secret or an env var instead.` }] : [];
+    });
+  });
+};
 
 // src/services/prestep/changeset.service.ts
 import { dirname as dirname4, join as join7 } from "node:path";
@@ -60260,14 +60356,18 @@ var changeset = async ({ files, checkout }) => {
       (pkgs.get(pkg.manifest) ?? pkgs.set(pkg.manifest, { pkg, files: [] }).get(pkg.manifest)).files.push(f.filename);
   }
   if (!pkgs.size && !sets.length)
-    return "The pull request changes no package and adds no changeset.";
+    return "";
+  const changelogOf = (pkg) => join7(dirname4(pkg.manifest), "CHANGELOG.md");
+  const versionOf = (pkg) => [...diffLines(files.find((f) => f.filename === pkg.manifest)?.patch, true).values()].find((l) => /^\s*"version"\s*:/.test(l));
+  if (!sets.length && [...pkgs.values()].every(({ pkg, files: changed }) => pkg.private || changed.includes(changelogOf(pkg)) && versionOf(pkg)))
+    return "";
   const bumped = (name) => sets.flatMap((s) => s.bumps.filter((b) => b.name === name).map((b) => `${b.bump} (${s.file})`));
   const lines = [
     checkout.read(".changeset/config.json") === undefined ? "The repo has no `.changeset/config.json`." : "The repo uses changesets (`.changeset/config.json`).",
     "Packages the pull request changes:",
     ...[...pkgs.values()].map(({ pkg, files: changed }) => {
-      const changelog = join7(dirname4(pkg.manifest), "CHANGELOG.md");
-      const version = [...diffLines(files.find((f) => f.filename === pkg.manifest)?.patch, true).values()].find((l) => /^\s*"version"\s*:/.test(l));
+      const changelog = changelogOf(pkg);
+      const version = versionOf(pkg);
       return [
         `- \`${pkg.name}\` (${pkg.manifest}${pkg.version ? `, version ${pkg.version}` : ""}${pkg.private ? ", private" : ""}): ${changed.length} file${changed.length === 1 ? "" : "s"}`,
         `changesets: ${bumped(pkg.name).join(", ") || "none"}`,
@@ -60370,7 +60470,7 @@ var docsTouched = async ({ files, checkout }) => {
   }
   const untouched = [...readmes].filter(([r]) => !docs.some((d) => d.filename === r));
   if (!docs.length && !code.length)
-    return "The pull request changes no docs and no code.";
+    return "";
   return factsText([
     `Docs the pull request changes:${docs.length ? "" : " none"}`,
     ...docs.map((f) => `- ${f.filename} (${f.status}, +${f.additions} -${f.deletions})`),
@@ -60429,6 +60529,8 @@ var flags = async ({ files, checkout }) => {
       if (text.includes(n))
         mentions.get(n).push(path);
   }
+  if (!using && !wanted.length)
+    return "";
   const listed = (paths) => `${paths.slice(0, SHOWN).join(", ")}${paths.length > SHOWN ? ` and ${paths.length - SHOWN} more` : ""}`;
   return factsText([
     using ? wanted.length ? `The repo reads feature flags in ${using} file${using === 1 ? "" : "s"}.` : `The repo reads feature flags, such as in ${example}.` : "No feature flag reads found in the repo.",
@@ -60454,7 +60556,7 @@ var logLines = async ({ files }) => {
     const code = text.trim();
     return kind ? [`- ${f.filename}:${line} ${kind}: ${code.length > MAX_CODE ? `${code.slice(0, MAX_CODE)}...` : code}`] : [];
   }));
-  return factsText(lines.length ? ["Log, metric, analytics and error-report calls on added lines:", ...lines] : [], "No added line outside tests logs, records a metric, tracks an event or reports an error.");
+  return factsText(lines.length ? ["Log, metric, analytics and error-report calls on added lines:", ...lines] : [], "");
 };
 
 // src/services/prestep/new-files.service.ts
@@ -60477,7 +60579,7 @@ var newFiles = async ({ files }) => {
     const components = /\.[jt]sx$/.test(name) ? [...diffLines(f.patch, true).values()].filter((l) => COMPONENT.test(l)).length : 0;
     return `- ${f.filename} (${f.status === "added" ? "added" : "moved here"}): folder ${dirname6(f.filename)}/, suffix ${suffix || "none"}, ${style}${components > 1 ? `, exports ${components} components` : ""}`;
   });
-  return factsText(lines.length ? ["Added and moved files:", ...lines] : [], "The pull request adds or moves no files.");
+  return factsText(lines.length ? ["Added and moved files:", ...lines] : [], "");
 };
 
 // src/services/prestep/test-pairs.service.ts
@@ -60488,7 +60590,7 @@ var testPairs = async ({ files, checkout }) => {
   const tests = files.filter((f) => TEST.test(f.filename) && CODE.test(f.filename));
   const sources = files.filter((f) => CODE.test(f.filename) && !TEST.test(f.filename) && !/\.d\.[cm]?ts$/.test(f.filename) && f.status !== "removed");
   if (!sources.length && !tests.length)
-    return "The pull request changes no source or test files.";
+    return "";
   const paired = sources.map((s) => ({ file: s.filename, tests: tests.filter((t) => stem(t.filename) === stem(s.filename)).map((t) => t.filename) }));
   const unpaired = paired.filter((p) => !p.tests.length);
   const existing = new Map;
@@ -60555,7 +60657,7 @@ var typeEscapes = async ({ files, checkout }) => {
     });
   });
   if (!lines.length)
-    return "No added line has a type escape.";
+    return "";
   const settings = checkout.find(CONFIGS).sort().flatMap((p) => (checkout.read(p) ?? "").split(`
 `).flatMap((l, i) => SETTING.test(l) ? [`- ${p}:${i + 1} ${l.trim().slice(0, MAX_CODE2)}`] : []));
   return factsText(["Type escapes on added lines:", ...lines, ...settings.length ? ["The repo's lint and type settings that name them:", ...settings] : []], "");
@@ -60654,12 +60756,14 @@ var callers = async ({ files, checkout }) => {
 var unused = async ({ files, checkout }) => {
   const added = new Map([...changedExports(files)].filter(([, at]) => at.kind === "added"));
   if (!added.size)
-    return "The pull request exports no new name.";
+    return "";
   const { hits, cut } = search(checkout, [...added.keys()]);
   const lines = [...hits].filter(([name, found]) => found.every((h) => h.file === added.get(name).file)).map(([name]) => {
     const { file, line } = added.get(name);
     return `- \`${name}\` (${file}${line ? `:${line}` : ""})`;
   });
+  if (!lines.length && !cut.length)
+    return "";
   const head = lines.length ? `${lines.length} of the ${hits.size} new exports are named in no other code file:` : `Each of the ${hits.size} new exports is named in another code file.`;
   return factsText([...cutNote(cut), head, ...lines], "");
 };
@@ -60712,7 +60816,7 @@ var imports = async ({ files, checkout }) => {
       }
     }
   if (!js.length && !py.length)
-    return "The added lines import no package.";
+    return "";
   const lines = [];
   if (js.length) {
     const { names, aliases, read } = npmKnown(checkout);
@@ -60731,8 +60835,7 @@ var imports = async ({ files, checkout }) => {
       if (!local.has(name) && !new RegExp(`(?<![\\w-])${pyNorm(name)}(?![\\w-])`).test(text))
         lines.push(`- ${at} \`${name}\`: no Python manifest names it, and no module in the repo has the name; it may be in the standard library or published under another name`);
   }
-  const n = js.length + py.length;
-  return lines.some((l) => l.startsWith("- ")) ? factsText(lines, "") : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? "" : "s"} checked).`;
+  return lines.some((l) => l.startsWith("- ")) ? factsText(lines, "") : "";
 };
 
 // src/services/prestep/exports-diff.service.ts
@@ -60772,7 +60875,7 @@ var exportsDiff = async ({ files }) => {
     if (rows.length)
       lines.push(`${f.filename}:`, ...rows);
   }
-  return factsText(lines, "The pull request changes no exported name, no package entry point or version, and no changeset bump.");
+  return factsText(lines, "");
 };
 
 // src/services/prestep/routes.service.ts
@@ -60872,7 +60975,7 @@ var rawValues = async ({ files, checkout }) => {
     return found.length ? [`- ${f.filename}:${line} ${found.join(", ")}`] : [];
   }));
   if (!lines.length)
-    return "The added lines of UI and style files have no raw colour or size.";
+    return "";
   const themes = checkout.find(THEME).filter((p) => matches(p, STYLED) || p.endsWith(".json")).sort();
   const where = themes.length ? `Theme and token files in the repo: ${themes.slice(0, THEMES_MAX).join(", ")}${themes.length > THEMES_MAX ? ` and ${themes.length - THEMES_MAX} more` : ""}.` : "The repo has no file named for a theme, tokens, colours or a palette.";
   return factsText([where, "Raw values on added lines:", ...lines], "");
@@ -60893,7 +60996,7 @@ var nativeChanges = async ({ files, checkout, base }) => {
     return [...new Set([...was.keys(), ...now.keys()])].filter((n) => was.get(n) !== now.get(n)).map((n) => `- ${f.filename}: ${!was.has(n) ? `added ${n} ${now.get(n)}` : !now.has(n) ? `removed ${n} ${was.get(n)}` : `changed ${n} ${was.get(n)} -> ${now.get(n)}`}`);
   });
   if (!native.length && !packages.length)
-    return "No native file or package with native code changed.";
+    return "";
   const configs = await Promise.all(checkout.find(APP_CONFIG).sort().slice(0, CONFIGS_MAX).map(async (p) => {
     const [before, after] = [await base(p), checkout.read(p)];
     return ["runtimeVersion", "version"].map((k) => {
@@ -61097,7 +61200,7 @@ var actionlint = async ({ files, checkout }) => {
       lines.push(`actionlint didn't run: ${e.message}.`);
     }
   }
-  return factsText(lines, "actionlint found nothing in the changed workflows, and every action the change adds is pinned.");
+  return factsText(lines, "");
 };
 
 // src/services/prestep/hadolint.service.ts
@@ -61187,7 +61290,7 @@ var contractDiff = async (input) => {
   const lines = [...await openapi(input), ...await proto(input)];
   if (changedFiles(input.files, /\.graphql$/).length)
     lines.push("GraphQL schemas changed: no tool compares them here, so read their diff.");
-  return factsText(lines, "No OpenAPI or .proto file changed.");
+  return factsText(lines, "");
 };
 
 // src/services/prestep/focused-tests.service.ts
@@ -61270,6 +61373,121 @@ var debugOutput = ({ files }, data) => {
   });
 };
 
+// src/services/prestep/todo-refs.service.ts
+var TODO = /(?:\/\/|#|\/\*|\*|<!--|--)\s*(TODO|FIXME)\b/;
+var todoRefs = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+  const m = TODO.exec(text);
+  return m && !ISSUE_REF.test(text) ? [{ severity: "nit", file: f.filename, line, title: `${m[1]} with no issue`, body: `This ${m[1]} links no issue, so nobody will find it again. Add an issue link or \`#123\`, or do it now.` }] : [];
+}));
+
+// src/services/prestep/licence-header.service.ts
+var TOP = 10;
+var licenceHeader = ({ files, checkout }, data) => {
+  const first = typeof data?.rules === "string" ? data.rules.split(/\r?\n/).find((l) => l.trim())?.trim() : undefined;
+  if (!first)
+    return [];
+  return files.filter((f) => f.status === "added" && CODE.test(f.filename)).filter((f) => !(checkout.read(f.filename) ?? "").split(/\r?\n/, TOP).some((l) => l.includes(first))).map((f) => ({ severity: "should-fix", file: f.filename, line: 1, title: "Licence header missing", body: `This new file doesn't start with the repo's licence header (\`${first.slice(0, 120)}\`). Add it at the top.` }));
+};
+
+// src/services/prestep/doc-links.service.ts
+import { posix } from "node:path";
+var MARKDOWN = /\.(?:md|mdx|markdown)$/i;
+var LINK = /!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+["'][^)]*)?\)/g;
+function anchors(text) {
+  const out = new Set;
+  const seen = new Map;
+  for (const l of text.split(/\r?\n/)) {
+    for (const m of l.matchAll(/<a\s+(?:name|id)=["']([^"']+)["']|\{#([\w-]+)\}/g))
+      out.add(m[1] ?? m[2]);
+    const h = /^#{1,6}\s+(.+?)[\s#]*$/.exec(l)?.[1];
+    if (!h)
+      continue;
+    const slug = h.replace(/\{#[\w-]+\}/, "").trim().toLowerCase().replace(/<[^>]+>|[`*_~]/g, "").replace(/[^\p{L}\p{N}\s-]/gu, "").replace(/\s/g, "-");
+    const n = seen.get(slug) ?? 0;
+    seen.set(slug, n + 1);
+    out.add(n ? `${slug}-${n}` : slug);
+  }
+  return out;
+}
+var docLinks = ({ files, checkout }) => files.filter((f) => MARKDOWN.test(f.filename) && f.status !== "removed").flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => [...text.matchAll(LINK)].flatMap(([, target]) => {
+  if (/^(?:[a-z][\w+.-]*:|\/)/i.test(target))
+    return [];
+  const [rawPath = "", anchor] = target.split("#");
+  let path = f.filename;
+  try {
+    if (rawPath)
+      path = posix.normalize(posix.join(posix.dirname(f.filename), decodeURIComponent(rawPath.split("?")[0])));
+  } catch {
+    return [];
+  }
+  if (path.startsWith("../") || !checkout.find([path, `${path.replace(/\/$/, "")}/**`]).length)
+    return [{ severity: "blocking", file: f.filename, line, title: `Broken link: \`${rawPath}\``, body: `This link points at \`${path}\`, which isn't in the repo at this commit.` }];
+  if (!anchor || !MARKDOWN.test(path))
+    return [];
+  const text = checkout.read(path);
+  return text && !anchors(text).has(anchor.toLowerCase()) ? [{ severity: "should-fix", file: f.filename, line, title: `Link to a missing heading: \`#${anchor}\``, body: `\`${path}\` has no heading whose anchor is \`#${anchor}\`. If your docs site builds anchors its own way, this may be fine.` }] : [];
+})));
+
+// src/services/prestep/commit-format.service.ts
+var MADE = /^(?:Merge |Revert "|fixup! |squash! )/;
+var commitFormat = ({ pr, commits }) => {
+  const out = [];
+  const body = (what) => `${what} doesn't start with a type such as \`fix:\` or \`feat(scope):\`, which this repo's Conventional Commits need.`;
+  if (!CONVENTIONAL.test(pr.title))
+    out.push({ severity: "nit", file: "pull request title", line: 1, title: `Title isn't a Conventional Commit: "${pr.title.slice(0, 80)}"`, body: body("The title") });
+  commits.forEach((m, i) => {
+    const subject = m.split(`
+`, 1)[0].trim();
+    if (!MADE.test(subject) && !CONVENTIONAL.test(subject))
+      out.push({ severity: "nit", file: "commit messages", line: i + 1, title: `Commit subject isn't a Conventional Commit: "${subject.slice(0, 80)}"`, body: body(`Commit ${i + 1}'s subject`) });
+  });
+  return out;
+};
+
+// src/services/prestep/migration-down.service.ts
+var MIGRATIONS = ["**/migrations/**", "**/migrate/**", "**/alembic/versions/**", "**/drizzle/*.sql"];
+var DOWN = ["\\bdown\\b", "\\bdowngrade\\b", "\\brollback\\b", "\\bdef change\\b"];
+var strings = (v) => Array.isArray(v) && v.length && v.every((x) => typeof x === "string") ? v : undefined;
+var migrationDown = ({ files, checkout }, data) => {
+  const paths = strings(data?.paths) ?? MIGRATIONS;
+  const down = (strings(data?.down) ?? DOWN).flatMap((p) => {
+    try {
+      return [new RegExp(p, "i")];
+    } catch {
+      return [];
+    }
+  });
+  return files.filter((f) => f.status === "added" && matches(f.filename, paths) && !/(?:^|[/._-])down(?:[/._-]|$)/i.test(f.filename)).filter((f) => {
+    const pair = f.filename.replace(/(^|[/._-])up(?=[/._-]|$)/i, "$1down");
+    if (pair !== f.filename)
+      return !checkout.read(pair) && !files.some((g) => g.filename === pair);
+    const text = checkout.read(f.filename);
+    return text !== undefined && !down.some((r) => r.test(text));
+  }).map((f) => ({ severity: "should-fix", file: f.filename, line: 1, title: "Migration with no down step", body: "This migration has no down or rollback step, so it can't be undone. Add one, or say in the pull request that this change rolls forward only." }));
+};
+
+// src/services/prestep/sql-strings.service.ts
+var CALL = /\b(?:query|execute|executemany|exec|raw|unsafe|\$?(?:query|execute)RawUnsafe)\s*\(\s*(?:`[^`]*\$\{|f["']|["'][^"']*["']\s*(?:\+|%\s*[\w(]|\.format\()|[\w.]+\s*\+)/;
+var BUILT2 = /\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^`"']*(?:["']\s*\+|\$\{)/i;
+var AROUND = 2;
+var sqlStrings = async ({ files }) => factsText(files.filter((f) => CODE.test(f.filename) && !TEST.test(f.filename)).flatMap((f) => {
+  const all = diffLines(f.patch);
+  return [...diffLines(f.patch, true)].filter(([, text]) => (CALL.test(text) || BUILT2.test(text)) && !/\bsql`/.test(text)).map(([line]) => {
+    const near = [...all].filter(([n]) => Math.abs(n - line) <= AROUND).map(([n, t]) => `    ${n === line ? ">" : " "} ${n}: ${t}`);
+    return `- ${f.filename}:${line}
+${near.join(`
+`)}`;
+  });
+}), "");
+
+// src/services/prestep/dead-flags.service.ts
+var deadFlags = async (input) => {
+  const dead = (await flags(input)).split(`
+`).filter((l) => l.startsWith("- ") && l.includes("(was in ") && l.includes("; still named in "));
+  return dead.length ? ["Flags no added line reads any more, still named in the repo:", ...dead].join(`
+`) : "";
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = {
   secrets: secrets2,
@@ -61282,7 +61500,12 @@ var SCRIPTS = {
   "focused-tests": focusedTests,
   "large-files": largeFiles,
   "install-hooks": installHooks,
-  "debug-output": debugOutput
+  "debug-output": debugOutput,
+  "todo-refs": todoRefs,
+  "licence-header": licenceHeader,
+  "doc-links": docLinks,
+  "commit-format": commitFormat,
+  "migration-down": migrationDown
 };
 var FACTS = {
   "deps-diff": depsDiffFacts,
@@ -61306,7 +61529,9 @@ var FACTS = {
   hadolint,
   "migration-lint": migrationLint,
   tflint,
-  "contract-diff": contractDiff
+  "contract-diff": contractDiff,
+  "sql-strings": sqlStrings,
+  "dead-flags": deadFlags
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
@@ -61320,14 +61545,25 @@ async function runScripts(run, input) {
   }));
   return found.flat();
 }
+var ALWAYS_MODEL = ["breakage", "scope", "access-control"];
+var ran = new WeakMap;
+function factsOf(key, input) {
+  const m = ran.get(input) ?? new Map;
+  ran.set(input, m);
+  if (!m.has(key))
+    m.set(key, FACTS[key](input).catch((e) => `Not available: ${e.message}`));
+  return m.get(key);
+}
+async function quietChecklists(run, input) {
+  const asked = run.filter((c) => c.mode === "script+model" && c.prestep && FACTS[c.prestep] && !ALWAYS_MODEL.includes(c.key));
+  const empty = await Promise.all(asked.map(async (c) => await factsOf(c.prestep, input) === ""));
+  return asked.filter((_, i) => empty[i]);
+}
 async function factsBlock(run, input) {
   const keys = [...new Set(run.filter((c) => c.mode === "script+model" && c.prestep && FACTS[c.prestep]).map((c) => c.prestep))];
-  const parts = await Promise.all(keys.map(async (k) => {
-    const facts = await FACTS[k](input).catch((e) => `Not available: ${e.message}`);
-    return `### ${k}, for ${run.filter((c) => c.prestep === k).map((c) => c.key).join(", ")}
+  const parts = await Promise.all(keys.map(async (k) => `### ${k}, for ${run.filter((c) => c.prestep === k).map((c) => c.key).join(", ")}
 
-${facts}`;
-  }));
+${await factsOf(k, input)}`));
   return parts.length ? `
 ## Facts from the pre-steps
 
@@ -61544,8 +61780,8 @@ async function postReview(ctx, o, canCheck, progress) {
   const rerun = changed?.length && planned ? planChecklists(o.checklists, changed.map((filename) => ({ filename })), Object.keys(SCRIPTS)).filter((c) => !c.skip).map((c) => c.key) : undefined;
   const carried = rerun?.length ? fired?.filter((c) => !rerun.includes(c.key)).map((c) => c.key) ?? [] : [];
   const running = fired?.filter((c) => !carried.includes(c.key));
-  const scripted = running?.filter((c) => c.mode === "script") ?? [];
-  const modelled = running?.filter((c) => c.mode !== "script");
+  let scripted = running?.filter((c) => c.mode === "script") ?? [];
+  let modelled = running?.filter((c) => c.mode !== "script");
   const facts = {
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
@@ -61606,7 +61842,7 @@ ${clean(body)}`);
         type: "",
         confidence: 0,
         comment_url: url,
-        checks: states.slice(0, 50),
+        checks: states.slice(0, 60),
         passes: [],
         findings: [],
         fixed: 0
@@ -61651,7 +61887,7 @@ ${clean(body)}`);
         type: "",
         confidence: 0,
         comment_url: url,
-        checks: states.slice(0, 50),
+        checks: states.slice(0, 60),
         passes: [],
         findings: placed.slice(0, 200).map((p) => ({ severity: p.severity, check: p.step, file: p.file, line: Math.max(1, p.line), title: p.title, body: "", inline: true })),
         fixed: 0
@@ -61665,11 +61901,17 @@ ${clean(body)}`);
     files,
     pr: ctx.pr,
     guides: ctx.guides,
+    commits: ctx.commits,
     checkout: checkoutFiles(o.cwd),
     base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path),
     octokit
   };
   const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, input)) : [];
+  const quiet = modelled?.length ? await quietChecklists(modelled, input) : [];
+  if (quiet.length) {
+    modelled = modelled.filter((c) => !quiet.includes(c));
+    scripted = [...scripted, ...quiet];
+  }
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
   let result;
   const lightRun = modelled && o.depth !== "deep" ? modelled.filter((c) => c.model === "light" && !MAIN_PASS_ONLY.includes(c.key)) : [];
@@ -61835,11 +62077,11 @@ ${clean(body)}`);
     type: cut(review.type, 40),
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? "" : summary?.html_url ?? "",
-    checks: states.slice(0, 50),
+    checks: states.slice(0, 60),
     ...modelled && {
       passes: models ? [
-        { name: "main", model: models.main, tokens: light ? subtract(result.tokens, light.spent.tokens) : result.tokens, checklists: steps.slice(0, 50).map((c) => c.key), max_turns: choice.maxTurns },
-        ...light ? [{ name: "light", model: lightModel(light), tokens: light.spent.tokens, checklists: lightKeys.slice(0, 50), max_turns: LIGHT_PASS.maxTurns }] : []
+        { name: "main", model: models.main, tokens: light ? subtract(result.tokens, light.spent.tokens) : result.tokens, checklists: steps.slice(0, 60).map((c) => c.key), max_turns: choice.maxTurns },
+        ...light ? [{ name: "light", model: lightModel(light), tokens: light.spent.tokens, checklists: lightKeys.slice(0, 60), max_turns: LIGHT_PASS.maxTurns }] : []
       ] : []
     },
     findings: placed.slice(0, 200).map((p) => ({
@@ -62840,6 +63082,7 @@ ${grant.comment}`);
     duration_ms: Date.now() - started
   });
   configureGuardrails({ claude: grant.claude_token, cwd, secrets });
+  setServerRules(grant.guardrail?.rules);
   const flagged = Array.isArray(grant.guardrail?.flagged) ? grant.guardrail.flagged : [];
   const sender = context2.payload.comment?.user ?? context2.payload.sender;
   const askerId = typeof sender?.id === "number" ? sender.id : undefined;

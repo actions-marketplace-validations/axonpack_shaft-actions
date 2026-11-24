@@ -67,7 +67,7 @@ test('the facts list each change with its versions and line, and are cut at abou
       '- added tokio 1.35.0 (line 25)',
     ].join('\n'),
   );
-  expect(await depsDiffFacts(input([changed('src/a.ts', ['x'])]))).toBe('No lockfile in the pull request adds, removes or changes a package.');
+  expect(await depsDiffFacts(input([changed('src/a.ts', ['x'])]))).toBe('');
   const big = Array.from({ length: 2000 }, (_, i) => `pkg-${i}==1.0.${i}`).join('\n');
   const facts = await depsDiffFacts(input([changed('requirements.txt', [])], { 'requirements.txt': big }));
   expect(facts.length).toBeLessThan(16_100);

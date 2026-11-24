@@ -38,6 +38,6 @@ test("when actionlint can't run, the pin scan still comes back with the reason; 
   const facts = await actionlint(input([changed('.github/workflows/ci.yml', ['      - uses: someone/thing@v1'])], { '.github/workflows/ci.yml': '      - uses: someone/thing@v1' }));
   expect(facts).toBe(".github/workflows/ci.yml:1 uses someone/thing@v1, not pinned to a commit SHA\nactionlint didn't run: the actionlint 1.7.12 download doesn't match the sha256 this release records, so it wasn't run.");
   asked.length = 0;
-  expect(await actionlint(input([changed('action.yml', ['runs:'])], {}))).toBe('actionlint found nothing in the changed workflows, and every action the change adds is pinned.');
+  expect(await actionlint(input([changed('action.yml', ['runs:'])], {}))).toBe('');
   expect(asked).toEqual([]);
 });
