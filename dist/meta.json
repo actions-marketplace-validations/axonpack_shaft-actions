@@ -148,7 +148,8 @@
     "hadolint",
     "migration-lint",
     "tflint",
-    "contract-diff"
+    "contract-diff",
+    "sql-strings"
   ],
   "guideFiles": [
     "CLAUDE.md",

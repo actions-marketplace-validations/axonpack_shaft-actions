@@ -61409,6 +61409,20 @@ var migrationDown = ({ files, checkout }, data) => {
   }).map((f) => ({ severity: "should-fix", file: f.filename, line: 1, title: "Migration with no down step", body: "This migration has no down or rollback step, so it can't be undone. Add one, or say in the pull request that this change rolls forward only." }));
 };
 
+// src/services/prestep/sql-strings.service.ts
+var CALL = /\b(?:query|execute|executemany|exec|raw|unsafe|\$?(?:query|execute)RawUnsafe)\s*\(\s*(?:`[^`]*\$\{|f["']|["'][^"']*["']\s*(?:\+|%\s*[\w(]|\.format\()|[\w.]+\s*\+)/;
+var BUILT2 = /\b(?:SELECT|INSERT|UPDATE|DELETE)\b[^`"']*(?:["']\s*\+|\$\{)/i;
+var AROUND = 2;
+var sqlStrings = async ({ files }) => factsText(files.filter((f) => CODE.test(f.filename) && !TEST.test(f.filename)).flatMap((f) => {
+  const all = diffLines(f.patch);
+  return [...diffLines(f.patch, true)].filter(([, text]) => (CALL.test(text) || BUILT2.test(text)) && !/\bsql`/.test(text)).map(([line]) => {
+    const near = [...all].filter(([n]) => Math.abs(n - line) <= AROUND).map(([n, t]) => `    ${n === line ? ">" : " "} ${n}: ${t}`);
+    return `- ${f.filename}:${line}
+${near.join(`
+`)}`;
+  });
+}), "");
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = {
   secrets: secrets2,
@@ -61450,7 +61464,8 @@ var FACTS = {
   hadolint,
   "migration-lint": migrationLint,
   tflint,
-  "contract-diff": contractDiff
+  "contract-diff": contractDiff,
+  "sql-strings": sqlStrings
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {
@@ -61464,14 +61479,25 @@ async function runScripts(run, input) {
   }));
   return found.flat();
 }
+var ALWAYS_MODEL = ["breakage", "scope", "access-control"];
+var ran = new WeakMap;
+function factsOf(key, input) {
+  const m = ran.get(input) ?? new Map;
+  ran.set(input, m);
+  if (!m.has(key))
+    m.set(key, FACTS[key](input).catch((e) => `Not available: ${e.message}`));
+  return m.get(key);
+}
+async function quietChecklists(run, input) {
+  const asked = run.filter((c) => c.mode === "script+model" && c.prestep && FACTS[c.prestep] && !ALWAYS_MODEL.includes(c.key));
+  const empty = await Promise.all(asked.map(async (c) => await factsOf(c.prestep, input) === ""));
+  return asked.filter((_, i) => empty[i]);
+}
 async function factsBlock(run, input) {
   const keys = [...new Set(run.filter((c) => c.mode === "script+model" && c.prestep && FACTS[c.prestep]).map((c) => c.prestep))];
-  const parts = await Promise.all(keys.map(async (k) => {
-    const facts = await FACTS[k](input).catch((e) => `Not available: ${e.message}`);
-    return `### ${k}, for ${run.filter((c) => c.prestep === k).map((c) => c.key).join(", ")}
+  const parts = await Promise.all(keys.map(async (k) => `### ${k}, for ${run.filter((c) => c.prestep === k).map((c) => c.key).join(", ")}
 
-${facts}`;
-  }));
+${await factsOf(k, input)}`));
   return parts.length ? `
 ## Facts from the pre-steps
 
@@ -61688,8 +61714,8 @@ async function postReview(ctx, o, canCheck, progress) {
   const rerun = changed?.length && planned ? planChecklists(o.checklists, changed.map((filename) => ({ filename })), Object.keys(SCRIPTS)).filter((c) => !c.skip).map((c) => c.key) : undefined;
   const carried = rerun?.length ? fired?.filter((c) => !rerun.includes(c.key)).map((c) => c.key) ?? [] : [];
   const running = fired?.filter((c) => !carried.includes(c.key));
-  const scripted = running?.filter((c) => c.mode === "script") ?? [];
-  const modelled = running?.filter((c) => c.mode !== "script");
+  let scripted = running?.filter((c) => c.mode === "script") ?? [];
+  let modelled = running?.filter((c) => c.mode !== "script");
   const facts = {
     sha,
     repo: `${ctx.owner}/${ctx.repo}`,
@@ -61815,6 +61841,11 @@ ${clean(body)}`);
     octokit
   };
   const scriptFindings = scripted.length ? await step("Run the script checklists", async () => runScripts(scripted, input)) : [];
+  const quiet = modelled?.length ? await quietChecklists(modelled, input) : [];
+  if (quiet.length) {
+    modelled = modelled.filter((c) => !quiet.includes(c));
+    scripted = [...scripted, ...quiet];
+  }
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
   let result;
   const lightRun = modelled && o.depth !== "deep" ? modelled.filter((c) => c.model === "light" && !MAIN_PASS_ONLY.includes(c.key)) : [];

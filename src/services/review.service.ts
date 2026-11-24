@@ -14,7 +14,7 @@ import { openAdvisories } from './advisory.service';
 import { checkoutFiles } from './checkout.service';
 import { type LightResult, lightPass } from './light-pass.service';
 import { LIGHT_PASS, MAIN_PASS_ONLY } from '../consts/ladder.const';
-import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
+import { factsBlock, quietChecklists, runScripts, SCRIPTS } from './prestep/prestep.service';
 import { baseFile, type Context, collectContext } from './context.service';
 import {
   CATEGORY_CONCLUSION,
@@ -273,8 +273,8 @@ async function postReview(
   const carried = rerun?.length ? (fired?.filter((c) => !rerun.includes(c.key)).map((c) => c.key) ?? []) : [];
   const running = fired?.filter((c) => !carried.includes(c.key));
   // Script checklists' findings are their result: they never reach the model.
-  const scripted = running?.filter((c) => c.mode === 'script') ?? [];
-  const modelled = running?.filter((c) => c.mode !== 'script');
+  let scripted = running?.filter((c) => c.mode === 'script') ?? [];
+  let modelled = running?.filter((c) => c.mode !== 'script');
   // What the footer says about the run, whichever way it goes.
   const facts = {
     sha,
@@ -397,6 +397,12 @@ async function postReview(
     octokit,
   };
   const scriptFindings = scripted.length ? await step('Run the script checklists', async () => runScripts(scripted, input)) : [];
+  // No script hit, no model call: a script+model checklist whose script found nothing passes as a script checklist would.
+  const quiet = modelled?.length ? await quietChecklists(modelled, input) : [];
+  if (quiet.length) {
+    modelled = modelled!.filter((c) => !quiet.includes(c));
+    scripted = [...scripted, ...quiet];
+  }
   // With only script checklists to run, no model is called, unless merge gates need judging.
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
 
