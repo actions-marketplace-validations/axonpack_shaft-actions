@@ -391,6 +391,7 @@ async function postReview(
     files,
     pr: ctx.pr,
     guides: ctx.guides,
+    commits: ctx.commits,
     checkout: checkoutFiles(o.cwd),
     base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path)!,
     octokit,

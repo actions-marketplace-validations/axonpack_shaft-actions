@@ -61371,6 +61371,22 @@ var docLinks = ({ files, checkout }) => files.filter((f) => MARKDOWN.test(f.file
   return text && !anchors(text).has(anchor.toLowerCase()) ? [{ severity: "should-fix", file: f.filename, line, title: `Link to a missing heading: \`#${anchor}\``, body: `\`${path}\` has no heading whose anchor is \`#${anchor}\`. If your docs site builds anchors its own way, this may be fine.` }] : [];
 })));
 
+// src/services/prestep/commit-format.service.ts
+var MADE = /^(?:Merge |Revert "|fixup! |squash! )/;
+var commitFormat = ({ pr, commits }) => {
+  const out = [];
+  const body = (what) => `${what} doesn't start with a type such as \`fix:\` or \`feat(scope):\`, which this repo's Conventional Commits need.`;
+  if (!CONVENTIONAL.test(pr.title))
+    out.push({ severity: "nit", file: "pull request title", line: 1, title: `Title isn't a Conventional Commit: "${pr.title.slice(0, 80)}"`, body: body("The title") });
+  commits.forEach((m, i) => {
+    const subject = m.split(`
+`, 1)[0].trim();
+    if (!MADE.test(subject) && !CONVENTIONAL.test(subject))
+      out.push({ severity: "nit", file: "commit messages", line: i + 1, title: `Commit subject isn't a Conventional Commit: "${subject.slice(0, 80)}"`, body: body(`Commit ${i + 1}'s subject`) });
+  });
+  return out;
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = {
   secrets: secrets2,
@@ -61386,7 +61402,8 @@ var SCRIPTS = {
   "debug-output": debugOutput,
   "todo-refs": todoRefs,
   "licence-header": licenceHeader,
-  "doc-links": docLinks
+  "doc-links": docLinks,
+  "commit-format": commitFormat
 };
 var FACTS = {
   "deps-diff": depsDiffFacts,
@@ -61769,6 +61786,7 @@ ${clean(body)}`);
     files,
     pr: ctx.pr,
     guides: ctx.guides,
+    commits: ctx.commits,
     checkout: checkoutFiles(o.cwd),
     base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path),
     octokit

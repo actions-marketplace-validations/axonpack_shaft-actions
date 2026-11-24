@@ -39,6 +39,7 @@ import { debugOutput } from './debug-output.service';
 import { todoRefs } from './todo-refs.service';
 import { licenceHeader } from './licence-header.service';
 import { docLinks } from './doc-links.service';
+import { commitFormat } from './commit-format.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = {
@@ -56,6 +57,7 @@ export const SCRIPTS: Record<string, Script | NetworkScript> = {
   'todo-refs': todoRefs,
   'licence-header': licenceHeader,
   'doc-links': docLinks,
+  'commit-format': commitFormat,
 };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */

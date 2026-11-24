@@ -122,7 +122,8 @@
     "debug-output",
     "todo-refs",
     "licence-header",
-    "doc-links"
+    "doc-links",
+    "commit-format"
   ],
   "facts": [
     "deps-diff",
