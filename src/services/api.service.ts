@@ -92,8 +92,11 @@ export type Grant =
       latest_action?: LatestAction;
       /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
       missing_permissions?: MissingPermission[];
-      /** The users in this run (the actor, the pull request's author) with 1 or 2 active guardrail strikes. Older APIs don't send it. */
-      guardrail?: { flagged: Flagged[] };
+      /**
+       * The users in this run (the actor, the pull request's author) with 1 or 2 active guardrail strikes,
+       * and `rules`, extra input rules (regex strings) the action adds to its own. Older APIs send neither.
+       */
+      guardrail?: { flagged: Flagged[]; rules?: unknown };
     };
 
 /** A permission the AxonShaft app wants at `wanted` that the installation approved only at `granted`, or not at all. */

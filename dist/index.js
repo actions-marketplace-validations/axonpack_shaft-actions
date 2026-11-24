@@ -58819,8 +58819,12 @@ var INVISIBLE = /[​-‏‪-‮⁦-⁩]/g;
 function scanInput(text, kind = "prose") {
   const raw = text.normalize("NFKC").replace(EMOJI_ZWJ, "$1");
   const plain = raw.replace(INVISIBLE, "");
-  const rules = kind === "code" ? RULES.filter((r) => CODE_GROUPS.includes(r.group)) : RULES;
-  const hit = rules.filter((r) => r.pattern.test(r.group === "concealment" ? raw : plain));
+  const all = [...RULES, ...extra];
+  const rules = kind === "code" ? all.filter((r) => CODE_GROUPS.includes(r.group)) : all;
+  const hit = rules.filter((r) => {
+    const t = r.group === "concealment" ? raw : plain;
+    return r.pattern.test(RULES.includes(r) ? t : t.slice(0, SERVER_RULES_MAX.input));
+  });
   const score = hit.reduce((n, r) => n + r.weight, 0);
   return { score, hits: hit.map((r) => r.id), verdict: score >= THRESHOLDS.HARMFUL ? "harmful" : score >= THRESHOLDS.SUSPICIOUS ? "suspicious" : "clean" };
 }
@@ -58836,6 +58840,48 @@ function capText(text, max, line) {
 (cut by Axon Shaft: the text was over its size limit)`, cut: true };
 }
 var datamark = (text) => text.replace(/(?<=\S)[ \t]+(?=\S)/g, "ˆ");
+var SERVER_RULES_MAX = { count: 50, pattern: 300, input: 20000 };
+var GROUPS = ["override", "exfiltration", "destructive", "concealment", "spoofing", "steering"];
+var NESTED = /\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)\s*[+*{]/;
+var extra = [];
+var serverRules = () => extra;
+function setServerRules(raw) {
+  extra = [];
+  if (!Array.isArray(raw))
+    return;
+  const taken = new Set(RULES.map((r) => r.id));
+  for (const r of raw.slice(0, SERVER_RULES_MAX.count)) {
+    const rule = parseRule(r, taken);
+    if (typeof rule === "string")
+      warning(`Guardrail: skipped a rule from the API (${rule}).`);
+    else {
+      taken.add(rule.id);
+      extra.push(rule);
+    }
+  }
+}
+function parseRule(r, taken) {
+  if (!r || typeof r !== "object")
+    return "not an object";
+  const { id, name, group, weight, pattern, flags = "" } = r;
+  if (typeof id !== "string" || !/^[\w.-]{1,64}$/.test(id) || taken.has(id))
+    return `bad or taken id ${String(id).slice(0, 64)}`;
+  if (typeof name !== "string" || !name || name.length > 120)
+    return `${id}: bad name`;
+  if (!GROUPS.includes(group))
+    return `${id}: unknown group`;
+  if (typeof weight !== "number" || !Number.isInteger(weight) || weight < 1 || weight > THRESHOLDS.HARMFUL)
+    return `${id}: bad weight`;
+  if (typeof pattern !== "string" || !pattern || pattern.length > SERVER_RULES_MAX.pattern || NESTED.test(pattern))
+    return `${id}: bad or risky pattern`;
+  if (typeof flags !== "string" || !/^[imsu]*$/.test(flags))
+    return `${id}: bad flags`;
+  try {
+    return { id, name, group, weight, pattern: new RegExp(pattern, flags) };
+  } catch {
+    return `${id}: pattern doesn't compile`;
+  }
+}
 
 // src/utils/auto-pick.util.ts
 import { matchesGlob } from "node:path";
@@ -59004,7 +59050,7 @@ var guardrailEvents = () => [...events];
 var classifierTokens = () => ({ ...spent });
 var ruleName = (id) => {
   const base = id.split("+")[0];
-  return RULES.find((r) => r.id === base)?.name ?? PUSH_RULES.find((r) => r.id === base)?.name ?? base;
+  return [...RULES, ...serverRules()].find((r) => r.id === base)?.name ?? PUSH_RULES.find((r) => r.id === base)?.name ?? base;
 };
 function recordEvent(user, e) {
   if (!user?.id)
@@ -62840,6 +62886,7 @@ ${grant.comment}`);
     duration_ms: Date.now() - started
   });
   configureGuardrails({ claude: grant.claude_token, cwd, secrets });
+  setServerRules(grant.guardrail?.rules);
   const flagged = Array.isArray(grant.guardrail?.flagged) ? grant.guardrail.flagged : [];
   const sender = context2.payload.comment?.user ?? context2.payload.sender;
   const askerId = typeof sender?.id === "number" ? sender.id : undefined;

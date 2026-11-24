@@ -4,7 +4,7 @@ import type { ClaudeToken } from '../services/api.service';
 import { dataBlock } from '../utils/prompt.util';
 import { redact } from '../utils/render.util';
 import { CLASSIFY_MAX, PUSH_RULES, removedMarker, RULES } from './guardrail.const';
-import { capText, datamark, scanInput, withoutQuotes } from './input.util';
+import { capText, datamark, scanInput, serverRules, withoutQuotes } from './input.util';
 
 /** Who wrote a text: their GitHub ID, which never changes, and their login now. */
 export type Author = { id: number; login: string };
@@ -31,7 +31,7 @@ export const classifierTokens = (): Tokens => ({ ...spent });
 /** A rule's name for people, from its ID (`override.ignore+classifier` reads as the rule's own name). */
 export const ruleName = (id: string) => {
   const base = id.split('+')[0]!;
-  return RULES.find((r) => r.id === base)?.name ?? PUSH_RULES.find((r) => r.id === base)?.name ?? base;
+  return [...RULES, ...serverRules()].find((r) => r.id === base)?.name ?? PUSH_RULES.find((r) => r.id === base)?.name ?? base;
 };
 
 /**
