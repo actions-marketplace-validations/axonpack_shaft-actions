@@ -7,6 +7,7 @@ import { ShaftFailure } from '../utils/failure.util';
 import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
+import { guardrailPrompt } from '../utils/guardrails.util';
 import { CANARY, SYSTEM_PROMPT } from '../injection/injection.const';
 import { scanOutput } from '../injection/output.util';
 import { sandboxPrefix } from './sandbox.service';
@@ -300,7 +301,7 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       settingSources: claudeConfigDir() ? ['user'] : [],
       persistSession: false,
       // Spotlighting and the canary (`SYSTEM_PROMPT`); the reply may list asks it ignored in `injection_seen`.
-      systemPrompt: SYSTEM_PROMPT,
+      systemPrompt: SYSTEM_PROMPT + guardrailPrompt(),
       outputFormat: { type: 'json_schema', schema: withInjectionSeen(schema) },
       agents: deep ? deepAgents(o.subagentModel!, o.effort as EffortLevel, o.passes!) : undefined,
       abortController: controller,

@@ -97,6 +97,8 @@ export type Grant =
        * and `rules`, extra input rules (regex strings) the action adds to its own. Older APIs send neither.
        */
       injection?: { flagged: Flagged[]; rules?: unknown };
+      /** The project's guardrails, org rules then project rules. Older APIs don't send them. */
+      guardrails?: unknown;
       /** The old name of `injection`, which an API from before the rename sends instead. */
       guardrail?: { flagged: Flagged[]; rules?: unknown };
     };

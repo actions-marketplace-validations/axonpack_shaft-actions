@@ -19,6 +19,7 @@ import { redact, workflowEditUrl } from './utils/render.util';
 import { classifierTokens, configureInjection, injectionEvents, guardTexts, ruleName } from './injection/classify.service';
 import { CANARY, SIZE_MAX } from './injection/injection.const';
 import { setServerRules } from './injection/input.util';
+import { setGuardrails } from './utils/guardrails.util';
 import { type Flagged, flaggedLines } from './injection/output.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
@@ -128,6 +129,8 @@ async function run(): Promise<void> {
   // `guardrail` is the field's name before the rename to injection, for an API that hasn't deployed it.
   const injection = grant.injection ?? grant.guardrail;
   setServerRules(injection?.rules);
+  // The project's guardrails (org rules, then project rules): limits the tool guard, the push check and the prompt add.
+  setGuardrails(grant.guardrails);
   const flagged = Array.isArray(injection?.flagged) ? injection.flagged : [];
   // The commenter's own command: a harmful one never reaches the model, and strikes them.
   const sender = context.payload.comment?.user ?? context.payload.sender;
