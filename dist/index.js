@@ -58255,7 +58255,7 @@ function runnerEnv(names = []) {
 import { realpathSync as realpathSync2 } from "node:fs";
 import { homedir } from "node:os";
 
-// src/guardrails/guardrail.const.ts
+// src/injection/injection.const.ts
 import { randomBytes } from "node:crypto";
 var RULES = [
   { id: "override.ignore", name: "asks to ignore earlier instructions", group: "override", weight: 3, pattern: /\b(ignore|disregard|forget)\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier|preceding)\s+(instructions|prompts?|rules|directions)/i },
@@ -58285,7 +58285,7 @@ var RULES = [
 var CODE_GROUPS = ["concealment", "spoofing", "steering"];
 var THRESHOLDS = { SUSPICIOUS: 3, HARMFUL: 6 };
 var SIZE_MAX = { command: 8000, pr_body: 20000, line: 2000 };
-var removedMarker = (rule) => `[removed by guardrail: ${rule}]`;
+var removedMarker = (rule) => `[removed by injection protection: ${rule}]`;
 var CLASSIFY_MAX = 16000;
 var TOKEN_SHAPES = [
   /\b(ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{20,}\b/g,
@@ -58374,7 +58374,7 @@ function toolDenial(tool, input, cwd, commands) {
   }
 }
 
-// src/guardrails/output.util.ts
+// src/injection/output.util.ts
 var CODE_KEYS = new Set(["suggestion", "file", "path", "fp", "step"]);
 function tokens(text) {
   const out = TOKEN_SHAPES.reduce((t, re) => t.replace(re, "***"), text);
@@ -58426,12 +58426,12 @@ function flaggedLines(flagged, events, names) {
     const rule = events.find((e) => e.user_id === u.user_id && e.severity === "strike")?.rule;
     const named = rule ? `: ${names(rule)}` : "";
     if ("exempt" in u && u.exempt)
-      return `⚠️ @${u.login} has ${u.strikes} guardrail strike${u.strikes === 1 ? "" : "s"}${named}. Admins and maintainers aren't blocked.`;
+      return `⚠️ @${u.login} has ${u.strikes} prompt injection strike${u.strikes === 1 ? "" : "s"}${named}. Admins and maintainers aren't blocked.`;
     const before = flagged.find((f) => f.user_id === u.user_id)?.strikes ?? 0;
     if (before >= 3)
-      return `⚠️ @${u.login} has ${u.strikes} guardrail strikes${named}.`;
+      return `⚠️ @${u.login} has ${u.strikes} prompt injection strikes${named}.`;
     if (u.strikes >= 3)
-      return `@${u.login} has reached 3 guardrail strikes. Unless strikes are set to warn only, Axon Shaft won't run for them on this account until an admin clears them on the dashboard.`;
+      return `@${u.login} has reached 3 prompt injection strikes. Unless strikes are set to warn only, Axon Shaft won't run for them on this account until an admin clears them on the dashboard.`;
     return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${named}. A third strike stops Axon Shaft from running for them on this account.`;
   });
 }
@@ -58818,9 +58818,9 @@ async function runAgent(prompt, o, format) {
       if (result?.subtype === "success") {
         const out = scanOutput(result.structured_output, CANARY);
         if (out.leak)
-          throw new ShaftFailure("guardrail_leak", `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
+          throw new ShaftFailure("injection_leak", `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
         if (out.hits.length)
-          warning(`Guardrail: took ${out.hits.join(", ")} out of the ${format.name} before posting.`);
+          warning(`Injection protection: took ${out.hits.join(", ")} out of the ${format.name} before posting.`);
         const { injection_seen: seen, ...rest } = out.reply ?? {};
         if (Array.isArray(seen) && seen.length)
           warning(`The model saw ${seen.length} instruction${seen.length === 1 ? "" : "s"} aimed at it in the pull request's text and ignored ${seen.length === 1 ? "it" : "them"}.`);
@@ -58847,7 +58847,7 @@ async function runAgent(prompt, o, format) {
   }
 }
 
-// src/guardrails/input.util.ts
+// src/injection/input.util.ts
 var EMOJI_ZWJ = /(\p{Extended_Pictographic}️?)‍(?=\p{Extended_Pictographic})/gu;
 var INVISIBLE = /[​-‏‪-‮⁦-⁩]/g;
 function scanInput(text, kind = "prose") {
@@ -58887,7 +58887,7 @@ function setServerRules(raw) {
   for (const r of raw.slice(0, SERVER_RULES_MAX.count)) {
     const rule = parseRule(r, taken);
     if (typeof rule === "string")
-      warning(`Guardrail: skipped a rule from the API (${rule}).`);
+      warning(`Injection protection: skipped a rule from the API (${rule}).`);
     else {
       taken.add(rule.id);
       extra.push(rule);
@@ -59072,15 +59072,15 @@ var dataBlock = (tag, text) => `<${tag}>
 ${text.replace(new RegExp(`</?${tag}\\b[^>]*>`, "gi"), "")}
 </${tag}>`;
 
-// src/guardrails/classify.service.ts
+// src/injection/classify.service.ts
 var setup;
 var classified = false;
 var events = [];
 var spent = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
-var configureGuardrails = (s) => {
+var configureInjection = (s) => {
   setup = s;
 };
-var guardrailEvents = () => [...events];
+var injectionEvents = () => [...events];
 var classifierTokens = () => ({ ...spent });
 var ruleName = (id) => {
   const base = id.split("+")[0];
@@ -59092,10 +59092,10 @@ function recordEvent(user, e) {
   const struck = events.some((x) => x.user_id === user.id && x.severity === "strike");
   const excerpt = redact(e.excerpt, setup?.secrets ?? []).replace(/\s+/g, " ").slice(0, 200);
   events.push({ user_id: user.id, login: user.login, ...e, severity: struck ? "warning" : e.severity, excerpt });
-  warning(`Guardrail: ${e.severity === "strike" && !struck ? "strike" : "warning"} for @${user.login} (${ruleName(e.rule)}, in the ${e.where.replace("_", " ")}).`);
+  warning(`Injection protection: ${e.severity === "strike" && !struck ? "strike" : "warning"} for @${user.login} (${ruleName(e.rule)}, in the ${e.where.replace("_", " ")}).`);
 }
 var FORMAT = {
-  name: "guardrail check",
+  name: "injection check",
   schema: { type: "object", additionalProperties: false, required: ["verdict", "reason"], properties: { verdict: { enum: ["benign", "injection"] }, reason: { type: "string", maxLength: 120 } } },
   parse: (x) => {
     const v = x;
@@ -59123,7 +59123,7 @@ async function classify(text) {
     if (used)
       for (const k of Object.keys(spent))
         spent[k] += used[k];
-    warning(`The guardrail check didn't answer, so the suspicious text counts as benign: ${e.message}`);
+    warning(`The injection check didn't answer, so the suspicious text counts as benign: ${e.message}`);
     return "benign";
   }
 }
@@ -59238,9 +59238,9 @@ async function fetchPushToken() {
   return grant;
 }
 async function reportRun(summary) {
-  const guardrail = guardrailEvents();
+  const injection = injectionEvents();
   try {
-    const res = await post("/v1/runs", { ...summary, ...guardrail.length && { guardrail } });
+    const res = await post("/v1/runs", { ...summary, ...injection.length && { injection } });
     if (!res.ok)
       throw new Error(`the API answered ${res.status}`);
   } catch (e) {
@@ -62041,7 +62041,7 @@ ${c.body}`);
     workflowEditUrl: o.workflowEditUrl,
     ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     repoConfig: o.repoConfig,
-    flagged: flaggedLines(o.flagged ?? [], guardrailEvents(), ruleName),
+    flagged: flaggedLines(o.flagged ?? [], injectionEvents(), ruleName),
     commands: o.commands?.filter((c) => c !== "resolve" || ctx.pr.conflicts),
     ...models && {
       models: { main: models.main, fellBackFrom: models.fellBack ? choice.model : undefined, subagents: models.subagents },
@@ -62418,7 +62418,7 @@ async function addShaftMcp() {
 import { lstatSync as lstatSync3, readFileSync as readFileSync8 } from "node:fs";
 import { join as join14 } from "node:path";
 
-// src/guardrails/push.util.ts
+// src/injection/push.util.ts
 function pushHits(changes, before) {
   return changes.flatMap((c) => {
     if (!c.content || LOCKFILE.test(c.path))
@@ -62923,8 +62923,8 @@ ${TASK_MARKER}`);
         warning(`Nothing was pushed: ${outside.join(", ")} isn't named by any finding.`);
         lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(", ")}.`);
       } else if (blocked.length) {
-        const why = `Nothing was pushed: a guardrail rule refused the change (${blocked.map((b) => `${b.name} in ${name(b.path)}`).join("; ")}).`;
-        warning(noticeText(why, "guardrail_blocked"));
+        const why = `Nothing was pushed: a prompt injection rule refused the change (${blocked.map((b) => `${b.name} in ${name(b.path)}`).join("; ")}).`;
+        warning(noticeText(why, "injection_blocked"));
         recordEvent(o.askerId ? { id: o.askerId, login: o.asker } : undefined, { rule: blocked[0].rule, severity: "strike", where: "push", excerpt: blocked[0].line });
         lines.push(why);
       } else if (unasked.length) {
@@ -63127,16 +63127,17 @@ ${grant.comment}`);
     error: { code: e instanceof ShaftFailure ? e.code : "review_failed", message: redact(e instanceof Error ? e.message : String(e), secrets) },
     duration_ms: Date.now() - started
   });
-  configureGuardrails({ claude: grant.claude_token, cwd, secrets });
-  setServerRules(grant.guardrail?.rules);
-  const flagged = Array.isArray(grant.guardrail?.flagged) ? grant.guardrail.flagged : [];
+  configureInjection({ claude: grant.claude_token, cwd, secrets });
+  const injection = grant.injection ?? grant.guardrail;
+  setServerRules(injection?.rules);
+  const flagged = Array.isArray(injection?.flagged) ? injection.flagged : [];
   const sender = context2.payload.comment?.user ?? context2.payload.sender;
   const askerId = typeof sender?.id === "number" ? sender.id : undefined;
   if ((r.mode === "task" || r.mode === "reply") && (await guardTexts([{ text: r.ask.text, where: "command", user: askerId ? { id: askerId, login: r.actor } : undefined }], { text: SIZE_MAX.command, line: SIZE_MAX.line }))[0].blocked) {
-    const why = "A guardrail rule refused this command, so no model ran. An admin can see the rule on the dashboard.";
-    notice(noticeText(why, "guardrail_blocked"));
-    await writeGuardrailSummary(flagged);
-    return reportRun({ error: { code: "guardrail_blocked", message: why }, duration_ms: Date.now() - started });
+    const why = "A prompt injection rule refused this command, so no model ran. An admin can see the rule on the dashboard.";
+    notice(noticeText(why, "injection_blocked"));
+    await writeInjectionSummary(flagged);
+    return reportRun({ error: { code: "injection_blocked", message: why }, duration_ms: Date.now() - started });
   }
   const runUrl = `${context2.serverUrl}/${owner}/${repo}/actions/runs/${context2.runId}`;
   trackRun({ token: grant.github_token, owner, repo, runUrl, started, secrets });
@@ -63181,7 +63182,7 @@ ${grant.comment}`);
       githubToken: grant.github_token,
       repoUrl: `${context2.serverUrl}/${owner}/${repo}`
     });
-    await writeGuardrailSummary(flagged);
+    await writeInjectionSummary(flagged);
     if (!("refused" in out)) {
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
@@ -63190,7 +63191,7 @@ ${grant.comment}`);
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === "reply") {
-    await writeGuardrailSummary(flagged);
+    await writeInjectionSummary(flagged);
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, askerId, template: job.prompt.template });
     done = true;
     return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
@@ -63213,7 +63214,7 @@ ${grant.comment}`);
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context2.payload.repository?.default_branch),
     flagged
   });
-  await writeGuardrailSummary(flagged);
+  await writeInjectionSummary(flagged);
   setOutput("verdict", out.verdict);
   setOutput("findings", out.findings);
   setOutput("summary_url", out.summaryUrl);
@@ -63227,8 +63228,8 @@ async function fail(e) {
     await writeSummary(failureMarkdown(e));
 }
 var addTokens = (a, b) => ({ input: a.input + b.input, output: a.output + b.output, cache_read: a.cache_read + b.cache_read, cache_write: a.cache_write + b.cache_write });
-async function writeGuardrailSummary(flagged) {
-  const lines = flaggedLines(flagged, guardrailEvents(), ruleName);
+async function writeInjectionSummary(flagged) {
+  const lines = flaggedLines(flagged, injectionEvents(), ruleName);
   if (lines.length)
     await writeSummary(lines.join(`
 
