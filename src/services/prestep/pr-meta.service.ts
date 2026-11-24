@@ -5,8 +5,8 @@ const HEADING = /^#{1,6}\s+(.+?)[\s#]*$/;
 /** A template line that asks for an issue. */
 const ASKS_ISSUE = /\bissues?\b|\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#/i;
 /** `#12`, an issue URL, or a tracker key such as `ENG-12`. */
-const ISSUE_REF = /(?:^|[\s(])#\d+\b|\/issues\/\d+|\b[A-Z][A-Z0-9]+-\d+\b/;
-const CONVENTIONAL = /^\w+(?:\([^)]+\))?!?: \S/;
+export const ISSUE_REF = /(?:^|[\s(])#\d+\b|\/issues\/\d+|\b[A-Z][A-Z0-9]+-\d+\b/;
+export const CONVENTIONAL = /^\w+(?:\([^)]+\))?!?: \S/;
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** The body's sections by heading, each with its text minus HTML comments. */

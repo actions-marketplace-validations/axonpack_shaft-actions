@@ -61316,6 +61316,13 @@ var debugOutput = ({ files }, data) => {
   });
 };
 
+// src/services/prestep/todo-refs.service.ts
+var TODO = /(?:\/\/|#|\/\*|\*|<!--|--)\s*(TODO|FIXME)\b/;
+var todoRefs = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => {
+  const m = TODO.exec(text);
+  return m && !ISSUE_REF.test(text) ? [{ severity: "nit", file: f.filename, line, title: `${m[1]} with no issue`, body: `This ${m[1]} links no issue, so nobody will find it again. Add an issue link or \`#123\`, or do it now.` }] : [];
+}));
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = {
   secrets: secrets2,
@@ -61328,7 +61335,8 @@ var SCRIPTS = {
   "focused-tests": focusedTests,
   "large-files": largeFiles,
   "install-hooks": installHooks,
-  "debug-output": debugOutput
+  "debug-output": debugOutput,
+  "todo-refs": todoRefs
 };
 var FACTS = {
   "deps-diff": depsDiffFacts,
