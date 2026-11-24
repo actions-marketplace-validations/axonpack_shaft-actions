@@ -352,23 +352,24 @@ Axon Shaft keeps one summary comment on the PR and edits it on every push. The f
 
 #### The card
 
-The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. The comment is written only when the review is done: the first review creates it, and a later push edits it in place, which GitHub sends no email for. While a review runs, the comment stays as the last review left it. Under it are the headline and these chips:
+The card opens with the verdict's status card, an SVG from `https://shaft.axonpack.dev/status/<verdict>.svg`. The comment is written only when the review is done: the first review creates it, and a later push edits it in place, which GitHub sends no email for. While a review runs, the comment stays as the last review left it. Under it are the headline and three bars, drawn with GitHub's math so no image is fetched:
 
-- **Findings**: the number of blocking, should-fix and nit findings, and how many earlier findings this push fixed.
-- **Checks**: one chip per check:
+- **Checks**: one bar for every check the review ran or should have run, and a count such as `5 of 7 clean · 2 with findings · 1 not checked`. The line keeps the same length however many checks find something.
 
-  | Chip | Meaning |
+  | Colour | Meaning |
   |---|---|
-  | ✅ | Checked, nothing found. |
-  | ⚠️ | Only should-fix or nit findings. |
-  | ❌ | A blocking finding. |
-  | ⬜ | Not checked: the model says it didn't do that check, and "What this PR does" names it. |
-  | ➖ | Turned off on the dashboard. |
+  | Green | Checked, nothing found. |
+  | Grey | Not checked: the model says it didn't do that check, or its checklist didn't run. |
+  | Amber | Only should-fix or nit findings. |
+  | Red | A blocking finding. |
 
-- Checks the repo added on the dashboard share one chip, "Your checks", shown only when they found something.
-- When the job has [checklists](#checklists), there's one chip per checklist instead, under its name and in the job's order. A checklist that didn't run shows ⬜.
+  A check turned off on the dashboard is left out.
+- **Findings**: the blocking, should-fix and nit findings as red, amber and grey, then their counts and how many earlier findings this push fixed.
+- **Confidence**: how sure the review is, in blue.
 
-The card's last line gives the kind of change, the model's confidence and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · 85% confidence · reviewed a1b2c3d`.
+Under the bars, a folded list names each check with findings, blocking first, with its counts, then each check that wasn't checked and why. Checks the repo added on the dashboard show there as "Your checks", only when they found something. When the job has [checklists](#checklists), the bars and the list count checklists instead, under their names.
+
+The card's last line gives the kind of change and the reviewed commit, linked to the commit on GitHub, such as `Bug fix · reviewed a1b2c3d`.
 
 ### What a push reviews again
 
@@ -410,15 +411,15 @@ When the project has merge gates, the action also posts a check run named `Axon 
 
 The action also posts one check run per review check on the reviewed commit, named after the check's key: `Axon Shaft / correctness`, `Axon Shaft / breakage`, `Axon Shaft / standards`, `Axon Shaft / tests`, `Axon Shaft / docs`, `Axon Shaft / security`, and `Axon Shaft / rules` for the checks the repo added. Each one's summary is a table of that check's findings.
 
-| Card chip | Conclusion |
+| The check on the card | Conclusion |
 |---|---|
-| ❌ A blocking finding | `failure` |
-| ⚠️ Only should-fix or nit findings | `neutral` |
-| ✅ Checked, nothing found | `success` |
-| ⬜ Not checked | `skipped` |
-| ➖ Turned off on the dashboard | no check run |
+| A blocking finding (red) | `failure` |
+| Only should-fix or nit findings (amber) | `neutral` |
+| Checked, nothing found (green) | `success` |
+| Not checked (grey) | `skipped` |
+| Turned off on the dashboard | no check run |
 
-- `Axon Shaft / rules` is posted only when the repo's own checks found something, as the card's chip is.
+- `Axon Shaft / rules` is posted only when the repo's own checks found something, the same as their line in the card's list.
 - Any of them can be a required status check. GitHub treats `neutral` and `skipped` as passing, so a required check blocks merging only on a blocking finding.
 - The run's token needs Checks (write), the same as for the gates check. The Axon Shaft API asks for it on every review run. Until an admin approves Checks (write) on the installation, the job log warns once and the review posts as usual.
 - A dry run logs each conclusion and posts nothing.

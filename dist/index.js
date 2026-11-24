@@ -58050,30 +58050,58 @@ function checkStates(review, placed, checks, checklists) {
 }
 function card(review, placed, fixed, f) {
   const n = (s) => placed.filter((p) => p.severity === s).length;
-  const countChips = [
-    n("blocking") && chip(`\uD83D\uDD34 ${n("blocking")} blocking`),
-    n("should-fix") && chip(`\uD83D\uDFE1 ${n("should-fix")} should fix`),
-    n("nit") && chip(`⚪ ${plural(n("nit"), "nit")}`),
-    !placed.length && chip("✅ No findings"),
-    fixed && chip(`✅ ${fixed} fixed`)
+  const counts = [
+    n("blocking") && `\uD83D\uDD34 ${n("blocking")} blocking`,
+    n("should-fix") && `\uD83D\uDFE1 ${n("should-fix")} should fix`,
+    n("nit") && `⚪ ${plural(n("nit"), "nit")}`,
+    !placed.length && "✅ none",
+    fixed && `✅ ${fixed} fixed`
   ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
+  const states = checkStates(review, placed, f.checks, f.checklists);
+  const ran = states.filter((c) => c.state !== "off" && c.state !== "not_checked");
+  const clean = ran.filter((c) => c.state === "passed").length;
+  const flagged = states.filter((c) => c.state === "failed" || c.state === "warned").sort((a, b) => a.state === b.state ? 0 : a.state === "failed" ? -1 : 1);
+  const unchecked = states.filter((c) => c.state === "not_checked");
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, " ");
   const alert = VERDICT_ALERT[review.verdict];
+  const checksLine = [`${clean} of ${ran.length} clean`, flagged.length && `${flagged.length} with findings`, unchecked.length && `${unchecked.length} not checked`].filter(Boolean).join(" · ");
+  const foundLine = (c) => {
+    const mine = placed.filter((p) => p.step === c.key);
+    const by = SEVERITIES.map((s) => [s, mine.filter((p) => p.severity === s).length]).filter(([, k]) => k);
+    return `${CHECK_MARK[c.state]} **${c.label}** · ${by.map(([s, k]) => s === "nit" ? plural(k, "nit") : `${k} ${s === "blocking" ? "blocking" : "should fix"}`).join(", ")}`;
+  };
+  const fold = [...flagged.map(foundLine), ...unchecked.map((c) => `${CHECK_MARK.not_checked} **${c.label}** · not checked${c.reason ? `: ${html(c.reason)}` : ""}`)];
+  const summary = [flagged.length && plural(flagged.length, "check") + " with findings", unchecked.length && `${unchecked.length} not checked`].filter(Boolean).join(", ");
   return [
     `> [!${alert}]`,
     `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict])}`,
+    ">",
     ...headline.map((l) => `> ${l}`),
     ">",
-    `> **Findings** &nbsp; ${countChips.join(" ")}`,
+    `> ${meter("Checks", checksBar(states))} &nbsp;${checksLine}<br>`,
+    `> ${meter("Findings", mathBar(SEVERITIES.map((s) => [SEVERITY_COLOR[s], n(s)])))} &nbsp;${counts.join(" · ")}<br>`,
+    `> ${meter("Confidence", mathBar([[METER_BLUE, review.confidence], [METER_GREY, 100 - review.confidence]]))} &nbsp;${review.confidence}%`,
+    ...fold.length ? [">", `> <details><summary>${summary}</summary>`, ">", ...fold.map((l, i) => `> ${l}${i < fold.length - 1 ? "<br>" : ""}`), ">", "> </details>"] : [],
     ">",
-    `> **Checks** &nbsp; ${checkChips.join(" ")}`,
-    ">",
-    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
+    `> <sub>${[type, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(" · ")}</sub>`
   ].join(`
 `);
 }
+var METER_PX = 150;
+var METER_BLUE = "#0969da";
+var METER_GREY = "#8c959f";
+var CHECK_COLOR = { passed: "#1a7f37", not_checked: METER_GREY, warned: "#bf8700", failed: "#d1242f" };
+var SEVERITY_COLOR = { blocking: "#d1242f", "should-fix": "#bf8700", nit: METER_GREY };
+function mathBar(parts) {
+  const total = parts.reduce((a, [, k]) => a + k, 0);
+  if (!total)
+    return "";
+  const rules = parts.filter(([, k]) => k > 0).map(([c, k]) => `\\color{${c}}{\\rule{${Math.max(4, Math.round(k / total * METER_PX))}px}{8px}}`);
+  return `$${rules.join("")}$`;
+}
+var checksBar = (states) => mathBar(["passed", "not_checked", "warned", "failed"].map((s) => [CHECK_COLOR[s], states.filter((c) => c.state === s).length]));
+var meter = (label, bar) => `\`${label.padEnd(11, " ")}\`${bar && ` ${bar}`}`;
 function table(rows, f) {
   const link = (p) => {
     const end = p.end_line && p.end_line > p.line ? `-L${p.end_line}` : "";

@@ -545,7 +545,7 @@ test('with checklists, only those whose paths match run: their steps after the d
     { key: 'own-1', label: 'The own-1 list', state: 'passed' },
   ]);
   expect(outcome.output.passes).toEqual([{ name: 'main', model: 'sonnet', tokens: outcome.tokens, checklists: ['correctness', 'own-1'], max_turns: 1 }]);
-  expect(summary).toContain('<kbd>❌ The correctness list</kbd> <kbd>⬜ The migrations list</kbd>');
+  expect(summary).toContain('> ❌ **The correctness list** · 1 blocking<br>\n> ⬜ **The migrations list** · not checked: No matching files changed<br>');
 });
 
 test('skip applies before the paths, so a skipped file fires no checklist', async () => {
