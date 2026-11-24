@@ -1,7 +1,7 @@
 import * as core from '@actions/core';
-import { datamark } from '../guardrails/input.util';
-import { guardrailEvents, ruleName } from '../guardrails/classify.service';
-import { type Flagged, flaggedLines } from '../guardrails/output.util';
+import { datamark } from '../injection/input.util';
+import { injectionEvents, ruleName } from '../injection/classify.service';
+import { type Flagged, flaggedLines } from '../injection/output.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -549,7 +549,7 @@ async function postReview(
     workflowEditUrl: o.workflowEditUrl,
     ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
     repoConfig: o.repoConfig,
-    flagged: flaggedLines(o.flagged ?? [], guardrailEvents(), ruleName),
+    flagged: flaggedLines(o.flagged ?? [], injectionEvents(), ruleName),
     // `/resolve` only when GitHub says the pull request has conflicts.
     commands: o.commands?.filter((c) => c !== 'resolve' || ctx.pr.conflicts),
     ...(models && {

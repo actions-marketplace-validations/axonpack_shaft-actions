@@ -4,7 +4,7 @@ import type { Octokit } from '../types/octokit.type';
 import { GUIDE_FILES } from '../consts/settings.const';
 import { generatedGlobs } from '../utils/prompt.util';
 import { SUMMARY_MARKER } from '../utils/render.util';
-import { guardContext } from '../guardrails/classify.service';
+import { guardContext } from '../injection/classify.service';
 import { hasWriteAccess } from './route.service';
 
 export type Comment = {

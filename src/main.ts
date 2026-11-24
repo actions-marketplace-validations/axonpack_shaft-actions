@@ -16,10 +16,10 @@ import { step } from './services/step.service';
 import { runTask } from './services/task.service';
 import { failureMarkdown, noticeText, ShaftFailure } from './utils/failure.util';
 import { redact, workflowEditUrl } from './utils/render.util';
-import { classifierTokens, configureGuardrails, guardrailEvents, guardTexts, ruleName } from './guardrails/classify.service';
-import { CANARY, SIZE_MAX } from './guardrails/guardrail.const';
-import { setServerRules } from './guardrails/input.util';
-import { type Flagged, flaggedLines } from './guardrails/output.util';
+import { classifierTokens, configureInjection, injectionEvents, guardTexts, ruleName } from './injection/classify.service';
+import { CANARY, SIZE_MAX } from './injection/injection.const';
+import { setServerRules } from './injection/input.util';
+import { type Flagged, flaggedLines } from './injection/output.util';
 
 /** A setting from the Axon Shaft API, checked before the run starts. */
 function oneOf(name: string, allowed: string[], value: unknown): string {
@@ -123,7 +123,7 @@ async function run(): Promise<void> {
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
       duration_ms: Date.now() - started,
     });
-  configureGuardrails({ claude: grant.claude_token, cwd, secrets });
+  configureInjection({ claude: grant.claude_token, cwd, secrets });
   // The API's extra input rules, added to the built-in ones (never in place of them).
   // `guardrail` is the field's name before the rename to injection, for an API that hasn't deployed it.
   const injection = grant.injection ?? grant.guardrail;
@@ -135,7 +135,7 @@ async function run(): Promise<void> {
   if ((r.mode === 'task' || r.mode === 'reply') && (await guardTexts([{ text: r.ask.text, where: 'command', user: askerId ? { id: askerId, login: r.actor } : undefined }], { text: SIZE_MAX.command, line: SIZE_MAX.line }))[0]!.blocked) {
     const why = 'A guardrail rule refused this command, so no model ran. An admin can see the rule on the dashboard.';
     core.notice(noticeText(why, 'guardrail_blocked'));
-    await writeGuardrailSummary(flagged);
+    await writeInjectionSummary(flagged);
     return reportRun({ error: { code: 'guardrail_blocked', message: why }, duration_ms: Date.now() - started });
   }
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
@@ -186,7 +186,7 @@ async function run(): Promise<void> {
       githubToken: grant.github_token,
       repoUrl: `${context.serverUrl}/${owner}/${repo}`,
     });
-    await writeGuardrailSummary(flagged);
+    await writeInjectionSummary(flagged);
     if (!('refused' in out)) {
       done = true;
       return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
@@ -195,7 +195,7 @@ async function run(): Promise<void> {
     return reportRun({ error: { code: out.code, message: redact(out.refused, secrets) }, duration_ms: Date.now() - started });
   }
   if (r.mode === 'reply') {
-    await writeGuardrailSummary(flagged);
+    await writeInjectionSummary(flagged);
     const out = await replyToComment({ ...common, ask: r.ask, asker: r.actor, askerId, template: job.prompt.template });
     done = true;
     return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
@@ -219,7 +219,7 @@ async function run(): Promise<void> {
     workflowEditUrl: workflowEditUrl(process.env.GITHUB_WORKFLOW_REF, context.payload.repository?.default_branch),
     flagged,
   });
-  await writeGuardrailSummary(flagged);
+  await writeInjectionSummary(flagged);
   core.setOutput('verdict', out.verdict);
   core.setOutput('findings', out.findings);
   core.setOutput('summary_url', out.summaryUrl);
@@ -237,8 +237,8 @@ async function fail(e: unknown): Promise<void> {
 const addTokens = (a: Tokens, b: Tokens): Tokens => ({ input: a.input + b.input, output: a.output + b.output, cache_read: a.cache_read + b.cache_read, cache_write: a.cache_write + b.cache_write });
 
 /** The guardrail lines for people with strikes, in the job summary. */
-async function writeGuardrailSummary(flagged: Flagged[]): Promise<void> {
-  const lines = flaggedLines(flagged, guardrailEvents(), ruleName);
+async function writeInjectionSummary(flagged: Flagged[]): Promise<void> {
+  const lines = flaggedLines(flagged, injectionEvents(), ruleName);
   if (lines.length) await writeSummary(lines.join('\n\n'));
 }
 

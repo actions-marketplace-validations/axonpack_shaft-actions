@@ -3,7 +3,7 @@ import { type AgentResult, type ReplyFormat, runAgent, type Tokens } from '../se
 import type { ClaudeToken } from '../services/api.service';
 import { dataBlock } from '../utils/prompt.util';
 import { redact } from '../utils/render.util';
-import { CLASSIFY_MAX, PUSH_RULES, removedMarker, RULES } from './guardrail.const';
+import { CLASSIFY_MAX, PUSH_RULES, removedMarker, RULES } from './injection.const';
 import { capText, datamark, scanInput, serverRules, withoutQuotes } from './input.util';
 
 /** Who wrote a text: their GitHub ID, which never changes, and their login now. */
@@ -11,20 +11,20 @@ export type Author = { id: number; login: string };
 /** Where a guarded text came from, as the API's report names it. */
 export type Where = 'pr_body' | 'command' | 'diff' | 'output' | 'push';
 /** One guardrail event, as `POST /v1/runs` takes it. */
-export type GuardrailEvent = { user_id: number; login: string; rule: string; severity: 'warning' | 'strike'; where: Where; excerpt: string };
+export type InjectionEvent = { user_id: number; login: string; rule: string; severity: 'warning' | 'strike'; where: Where; excerpt: string };
 
 let setup: { claude: ClaudeToken; cwd: string; secrets: string[] } | undefined;
 let classified = false;
-const events: GuardrailEvent[] = [];
+const events: InjectionEvent[] = [];
 const spent: Tokens = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
 
 /** What the classifier needs, set once the grant is in. Without it (`/dismiss`, tests) suspicious text is a warning and nothing is classified. */
-export const configureGuardrails = (s: typeof setup) => {
+export const configureInjection = (s: typeof setup) => {
   setup = s;
 };
 
 /** This run's events for the report. */
-export const guardrailEvents = (): GuardrailEvent[] => [...events];
+export const injectionEvents = (): InjectionEvent[] => [...events];
 /** What the classifier used, for the run's usage. */
 export const classifierTokens = (): Tokens => ({ ...spent });
 
@@ -38,7 +38,7 @@ export const ruleName = (id: string) => {
  * Record an event, at most one strike per user per run: a later strike for the same user is kept as
  * a warning. The excerpt is redacted and at most 200 characters.
  */
-export function recordEvent(user: Author | undefined, e: Omit<GuardrailEvent, 'user_id' | 'login'>): void {
+export function recordEvent(user: Author | undefined, e: Omit<InjectionEvent, 'user_id' | 'login'>): void {
   if (!user?.id) return;
   const struck = events.some((x) => x.user_id === user.id && x.severity === 'strike');
   const excerpt = redact(e.excerpt, setup?.secrets ?? []).replace(/\s+/g, ' ').slice(0, 200);
@@ -108,7 +108,7 @@ export async function guardTexts(pieces: Piece[], max = { text: 20_000, line: 2_
 }
 
 /** Forget this run's state: for tests. */
-export function resetGuardrails(): void {
+export function resetInjection(): void {
   setup = undefined;
   classified = false;
   events.length = 0;

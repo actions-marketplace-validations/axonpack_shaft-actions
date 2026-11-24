@@ -1,8 +1,8 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
-import { guardrailEvents } from '../guardrails/classify.service';
-import type { Flagged } from '../guardrails/output.util';
+import { injectionEvents } from '../injection/classify.service';
+import type { Flagged } from '../injection/output.util';
 import type { FollowUp, PullRequest, ReviewEvent } from './route.service';
 
 /**
@@ -226,7 +226,7 @@ export async function fetchPushToken(): Promise<PushGrant> {
  * any; an older API ignores it). Best effort: a failure is logged and never fails the run.
  */
 export async function reportRun(summary: RunSummary): Promise<void> {
-  const injection = guardrailEvents();
+  const injection = injectionEvents();
   try {
     const res = await post('/v1/runs', { ...summary, ...(injection.length && { injection }) });
     if (!res.ok) throw new Error(`the API answered ${res.status}`);

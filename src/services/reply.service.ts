@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { datamark } from '../guardrails/input.util';
+import { datamark } from '../injection/input.util';
 import { TRIAGE_START } from '../consts/ladder.const';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';

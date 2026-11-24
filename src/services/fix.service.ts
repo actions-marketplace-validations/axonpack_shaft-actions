@@ -2,7 +2,7 @@ import { closeSync, constants, fstatSync, ftruncateSync, openSync, readFileSync,
 import { join } from 'node:path';
 import * as core from '@actions/core';
 import { FIX_HAIKU_MAX } from '../consts/ladder.const';
-import { datamark } from '../guardrails/input.util';
+import { datamark } from '../injection/input.util';
 import { dataBlock } from '../utils/prompt.util';
 import { parseState, type StateFinding } from '../utils/render.util';
 import { insideCheckout } from '../utils/tool-guard.util';

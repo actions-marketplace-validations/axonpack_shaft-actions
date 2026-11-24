@@ -7,8 +7,8 @@ import { ShaftFailure } from '../utils/failure.util';
 import { type Gate, GATE_STATUSES, GATES_MAX, type Review, SEVERITIES, STEPS, TYPES, VERDICTS, type Walkthrough, WALKTHROUGH_MAX } from '../utils/render.util';
 import { runnerEnv } from '../utils/env.util';
 import { toolDenial } from '../utils/tool-guard.util';
-import { CANARY, SYSTEM_PROMPT } from '../guardrails/guardrail.const';
-import { scanOutput } from '../guardrails/output.util';
+import { CANARY, SYSTEM_PROMPT } from '../injection/injection.const';
+import { scanOutput } from '../injection/output.util';
 import { sandboxPrefix } from './sandbox.service';
 import { claudeBinary, claudeConfigDir } from './claude-binary.service';
 

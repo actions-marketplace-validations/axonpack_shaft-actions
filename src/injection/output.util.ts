@@ -1,4 +1,4 @@
-import { LINK_HOSTS, TOKEN_SHAPES } from './guardrail.const';
+import { LINK_HOSTS, TOKEN_SHAPES } from './injection.const';
 
 /** Keys whose text is code or a path: only token shapes are taken out of them, the rest stays as written. */
 const CODE_KEYS = new Set(['suggestion', 'file', 'path', 'fp', 'step']);

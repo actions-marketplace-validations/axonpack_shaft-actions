@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import { CODE_GROUPS, RULES, type Rule, THRESHOLDS } from './guardrail.const';
+import { CODE_GROUPS, RULES, type Rule, THRESHOLDS } from './injection.const';
 
 export type Verdict = 'clean' | 'suspicious' | 'harmful';
 export type Scan = { score: number; hits: string[]; verdict: Verdict };
