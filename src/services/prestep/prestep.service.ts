@@ -38,6 +38,7 @@ import { installHooks } from './install-hooks.service';
 import { debugOutput } from './debug-output.service';
 import { todoRefs } from './todo-refs.service';
 import { licenceHeader } from './licence-header.service';
+import { docLinks } from './doc-links.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = {
@@ -54,6 +55,7 @@ export const SCRIPTS: Record<string, Script | NetworkScript> = {
   'debug-output': debugOutput,
   'todo-refs': todoRefs,
   'licence-header': licenceHeader,
+  'doc-links': docLinks,
 };
 
 /** The pre-steps that hand the model facts for `script+model` checklists, by `prestep` key. */

@@ -61332,6 +61332,45 @@ var licenceHeader = ({ files, checkout }, data) => {
   return files.filter((f) => f.status === "added" && CODE.test(f.filename)).filter((f) => !(checkout.read(f.filename) ?? "").split(/\r?\n/, TOP).some((l) => l.includes(first))).map((f) => ({ severity: "should-fix", file: f.filename, line: 1, title: "Licence header missing", body: `This new file doesn't start with the repo's licence header (\`${first.slice(0, 120)}\`). Add it at the top.` }));
 };
 
+// src/services/prestep/doc-links.service.ts
+import { posix } from "node:path";
+var MARKDOWN = /\.(?:md|mdx|markdown)$/i;
+var LINK = /!?\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+["'][^)]*)?\)/g;
+function anchors(text) {
+  const out = new Set;
+  const seen = new Map;
+  for (const l of text.split(/\r?\n/)) {
+    for (const m of l.matchAll(/<a\s+(?:name|id)=["']([^"']+)["']|\{#([\w-]+)\}/g))
+      out.add(m[1] ?? m[2]);
+    const h = /^#{1,6}\s+(.+?)[\s#]*$/.exec(l)?.[1];
+    if (!h)
+      continue;
+    const slug = h.replace(/\{#[\w-]+\}/, "").trim().toLowerCase().replace(/<[^>]+>|[`*_~]/g, "").replace(/[^\p{L}\p{N}\s-]/gu, "").replace(/\s/g, "-");
+    const n = seen.get(slug) ?? 0;
+    seen.set(slug, n + 1);
+    out.add(n ? `${slug}-${n}` : slug);
+  }
+  return out;
+}
+var docLinks = ({ files, checkout }) => files.filter((f) => MARKDOWN.test(f.filename) && f.status !== "removed").flatMap((f) => [...diffLines(f.patch, true)].flatMap(([line, text]) => [...text.matchAll(LINK)].flatMap(([, target]) => {
+  if (/^(?:[a-z][\w+.-]*:|\/)/i.test(target))
+    return [];
+  const [rawPath = "", anchor] = target.split("#");
+  let path = f.filename;
+  try {
+    if (rawPath)
+      path = posix.normalize(posix.join(posix.dirname(f.filename), decodeURIComponent(rawPath.split("?")[0])));
+  } catch {
+    return [];
+  }
+  if (path.startsWith("../") || !checkout.find([path, `${path.replace(/\/$/, "")}/**`]).length)
+    return [{ severity: "blocking", file: f.filename, line, title: `Broken link: \`${rawPath}\``, body: `This link points at \`${path}\`, which isn't in the repo at this commit.` }];
+  if (!anchor || !MARKDOWN.test(path))
+    return [];
+  const text = checkout.read(path);
+  return text && !anchors(text).has(anchor.toLowerCase()) ? [{ severity: "should-fix", file: f.filename, line, title: `Link to a missing heading: \`#${anchor}\``, body: `\`${path}\` has no heading whose anchor is \`#${anchor}\`. If your docs site builds anchors its own way, this may be fine.` }] : [];
+})));
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = {
   secrets: secrets2,
@@ -61346,7 +61385,8 @@ var SCRIPTS = {
   "install-hooks": installHooks,
   "debug-output": debugOutput,
   "todo-refs": todoRefs,
-  "licence-header": licenceHeader
+  "licence-header": licenceHeader,
+  "doc-links": docLinks
 };
 var FACTS = {
   "deps-diff": depsDiffFacts,

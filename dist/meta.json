@@ -121,7 +121,8 @@
     "install-hooks",
     "debug-output",
     "todo-refs",
-    "licence-header"
+    "licence-header",
+    "doc-links"
   ],
   "facts": [
     "deps-diff",
