@@ -7,3 +7,4 @@
 - **Licence header**: the `licence-header` script flags a new source file without the repo's licence header, as should-fix. The header comes from the API as `data.rules`, and with none set the script finds nothing.
 - **Links in docs**: the `doc-links` script checks relative links on added lines of changed Markdown. A link to a missing file is blocking, and a link to a missing heading is should-fix.
 - **Commit format**: the `commit-format` script flags a pull request title or commit subject that isn't a Conventional Commit, as a nit. Scripts now get the commit messages too.
+- **Migration rollback**: the `migration-down` script flags a new migration with no down or rollback step, as should-fix. The migration globs and down patterns come from the API as `data.paths` and `data.down`.

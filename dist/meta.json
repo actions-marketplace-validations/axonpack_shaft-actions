@@ -123,7 +123,8 @@
     "todo-refs",
     "licence-header",
     "doc-links",
-    "commit-format"
+    "commit-format",
+    "migration-down"
   ],
   "facts": [
     "deps-diff",
