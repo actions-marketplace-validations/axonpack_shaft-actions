@@ -61423,6 +61423,14 @@ ${near.join(`
   });
 }), "");
 
+// src/services/prestep/dead-flags.service.ts
+var deadFlags = async (input) => {
+  const dead = (await flags(input)).split(`
+`).filter((l) => l.startsWith("- ") && l.includes("(was in ") && l.includes("; still named in "));
+  return dead.length ? ["Flags no added line reads any more, still named in the repo:", ...dead].join(`
+`) : "";
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = {
   secrets: secrets2,
@@ -61465,7 +61473,8 @@ var FACTS = {
   "migration-lint": migrationLint,
   tflint,
   "contract-diff": contractDiff,
-  "sql-strings": sqlStrings
+  "sql-strings": sqlStrings,
+  "dead-flags": deadFlags
 };
 async function runScripts(run, input) {
   const found = await Promise.all(run.map(async (c) => {

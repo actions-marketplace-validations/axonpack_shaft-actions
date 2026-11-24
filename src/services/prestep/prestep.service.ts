@@ -42,6 +42,7 @@ import { docLinks } from './doc-links.service';
 import { commitFormat } from './commit-format.service';
 import { migrationDown } from './migration-down.service';
 import { sqlStrings } from './sql-strings.service';
+import { deadFlags } from './dead-flags.service';
 
 /** The pre-step scripts built into the action, by the `prestep` key the API sends. */
 export const SCRIPTS: Record<string, Script | NetworkScript> = {
@@ -89,6 +90,7 @@ export const FACTS: Record<string, Facts> = {
   tflint,
   'contract-diff': contractDiff,
   'sql-strings': sqlStrings,
+  'dead-flags': deadFlags,
 };
 
 /**

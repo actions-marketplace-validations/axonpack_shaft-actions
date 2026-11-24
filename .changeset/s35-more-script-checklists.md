@@ -10,3 +10,4 @@
 - **Migration rollback**: the `migration-down` script flags a new migration with no down or rollback step, as should-fix. The migration globs and down patterns come from the API as `data.paths` and `data.down`.
 - **No hit, no model call**: a `script+model` checklist whose pre-step finds nothing passes without calling the model, except `breakage`, `scope` and `access-control`.
 - **SQL built from strings**: the `sql-strings` pre-step finds added lines that build SQL from strings and hands the model only those hunks. With none, the model isn't called.
+- **Dead feature flags**: the `dead-flags` pre-step builds on `flags` and lists each flag the pull request stops reading that the repo still names. With none, the model isn't called.

@@ -149,7 +149,8 @@
     "migration-lint",
     "tflint",
     "contract-diff",
-    "sql-strings"
+    "sql-strings",
+    "dead-flags"
   ],
   "guideFiles": [
     "CLAUDE.md",
