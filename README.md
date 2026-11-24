@@ -494,9 +494,18 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 - The model can't plant a hidden marker in its text. The action reads its earlier summary and inline comments back only from comments `axonshaft[bot]` wrote, so a copy posted by someone else is ignored.
 - Before anything is posted, the action replaces the tokens it holds with `***`. It masks every token in the job log.
 
+### Guardrails
+
+Guardrails are rules the project sets on the dashboard: org rules apply to every project in the org, and each project adds its own on top. They only add limits. None of them can lift a limit above or let the model use a tool or run a command.
+
+- **Never read** globs (from the repo root): the model can't read a matching file, name one in a git command, or search a folder that could hold one.
+- **Never edit** globs: the model can't edit a matching file, and `/fix` doesn't push a change that touches one.
+- **Text rules**, such as "don't suggest changes to billing code", go in the system prompt as rules the model must follow.
+- A finding on a file either kind of glob matches isn't posted, and the summary counts how many were left out.
+
 ### Injection protection
 
-The limits above hold even when the model is fooled. Injection protection also checks what people write, and tie each attempt they catch to the person who made it.
+The limits above hold even when the model is fooled. Injection protection also checks what people write, and ties each attempt it catches to the person who made it.
 
 - Before the model runs, the action checks the PR's title, description and commit messages, the comments that reach the prompt, and a `/ask` or `/fix` command against fixed rules: asks to ignore earlier instructions, to print the environment or tokens, `/proc/self/environ`, fake role or tool tags such as `<tool_result>`, invisible or direction-changing characters, and instructions hidden in HTML comments. Diff lines are checked only for hidden characters, fake tags and lines that tell an AI reviewer what to conclude, since code may mention a system prompt for real reasons. Quoted lines (`> `) are never judged. The API may send extra rules as regular expressions. The action adds them to its own and never drops or weakens a built-in one. It skips any rule that doesn't compile, reuses a built-in rule's ID or has a nested quantifier such as `(a+)+`, takes at most 50, and runs them on the first 20,000 characters of each text.
 - A text that clearly breaks a rule is replaced in the prompt with `[removed by injection protection: <rule>]`, and the rest of the PR is still reviewed. A command that does is refused before any model runs (`injection_blocked`).
