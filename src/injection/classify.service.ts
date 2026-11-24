@@ -10,7 +10,7 @@ import { capText, datamark, scanInput, serverRules, withoutQuotes } from './inpu
 export type Author = { id: number; login: string };
 /** Where a guarded text came from, as the API's report names it. */
 export type Where = 'pr_body' | 'command' | 'diff' | 'output' | 'push';
-/** One guardrail event, as `POST /v1/runs` takes it. */
+/** One injection event, as `POST /v1/runs` takes it. */
 export type InjectionEvent = { user_id: number; login: string; rule: string; severity: 'warning' | 'strike'; where: Where; excerpt: string };
 
 let setup: { claude: ClaudeToken; cwd: string; secrets: string[] } | undefined;
@@ -43,12 +43,12 @@ export function recordEvent(user: Author | undefined, e: Omit<InjectionEvent, 'u
   const struck = events.some((x) => x.user_id === user.id && x.severity === 'strike');
   const excerpt = redact(e.excerpt, setup?.secrets ?? []).replace(/\s+/g, ' ').slice(0, 200);
   events.push({ user_id: user.id, login: user.login, ...e, severity: struck ? 'warning' : e.severity, excerpt });
-  core.warning(`Guardrail: ${e.severity === 'strike' && !struck ? 'strike' : 'warning'} for @${user.login} (${ruleName(e.rule)}, in the ${e.where.replace('_', ' ')}).`);
+  core.warning(`Injection protection: ${e.severity === 'strike' && !struck ? 'strike' : 'warning'} for @${user.login} (${ruleName(e.rule)}, in the ${e.where.replace('_', ' ')}).`);
 }
 
 type Verdict = { verdict: 'benign' | 'injection'; reason: string };
 const FORMAT: ReplyFormat<Verdict> = {
-  name: 'guardrail check',
+  name: 'injection check',
   schema: { type: 'object', additionalProperties: false, required: ['verdict', 'reason'], properties: { verdict: { enum: ['benign', 'injection'] }, reason: { type: 'string', maxLength: 120 } } },
   parse: (x) => {
     const v = x as Partial<Verdict> | undefined;
@@ -77,7 +77,7 @@ export async function classify(text: string): Promise<'benign' | 'injection'> {
   } catch (e) {
     const used = (e as { spent?: Omit<AgentResult<Verdict>, 'reply'> }).spent?.tokens;
     if (used) for (const k of Object.keys(spent) as (keyof Tokens)[]) spent[k] += used[k];
-    core.warning(`The guardrail check didn't answer, so the suspicious text counts as benign: ${(e as Error).message}`);
+    core.warning(`The injection check didn't answer, so the suspicious text counts as benign: ${(e as Error).message}`);
     return 'benign';
   }
 }

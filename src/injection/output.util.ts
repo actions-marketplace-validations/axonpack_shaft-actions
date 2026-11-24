@@ -76,11 +76,11 @@ export function flaggedLines(flagged: Flagged[], events: { user_id: number; logi
   return [...users.values()].map((u) => {
     const rule = events.find((e) => e.user_id === u.user_id && e.severity === 'strike')?.rule;
     const named = rule ? `: ${names(rule)}` : '';
-    if ('exempt' in u && u.exempt) return `⚠️ @${u.login} has ${u.strikes} guardrail strike${u.strikes === 1 ? '' : 's'}${named}. Admins and maintainers aren't blocked.`;
+    if ('exempt' in u && u.exempt) return `⚠️ @${u.login} has ${u.strikes} prompt injection strike${u.strikes === 1 ? '' : 's'}${named}. Admins and maintainers aren't blocked.`;
     const before = flagged.find((f) => f.user_id === u.user_id)?.strikes ?? 0;
     // This run went ahead, so a user the API already counted at 3 isn't blocked (strikes set to warn, or the block lapsed).
-    if (before >= 3) return `⚠️ @${u.login} has ${u.strikes} guardrail strikes${named}.`;
-    if (u.strikes >= 3) return `@${u.login} has reached 3 guardrail strikes. Unless strikes are set to warn only, Axon Shaft won't run for them on this account until an admin clears them on the dashboard.`;
+    if (before >= 3) return `⚠️ @${u.login} has ${u.strikes} prompt injection strikes${named}.`;
+    if (u.strikes >= 3) return `@${u.login} has reached 3 prompt injection strikes. Unless strikes are set to warn only, Axon Shaft won't run for them on this account until an admin clears them on the dashboard.`;
     return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${named}. A third strike stops Axon Shaft from running for them on this account.`;
   });
 }

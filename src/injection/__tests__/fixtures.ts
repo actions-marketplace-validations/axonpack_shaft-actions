@@ -1,4 +1,4 @@
-/** S34g: text the guardrails must catch, and benign look-alikes they must let through. */
+/** S34g: text injection protection must catch, and benign look-alikes they must let through. */
 const zw = (s: string) => s.split('').join('​');
 const wide = (s: string) => s.replace(/[!-~]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0xfee0));
 

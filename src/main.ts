@@ -133,7 +133,7 @@ async function run(): Promise<void> {
   const sender = context.payload.comment?.user ?? context.payload.sender;
   const askerId = typeof sender?.id === 'number' ? sender.id : undefined;
   if ((r.mode === 'task' || r.mode === 'reply') && (await guardTexts([{ text: r.ask.text, where: 'command', user: askerId ? { id: askerId, login: r.actor } : undefined }], { text: SIZE_MAX.command, line: SIZE_MAX.line }))[0]!.blocked) {
-    const why = 'A guardrail rule refused this command, so no model ran. An admin can see the rule on the dashboard.';
+    const why = 'A prompt injection rule refused this command, so no model ran. An admin can see the rule on the dashboard.';
     core.notice(noticeText(why, 'injection_blocked'));
     await writeInjectionSummary(flagged);
     return reportRun({ error: { code: 'injection_blocked', message: why }, duration_ms: Date.now() - started });
@@ -236,7 +236,7 @@ async function fail(e: unknown): Promise<void> {
 
 const addTokens = (a: Tokens, b: Tokens): Tokens => ({ input: a.input + b.input, output: a.output + b.output, cache_read: a.cache_read + b.cache_read, cache_write: a.cache_write + b.cache_write });
 
-/** The guardrail lines for people with strikes, in the job summary. */
+/** The injection protection lines for people with strikes, in the job summary. */
 async function writeInjectionSummary(flagged: Flagged[]): Promise<void> {
   const lines = flaggedLines(flagged, injectionEvents(), ruleName);
   if (lines.length) await writeSummary(lines.join('\n\n'));

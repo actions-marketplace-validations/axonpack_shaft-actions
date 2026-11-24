@@ -93,7 +93,7 @@ export type Grant =
       /** Permissions the run wanted that the installation hasn't approved, each with the warning to log. Older APIs don't send it. */
       missing_permissions?: MissingPermission[];
       /**
-       * The users in this run (the actor, the pull request's author) with 1 or 2 active guardrail strikes,
+       * The users in this run (the actor, the pull request's author) with 1 or 2 active prompt injection strikes,
        * and `rules`, extra input rules (regex strings) the action adds to its own. Older APIs send neither.
        */
       injection?: { flagged: Flagged[]; rules?: unknown };

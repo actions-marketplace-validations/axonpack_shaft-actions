@@ -93,7 +93,7 @@ export type ReviewOptions = {
   ignore?: Ignore[];
   /** Why the API left the repo's config file out, for a warning in the summary. */
   repoConfig?: { path: string; problems: string[] };
-  /** The users the API says have active strikes, for the summary's guardrail lines. */
+  /** The users the API says have active strikes, for the summary's injection protection lines. */
   flagged?: Flagged[];
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];

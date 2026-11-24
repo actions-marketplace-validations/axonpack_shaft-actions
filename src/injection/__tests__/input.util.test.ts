@@ -29,7 +29,7 @@ test('the benign set gives no strike and at most one warning', async () => {
 test('a harmful text is replaced and strikes its author once per run, however many texts hit', async () => {
   const user = { id: 7, login: 'mallory' };
   const out = await guardTexts(HARMFUL_PROSE.map((text) => ({ text, where: 'pr_body' as const, user })));
-  expect(out.every((o) => o.blocked && o.text.startsWith('[removed by guardrail:'))).toBe(true);
+  expect(out.every((o) => o.blocked && o.text.startsWith('[removed by injection protection:'))).toBe(true);
   const events = injectionEvents();
   expect(events.filter((e) => e.severity === 'strike')).toHaveLength(1);
   expect(events.every((e) => e.user_id === 7 && e.excerpt.length <= 200)).toBe(true);

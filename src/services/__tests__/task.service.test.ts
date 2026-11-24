@@ -492,7 +492,7 @@ test('a change that pipes a download into a shell is never pushed, even when ask
   const before = remote('pr');
   await runTask(options({ askerId: 42, ask: { id: 3, text: '/fix add setup.sh' } }));
   expect(remote('pr')).toBe(before);
-  expect(fake.posted[0]).toContain('Nothing was pushed: a guardrail rule refused the change (pipes a download into a shell in `setup.sh`).');
+  expect(fake.posted[0]).toContain('Nothing was pushed: a prompt injection rule refused the change (pipes a download into a shell in `setup.sh`).');
   expect(injectionEvents()).toMatchObject([{ user_id: 42, severity: 'strike', where: 'push', rule: 'push.pipe_shell' }]);
 });
 

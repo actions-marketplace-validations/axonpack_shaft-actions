@@ -10,7 +10,7 @@ import { hasWriteAccess } from './route.service';
 export type Comment = {
   id: number;
   author: string;
-  /** The author's GitHub ID, for the guardrails. */
+  /** The author's GitHub ID, for injection protection. */
   authorId?: number;
   /** Whether the author is inside the repo (`insider`), so the review reads the comment. */
   trusted: boolean;

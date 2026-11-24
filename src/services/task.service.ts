@@ -213,7 +213,7 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         core.warning(`Nothing was pushed: ${outside.join(', ')} isn't named by any finding.`);
         lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(', ')}.`);
       } else if (blocked.length) {
-        const why = `Nothing was pushed: a guardrail rule refused the change (${blocked.map((b) => `${b.name} in ${name(b.path)}`).join('; ')}).`;
+        const why = `Nothing was pushed: a prompt injection rule refused the change (${blocked.map((b) => `${b.name} in ${name(b.path)}`).join('; ')}).`;
         core.warning(noticeText(why, 'injection_blocked'));
         recordEvent(o.askerId ? { id: o.askerId, login: o.asker } : undefined, { rule: blocked[0]!.rule, severity: 'strike', where: 'push', excerpt: blocked[0]!.line });
         lines.push(why);

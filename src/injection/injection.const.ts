@@ -43,7 +43,7 @@ export const THRESHOLDS = { SUSPICIOUS: 3, HARMFUL: 6 };
 export const SIZE_MAX = { command: 8_000, pr_body: 20_000, line: 2_000 };
 
 /** What a harmful text is replaced with in the prompt. */
-export const removedMarker = (rule: string) => `[removed by guardrail: ${rule}]`;
+export const removedMarker = (rule: string) => `[removed by injection protection: ${rule}]`;
 
 /** The classifier's text cap, about 4k tokens. */
 export const CLASSIFY_MAX = 16_000;
