@@ -51,11 +51,11 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     kind: 'notice',
     message: "`/dismiss` or `/undismiss` wasn't a reply in the thread of a finding from the last review, or the finding was already as asked, so nothing changed.",
   },
-  guardrail_blocked: {
+  injection_blocked: {
     kind: 'notice',
     message: 'A guardrail rule refused a command or a push: the request or the change looked like an attempt to misuse Axon Shaft, such as asking for its secrets or piping a download into a shell.',
   },
-  guardrail_leak: { kind: 'failure', message: "The model's reply repeated Axon Shaft's system prompt or its canary line, so nothing was posted." },
+  injection_leak: { kind: 'failure', message: "The model's reply repeated Axon Shaft's system prompt or its canary line, so nothing was posted." },
   user_blocked: {
     kind: 'notice',
     message: 'The person who opened the pull request or wrote the command has 3 active guardrail strikes on this account, so Axon Shaft doesn\'t run for them. An admin can clear the strikes on the dashboard.',

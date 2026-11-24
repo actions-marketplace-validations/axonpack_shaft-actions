@@ -499,12 +499,12 @@ A PR, or a comment on it, can try to talk the model into leaking something, so t
 The limits above hold even when the model is fooled. The guardrails also check what people write, and tie each attempt they catch to the person who made it.
 
 - Before the model runs, the action checks the PR's title, description and commit messages, the comments that reach the prompt, and a `/ask` or `/fix` command against fixed rules: asks to ignore earlier instructions, to print the environment or tokens, `/proc/self/environ`, fake role or tool tags such as `<tool_result>`, invisible or direction-changing characters, and instructions hidden in HTML comments. Diff lines are checked only for hidden characters, fake tags and lines that tell an AI reviewer what to conclude, since code may mention a system prompt for real reasons. Quoted lines (`> `) are never judged. The API may send extra rules as regular expressions. The action adds them to its own and never drops or weakens a built-in one. It skips any rule that doesn't compile, reuses a built-in rule's ID or has a nested quantifier such as `(a+)+`, takes at most 50, and runs them on the first 20,000 characters of each text.
-- A text that clearly breaks a rule is replaced in the prompt with `[removed by guardrail: <rule>]`, and the rest of the PR is still reviewed. A command that does is refused before any model runs (`guardrail_blocked`).
+- A text that clearly breaks a rule is replaced in the prompt with `[removed by guardrail: <rule>]`, and the rest of the PR is still reviewed. A command that does is refused before any model runs (`injection_blocked`).
 - A text that only looks suspicious goes to one Haiku call with no tools, at most once per run, which says whether it's an injection. If that call fails, the text counts as harmless and stays in.
-- Text from people (title, description, comments, commands) reaches the model with its words joined by `ˆ`, and the system prompt says such text is data. It also carries a random line for the run. A reply that repeats it isn't posted (`guardrail_leak`).
+- Text from people (title, description, comments, commands) reaches the model with its words joined by `ˆ`, and the system prompt says such text is data. It also carries a random line for the run. A reply that repeats it isn't posted (`injection_leak`).
 - In what the model writes, token shapes (`ghp_`, `github_pat_`, `sk-ant-`, `AKIA`, private keys, JWTs) become `***`, links outside GitHub and axonpack.dev become inert code, `@` mentions can't ping anyone, and a `/command` at the start of a line is escaped.
 - The model never reads `.env` files, `.pem` keys, SSH keys, `.npmrc`, `.pypirc` or `.netrc`.
-- A change from `/fix` isn't pushed when its new lines pipe a download into a shell, send the whole environment out, send a variable to a hard-coded host, or add a long encoded blob (`guardrail_blocked`).
+- A change from `/fix` isn't pushed when its new lines pipe a download into a shell, send the whole environment out, send a variable to a hard-coded host, or add a long encoded blob (`injection_blocked`).
 - A clear hit is a strike against the person who wrote the text: the PR's author for its text and diff, the commenter for a comment or command, and whoever started a `/fix` for its push. A run gives at most one strike per person. Anything else is a warning. The action sends each event to the API with a redacted excerpt of at most 200 characters, and the API keeps the count.
 - When someone has strikes, the summary flags them, for example `⚠️ @login is flagged (2 of 3): <rule>`. It never quotes their text. After 3 strikes the API stops runs for that person on the account (`user_blocked`) until an admin clears them on the dashboard, or 30 days after their last strike. With strikes set to warn only, nobody is blocked and the summary shows only the count. Admins and maintainers are never blocked: their line shows only the count, such as `⚠️ @login has 4 guardrail strikes`.
 
@@ -546,7 +546,7 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `claude_binary_unverified` | The Claude Code binary downloaded from npm didn't match the sha512 the release records, or the release has no hash for the runner's platform, so it wasn't run. |
 | `mcp_unavailable` | The action couldn't get its MCP token from the API, or Axon Shaft's MCP server didn't answer `tools/list`, so the review didn't start. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
-| `guardrail_leak` | The model's reply repeated the system prompt's line for the run, so nothing was posted. |
+| `injection_leak` | The model's reply repeated the system prompt's line for the run, so nothing was posted. |
 | `self_hosted_unsupported` | A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran. |
 | `credentials_in_checkout` | A task's checkout kept a token in `.git/config`, so no session ran. Set `persist-credentials: false` on `actions/checkout`. |
 | `sandbox_unavailable` | A task couldn't start its sandbox on this runner, so no session ran. The message says why. |
@@ -562,7 +562,7 @@ These end with a notice, and the step passes. A notice with a code ends with a l
 - a `/review`, `/ask`, `/fix` or `/axonshaft` on an issue (`not_a_pull_request`);
 - a `/fix` or `/axonshaft` whose commit can't be pushed (`push_failed`);
 - a bare `/fix` with nothing to fix (`nothing_to_fix`);
-- a command, or a `/fix` change, that a guardrail rule refused (`guardrail_blocked`);
+- a command, or a `/fix` change, that a guardrail rule refused (`injection_blocked`);
 - a run for someone with 3 guardrail strikes (`user_blocked`). The job summary shows its card too;
 - a `/resolve` on a pull request that already has the whole base branch (`nothing_to_resolve`), or whose merge needs a decision only a person can make (`merge_needs_decision`);
 - a `/fix` or `/axonshaft` on a self-hosted runner (`self_hosted_unsupported`);

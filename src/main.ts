@@ -134,9 +134,9 @@ async function run(): Promise<void> {
   const askerId = typeof sender?.id === 'number' ? sender.id : undefined;
   if ((r.mode === 'task' || r.mode === 'reply') && (await guardTexts([{ text: r.ask.text, where: 'command', user: askerId ? { id: askerId, login: r.actor } : undefined }], { text: SIZE_MAX.command, line: SIZE_MAX.line }))[0]!.blocked) {
     const why = 'A guardrail rule refused this command, so no model ran. An admin can see the rule on the dashboard.';
-    core.notice(noticeText(why, 'guardrail_blocked'));
+    core.notice(noticeText(why, 'injection_blocked'));
     await writeInjectionSummary(flagged);
-    return reportRun({ error: { code: 'guardrail_blocked', message: why }, duration_ms: Date.now() - started });
+    return reportRun({ error: { code: 'injection_blocked', message: why }, duration_ms: Date.now() - started });
   }
   const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
   trackRun({ token: grant.github_token, owner, repo, runUrl, started, secrets });

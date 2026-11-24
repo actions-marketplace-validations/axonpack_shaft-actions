@@ -352,7 +352,7 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
       }
       if (result?.subtype === 'success') {
         const out = scanOutput(result.structured_output as Record<string, unknown> | undefined, CANARY);
-        if (out.leak) throw new ShaftFailure('guardrail_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
+        if (out.leak) throw new ShaftFailure('injection_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
         if (out.hits.length) core.warning(`Guardrail: took ${out.hits.join(', ')} out of the ${format.name} before posting.`);
         const { injection_seen: seen, ...rest } = out.reply ?? {};
         // Only a count: the job log is public, and the model can be steered into accusing anyone.
