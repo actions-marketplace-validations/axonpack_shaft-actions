@@ -61323,6 +61323,15 @@ var todoRefs = ({ files }) => files.flatMap((f) => [...diffLines(f.patch, true)]
   return m && !ISSUE_REF.test(text) ? [{ severity: "nit", file: f.filename, line, title: `${m[1]} with no issue`, body: `This ${m[1]} links no issue, so nobody will find it again. Add an issue link or \`#123\`, or do it now.` }] : [];
 }));
 
+// src/services/prestep/licence-header.service.ts
+var TOP = 10;
+var licenceHeader = ({ files, checkout }, data) => {
+  const first = typeof data?.rules === "string" ? data.rules.split(/\r?\n/).find((l) => l.trim())?.trim() : undefined;
+  if (!first)
+    return [];
+  return files.filter((f) => f.status === "added" && CODE.test(f.filename)).filter((f) => !(checkout.read(f.filename) ?? "").split(/\r?\n/, TOP).some((l) => l.includes(first))).map((f) => ({ severity: "should-fix", file: f.filename, line: 1, title: "Licence header missing", body: `This new file doesn't start with the repo's licence header (\`${first.slice(0, 120)}\`). Add it at the top.` }));
+};
+
 // src/services/prestep/prestep.service.ts
 var SCRIPTS = {
   secrets: secrets2,
@@ -61336,7 +61345,8 @@ var SCRIPTS = {
   "large-files": largeFiles,
   "install-hooks": installHooks,
   "debug-output": debugOutput,
-  "todo-refs": todoRefs
+  "todo-refs": todoRefs,
+  "licence-header": licenceHeader
 };
 var FACTS = {
   "deps-diff": depsDiffFacts,

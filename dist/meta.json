@@ -120,7 +120,8 @@
     "large-files",
     "install-hooks",
     "debug-output",
-    "todo-refs"
+    "todo-refs",
+    "licence-header"
   ],
   "facts": [
     "deps-diff",
