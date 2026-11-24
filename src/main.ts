@@ -125,8 +125,10 @@ async function run(): Promise<void> {
     });
   configureGuardrails({ claude: grant.claude_token, cwd, secrets });
   // The API's extra input rules, added to the built-in ones (never in place of them).
-  setServerRules(grant.guardrail?.rules);
-  const flagged = Array.isArray(grant.guardrail?.flagged) ? grant.guardrail.flagged : [];
+  // `guardrail` is the field's name before the rename to injection, for an API that hasn't deployed it.
+  const injection = grant.injection ?? grant.guardrail;
+  setServerRules(injection?.rules);
+  const flagged = Array.isArray(injection?.flagged) ? injection.flagged : [];
   // The commenter's own command: a harmful one never reaches the model, and strikes them.
   const sender = context.payload.comment?.user ?? context.payload.sender;
   const askerId = typeof sender?.id === 'number' ? sender.id : undefined;

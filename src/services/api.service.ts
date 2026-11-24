@@ -96,6 +96,8 @@ export type Grant =
        * The users in this run (the actor, the pull request's author) with 1 or 2 active guardrail strikes,
        * and `rules`, extra input rules (regex strings) the action adds to its own. Older APIs send neither.
        */
+      injection?: { flagged: Flagged[]; rules?: unknown };
+      /** The old name of `injection`, which an API from before the rename sends instead. */
       guardrail?: { flagged: Flagged[]; rules?: unknown };
     };
 
@@ -220,13 +222,13 @@ export async function fetchPushToken(): Promise<PushGrant> {
 }
 
 /**
- * Record the run on the dashboard, with this run's guardrail events (`guardrail`, only when there are
+ * Record the run on the dashboard, with this run's injection events (`injection`, only when there are
  * any; an older API ignores it). Best effort: a failure is logged and never fails the run.
  */
 export async function reportRun(summary: RunSummary): Promise<void> {
-  const guardrail = guardrailEvents();
+  const injection = guardrailEvents();
   try {
-    const res = await post('/v1/runs', { ...summary, ...(guardrail.length && { guardrail }) });
+    const res = await post('/v1/runs', { ...summary, ...(injection.length && { injection }) });
     if (!res.ok) throw new Error(`the API answered ${res.status}`);
   } catch (e) {
     core.warning(`Couldn't record the run on the Axon Shaft API: ${(e as Error).message}`);
