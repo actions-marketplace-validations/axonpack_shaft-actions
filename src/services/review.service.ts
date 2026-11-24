@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import { datamark } from '../injection/input.util';
+import { guardrails, matchesAny } from '../utils/guardrails.util';
 import { injectionEvents, ruleName } from '../injection/classify.service';
 import { type Flagged, flaggedLines } from '../injection/output.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
@@ -496,7 +497,10 @@ async function postReview(
   // A carried finding goes through `place` again, so it keeps its fingerprint and only its first inline comment.
   const kept = (prior?.findings ?? []).filter((f) => carried.includes(f.step ?? '')).map((f): Finding => ({ ...f, step: f.step!, body: 'Found by an earlier review. Its checklist had nothing new to check on this push.' }));
   const all = place([...review.findings, ...kept], files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
-  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
+  // A finding on a file the project's guardrails cover is never posted, nor its suggestion.
+  const { no_edit, no_read } = guardrails();
+  const unguarded = all.filter((p) => !matchesAny(p.file, [...no_edit, ...no_read]));
+  const placed = unguarded.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length) review.verdict = verdictAfter(review.verdict, placed) as Review['verdict'];
   // A carried finding raises the verdict as a script's does.
   const old = placed.filter((p) => carried.includes(p.step));
@@ -547,7 +551,8 @@ async function postReview(
     checklists: planned,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
-    ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    ignored: unguarded.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    guardrailed: all.length - unguarded.length,
     repoConfig: o.repoConfig,
     flagged: flaggedLines(o.flagged ?? [], injectionEvents(), ruleName),
     // `/resolve` only when GitHub says the pull request has conflicts.
