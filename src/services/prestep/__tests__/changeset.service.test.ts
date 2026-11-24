@@ -32,13 +32,23 @@ test('each changed package with its changesets, changelog and version, then each
   );
 });
 
-test('a changelog edit and a version bump in package.json show, and a PR with no package or changeset says so', async () => {
-  const files = [
-    changed('package.json', ['  "version": "2.0.0",'], ['  "version": "1.9.0",']),
-    changed('CHANGELOG.md', ['## 2.0.0']),
-  ];
+test('a version bump shows, and a PR with no package or changeset says so', async () => {
+  const files = [changed('package.json', ['  "version": "2.0.0",'], ['  "version": "1.9.0",']), changed('src/a.ts', ['x'])];
   const facts = await changeset(input(files, { 'package.json': '{ "name": "app", "version": "2.0.0" }' }));
-  expect(facts).toContain('- `app` (package.json, version 2.0.0): 2 files; changesets: none; CHANGELOG.md changed; version changed: "version": "2.0.0",');
+  expect(facts).toContain('- `app` (package.json, version 2.0.0): 2 files; changesets: none; CHANGELOG.md not changed; version changed: "version": "2.0.0",');
   expect(facts).toContain('The repo has no `.changeset/config.json`.');
   expect(await changeset(input([changed('src/a.ts', ['x'])]))).toBe('');
+});
+
+test('no changeset, and every package private or already released (changelog and version together): nothing to check', async () => {
+  const released = [
+    changed('apps/app/package.json', ['  "version": "3.10.0",'], ['  "version": "3.9.0",']),
+    changed('apps/app/CHANGELOG.md', ['## 3.10.0']),
+    changed('apps/app/src/a.ts', ['x']),
+    changed('pnpm-lock.yaml', ['x']),
+  ];
+  const tree = { 'package.json': '{ "name": "root", "private": true }', 'apps/app/package.json': '{ "name": "app", "version": "3.10.0" }' };
+  expect(await changeset(input(released, tree))).toBe('');
+  // A changelog edit without the version bump still goes to the model.
+  expect(await changeset(input(released.slice(1), tree))).toContain('apps/app/CHANGELOG.md changed');
 });

@@ -50,13 +50,19 @@ export const changeset: Facts = async ({ files, checkout }) => {
     else (pkgs.get(pkg.manifest) ?? pkgs.set(pkg.manifest, { pkg, files: [] }).get(pkg.manifest)!).files.push(f.filename);
   }
   if (!pkgs.size && !sets.length) return '';
+  const changelogOf = (pkg: Pkg) => join(dirname(pkg.manifest), 'CHANGELOG.md');
+  const versionOf = (pkg: Pkg) => [...diffLines(files.find((f) => f.filename === pkg.manifest)?.patch, true).values()].find((l) => /^\s*"version"\s*:/.test(l));
+  // Nothing to check when no changeset is in the PR and every package is private or already released (its
+  // CHANGELOG.md and version changed together, as `changeset version` writes them, e.g. a release PR or a
+  // merge of an already-versioned branch). The model then isn't called.
+  if (!sets.length && [...pkgs.values()].every(({ pkg, files: changed }) => pkg.private || (changed.includes(changelogOf(pkg)) && versionOf(pkg)))) return '';
   const bumped = (name: string) => sets.flatMap((s) => s.bumps.filter((b) => b.name === name).map((b) => `${b.bump} (${s.file})`));
   const lines = [
     checkout.read('.changeset/config.json') === undefined ? 'The repo has no `.changeset/config.json`.' : 'The repo uses changesets (`.changeset/config.json`).',
     'Packages the pull request changes:',
     ...[...pkgs.values()].map(({ pkg, files: changed }) => {
-      const changelog = join(dirname(pkg.manifest), 'CHANGELOG.md');
-      const version = [...diffLines(files.find((f) => f.filename === pkg.manifest)?.patch, true).values()].find((l) => /^\s*"version"\s*:/.test(l));
+      const changelog = changelogOf(pkg);
+      const version = versionOf(pkg);
       return [
         `- \`${pkg.name}\` (${pkg.manifest}${pkg.version ? `, version ${pkg.version}` : ''}${pkg.private ? ', private' : ''}): ${changed.length} file${changed.length === 1 ? '' : 's'}`,
         `changesets: ${bumped(pkg.name).join(', ') || 'none'}`,

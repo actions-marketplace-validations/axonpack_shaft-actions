@@ -60329,13 +60329,17 @@ var changeset = async ({ files, checkout }) => {
   }
   if (!pkgs.size && !sets.length)
     return "";
+  const changelogOf = (pkg) => join7(dirname4(pkg.manifest), "CHANGELOG.md");
+  const versionOf = (pkg) => [...diffLines(files.find((f) => f.filename === pkg.manifest)?.patch, true).values()].find((l) => /^\s*"version"\s*:/.test(l));
+  if (!sets.length && [...pkgs.values()].every(({ pkg, files: changed }) => pkg.private || changed.includes(changelogOf(pkg)) && versionOf(pkg)))
+    return "";
   const bumped = (name) => sets.flatMap((s) => s.bumps.filter((b) => b.name === name).map((b) => `${b.bump} (${s.file})`));
   const lines = [
     checkout.read(".changeset/config.json") === undefined ? "The repo has no `.changeset/config.json`." : "The repo uses changesets (`.changeset/config.json`).",
     "Packages the pull request changes:",
     ...[...pkgs.values()].map(({ pkg, files: changed }) => {
-      const changelog = join7(dirname4(pkg.manifest), "CHANGELOG.md");
-      const version = [...diffLines(files.find((f) => f.filename === pkg.manifest)?.patch, true).values()].find((l) => /^\s*"version"\s*:/.test(l));
+      const changelog = changelogOf(pkg);
+      const version = versionOf(pkg);
       return [
         `- \`${pkg.name}\` (${pkg.manifest}${pkg.version ? `, version ${pkg.version}` : ""}${pkg.private ? ", private" : ""}): ${changed.length} file${changed.length === 1 ? "" : "s"}`,
         `changesets: ${bumped(pkg.name).join(", ") || "none"}`,
