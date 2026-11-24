@@ -1,5 +1,30 @@
 # shaft
 
+## 1.12.0
+
+### Minor Changes
+
+- fbbcc0c: Guardrails is now called Abuse protection. The `guardrail_blocked` and `guardrail_leak` codes are now `abuse_blocked` and `abuse_leak`, and the summary and log lines say "abuse strikes". The action reads the flagged people and rules from the API's `abuse` field, or `guardrail` from an older API.
+- fbbcc0c: Abuse protection now also runs extra rules the API sends. They're added to the built-in rules and can't remove or weaken them. A rule that doesn't compile or looks prone to slow matching is skipped.
+- ca1f111: The action now applies the project's guardrails. Never-read globs stop the model reading or searching matching files, never-edit globs stop it editing them and stop `/fix` pushing a change to them, and text rules go in the system prompt. Findings on those files aren't posted, and the summary counts them.
+- 8399441: - **Axon Shaft's MCP server**: before a review, the action gets a read-only MCP token for the run from the API, adds Axon Shaft's MCP server to a Claude Code config folder it makes for the run, and checks it with `tools/list`. The model reaches Axon Shaft's data only through its tools: advisory details by ID, a checklist's full rules and GitHub Code Quality's open findings.
+  - **`mcp_unavailable`**: a new failure code when the token or the server check fails, so the review doesn't start.
+- 4708f03: - **Longer reports**: the action reports up to 60 checks to the API, up from 50.
+  - **TODO notes**: the `todo-refs` script flags a new `TODO` or `FIXME` comment that links no issue, as a nit. No model call.
+  - **Licence header**: the `licence-header` script flags a new source file without the repo's licence header, as should-fix. The header comes from the API as `data.rules`, and with none set the script finds nothing.
+  - **Links in docs**: the `doc-links` script checks relative links on added lines of changed Markdown. A link to a missing file is blocking, and a link to a missing heading is should-fix.
+  - **Commit format**: the `commit-format` script flags a pull request title or commit subject that isn't a Conventional Commit, as a nit. Scripts now get the commit messages too.
+  - **Migration rollback**: the `migration-down` script flags a new migration with no down or rollback step, as should-fix. The migration globs and down patterns come from the API as `data.paths` and `data.down`.
+  - **No hit, no model call**: a `script+model` checklist whose pre-step finds nothing passes without calling the model, except `breakage`, `scope` and `access-control`.
+  - **SQL built from strings**: the `sql-strings` pre-step finds added lines that build SQL from strings and hands the model only those hunks. With none, the model isn't called.
+  - **Dead feature flags**: the `dead-flags` pre-step builds on `flags` and lists each flag the pull request stops reading that the repo still names. With none, the model isn't called.
+  - **Secrets by entropy**: `secrets` also flags a long random-looking string on an added line, as should-fix, while known key formats stay blocking. The thresholds come from the API as `data.entropy` and `data.minLength`. Lockfiles are left out.
+  - **More checklists skip the model**: every pre-step except `callers`, `diff-stats`, `routes`, `hadolint`, `tflint` and `migration-lint` now returns no facts when it finds nothing, so its checklists pass without a model call. Those six still hand the model a line, since their checklists judge more than the script sees.
+  - **Release pull requests**: the `changeset` pre-step finds nothing, so Changelog and changeset doesn't call the model, when the pull request has no changeset and every changed package is private or already released (its `CHANGELOG.md` and version changed together, as `changeset version` writes them). A merge of an already-versioned branch, such as development into main, is no longer flagged as a changelog edited by hand.
+- 3c90047: - **Summary card bars**: under the status card, the summary shows three bars drawn with GitHub's math, so no image is fetched. Checks are green when clean, grey when not checked, amber with a finding and red when blocking. Findings are red, amber and grey by severity, and confidence is blue. The text beside the bars keeps one length however many checks find something.
+  - **Checks with findings, folded**: a folded list names each check with findings, blocking first, with its counts, then each check that wasn't checked and why. It replaces the row of a chip per check.
+  - **Headline under the card**: a blank line now keeps the headline under the status card on wide screens.
+
 ## 1.11.0
 
 ### Minor Changes
