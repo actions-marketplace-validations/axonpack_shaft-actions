@@ -47,6 +47,10 @@
       "kind": "failure",
       "message": "The Claude Code binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run."
     },
+    "mcp_unavailable": {
+      "kind": "failure",
+      "message": "The action couldn't get its MCP token from the Axon Shaft API, or Axon Shaft's MCP server didn't answer `tools/list`, so the review didn't start."
+    },
     "push_failed": {
       "kind": "both",
       "message": "A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out, the change touched `.github/`, or GitHub refused the push."

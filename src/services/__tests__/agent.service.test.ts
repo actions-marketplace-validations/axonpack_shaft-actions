@@ -16,6 +16,7 @@ vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
   },
 }));
 const { ENV_ALLOW } = await import('../../consts/env.const');
+const { setClaudeConfigDir } = await import('../claude-binary.service');
 const { bashFailure, cliEnv, deepAgents, REVIEW_FORMAT, reviewSchema, runAgent, SCHEMA, sumTokens, toolTarget } = await import('../agent.service');
 
 beforeEach(() => {
@@ -79,6 +80,20 @@ const failure = (p: Promise<unknown>) =>
     () => expect.unreachable(),
     (e) => ({ code: e.code, message: e.message, url: e.url }),
   );
+
+test("the CLI loads user settings only from the action's own config folder, and never the project's", async () => {
+  const review = { verdict: 'looks-good', headline: 'h', findings: [] };
+  reply = [{ type: 'result', subtype: 'success', structured_output: review, modelUsage: {}, total_cost_usd: 0 }];
+  await runAgent('prompt', options, REVIEW_FORMAT);
+  setClaudeConfigDir('/runner/temp/shaft-claude-config');
+  await runAgent('prompt', options, REVIEW_FORMAT);
+  setClaudeConfigDir(undefined);
+  const [before, after] = asked.map((a) => a.options as unknown as { settingSources: string[]; env: Record<string, string> });
+  expect(before.settingSources).toEqual([]);
+  expect(before.env.CLAUDE_CONFIG_DIR).toBeUndefined();
+  expect(after.settingSources).toEqual(['user']);
+  expect(after.env.CLAUDE_CONFIG_DIR).toBe('/runner/temp/shaft-claude-config');
+});
 
 test('a deep run gives the SDK the passes as agents; a standard one gives none', async () => {
   const review = { verdict: 'looks-good', headline: 'h', findings: [] };

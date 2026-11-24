@@ -58572,6 +58572,11 @@ function claudeBinary() {
   execFileSync2("npm", ["install", "--no-save", "--no-package-lock", "--prefix", dir, tarball], { stdio: "inherit" });
   return join4(dir, "node_modules", file);
 }
+var configDir;
+var claudeConfigDir = () => configDir;
+var setClaudeConfigDir = (dir) => {
+  configDir = dir;
+};
 
 // src/services/agent.service.ts
 var SCHEMA = {
@@ -58710,7 +58715,8 @@ function cliEnv(claude, names = []) {
     CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
     CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: "1",
-    CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}`
+    CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${package_default.version}`,
+    ...claudeConfigDir() && { CLAUDE_CONFIG_DIR: claudeConfigDir() }
   };
 }
 var deepAgents = (model, effort, passes) => Object.fromEntries(passes.map(({ name, description, prompt }) => [name, { description, prompt, tools: ["Read", "Grep", "Glob"], model, effort }]));
@@ -58758,7 +58764,7 @@ async function once(prompt, o, schema, controller) {
       disallowedTools: DENIED2,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: "dontAsk",
-      settingSources: [],
+      settingSources: claudeConfigDir() ? ["user"] : [],
       persistSession: false,
       systemPrompt: SYSTEM_PROMPT,
       outputFormat: { type: "json_schema", schema: withInjectionSeen(schema) },
@@ -62368,9 +62374,49 @@ async function reactEnd(r, done) {
   await add(r, content).catch(warn(r, `add ${emoji}`));
 }
 
+// src/services/mcp-setup.service.ts
+import { mkdirSync as mkdirSync4, rmSync as rmSync4, writeFileSync as writeFileSync2 } from "node:fs";
+import { tmpdir as tmpdir3 } from "node:os";
+import { join as join10 } from "node:path";
+var NAME3 = "shaft";
+var unavailable = (why) => new ShaftFailure("mcp_unavailable", `Couldn't connect Axon Shaft's MCP server, so the review didn't start: ${why.replace(/\.$/, "")}. Rerun the job in a few minutes.`);
+async function addShaftMcp() {
+  let token;
+  try {
+    token = (await callApi("/v1/mcp/token", {}))?.token;
+  } catch (e) {
+    throw unavailable(e.message);
+  }
+  if (typeof token !== "string")
+    throw unavailable("the Axon Shaft API sent no MCP token");
+  setSecret(token);
+  const url = `${API_URL}/mcp`;
+  const headers = { Authorization: `Bearer ${token}` };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...headers, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    signal: AbortSignal.timeout(30000)
+  }).catch((e) => e);
+  if (res instanceof Error)
+    throw unavailable(res.message);
+  const tools = res.ok ? (await res.json().catch(() => {
+    return;
+  }))?.result?.tools : undefined;
+  if (!Array.isArray(tools) || !tools.length)
+    throw unavailable(`its tools/list answered ${res.status}`);
+  const dir = join10(process.env.RUNNER_TEMP ?? tmpdir3(), "shaft-claude-config");
+  rmSync4(dir, { recursive: true, force: true });
+  mkdirSync4(dir, { recursive: true, mode: 448 });
+  writeFileSync2(join10(dir, ".claude.json"), JSON.stringify({ mcpServers: { [NAME3]: { type: "http", url, headers } } }), { mode: 384 });
+  writeFileSync2(join10(dir, "settings.json"), JSON.stringify({ permissions: { allow: [`mcp__${NAME3}`] } }), { mode: 384 });
+  setClaudeConfigDir(dir);
+  info(`Connected Axon Shaft's MCP server: ${tools.map((t) => t.name).join(", ")}`);
+}
+
 // src/services/task.service.ts
 import { lstatSync as lstatSync3, readFileSync as readFileSync8 } from "node:fs";
-import { join as join13 } from "node:path";
+import { join as join14 } from "node:path";
 
 // src/guardrails/push.util.ts
 function pushHits(changes, before) {
@@ -62479,7 +62525,7 @@ function unaskedBuildInputs(changes, before, request) {
 
 // src/services/commands.service.ts
 import { existsSync as existsSync5, readFileSync as readFileSync5 } from "node:fs";
-import { join as join10 } from "node:path";
+import { join as join11 } from "node:path";
 var CHECK_NAME = /^(test|lint|check|typecheck|types|tsc|build|format|fmt)([:._-][\w:.-]*)?$/;
 var LOCKS = [
   ["bun.lock", "bun", "bun install --frozen-lockfile"],
@@ -62488,12 +62534,12 @@ var LOCKS = [
   ["yarn.lock", "yarn", "yarn install --frozen-lockfile"],
   ["package-lock.json", "npm", "npm ci"]
 ];
-var read = (cwd, file) => existsSync5(join10(cwd, file)) ? readFileSync5(join10(cwd, file), "utf8") : undefined;
+var read = (cwd, file) => existsSync5(join11(cwd, file)) ? readFileSync5(join11(cwd, file), "utf8") : undefined;
 function repoCommands(cwd) {
   const out = [];
   const pkg = read(cwd, "package.json");
   if (pkg) {
-    const [, pm, install] = LOCKS.find(([lock]) => existsSync5(join10(cwd, lock))) ?? ["", "npm", "npm install"];
+    const [, pm, install] = LOCKS.find(([lock]) => existsSync5(join11(cwd, lock))) ?? ["", "npm", "npm install"];
     let scripts = {};
     try {
       scripts = JSON.parse(pkg).scripts ?? {};
@@ -62544,7 +62590,7 @@ function skippedNote(checks) {
 
 // src/services/fix.service.ts
 import { closeSync as closeSync2, constants as constants5, fstatSync, ftruncateSync, openSync as openSync2, readFileSync as readFileSync6, writeSync } from "node:fs";
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 var MARKER = /\n*<!-- shaft:finding (\w+) -->\s*$/;
 function openFindings(ctx, bot) {
   const findings = parseState(ctx.summary?.body)?.findings ?? [];
@@ -62583,7 +62629,7 @@ function applySuggestions(cwd, head, findings) {
   for (const [file, group] of byFile) {
     let fd;
     try {
-      fd = openSync2(join11(cwd, file), constants5.O_RDWR | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
+      fd = openSync2(join12(cwd, file), constants5.O_RDWR | constants5.O_NOFOLLOW | constants5.O_NONBLOCK);
       if (!fstatSync(fd).isFile())
         throw new Error("not a regular file");
       const lines = readFileSync6(fd, "utf8").split(`
@@ -62651,7 +62697,7 @@ function fixStart(findings) {
 
 // src/services/push.service.ts
 import { closeSync as closeSync3, constants as constants6, fstatSync as fstatSync2, openSync as openSync3, readFileSync as readFileSync7, readlinkSync as readlinkSync2 } from "node:fs";
-import { dirname as dirname11, join as join12 } from "node:path";
+import { dirname as dirname11, join as join13 } from "node:path";
 var git = (cwd, args) => inSandbox(cwd, "git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args], { env: runnerEnv(), encoding: "utf8", stdio: "pipe" });
 function readChanges(cwd, base) {
   assertHead(cwd, base);
@@ -62660,7 +62706,7 @@ function readChanges(cwd, base) {
   if (why)
     throw new ShaftFailure("push_failed", why);
   const changes = paths.map((path) => {
-    const file = join12(cwd, path);
+    const file = join13(cwd, path);
     let fd;
     try {
       fd = openSync3(file, constants6.O_RDONLY | constants6.O_NOFOLLOW | constants6.O_NONBLOCK);
@@ -62753,7 +62799,7 @@ var TASK_FORMAT = {
 var MARKERS = /^(<{7}|>{7})( |$)|^={7}$/m;
 function marked(cwd, path) {
   try {
-    const file = join13(cwd, path);
+    const file = join14(cwd, path);
     return lstatSync3(file).isFile() && MARKERS.test(readFileSync8(file, "utf8"));
   } catch {
     return false;
@@ -63149,6 +63195,7 @@ ${grant.comment}`);
     done = true;
     return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
   }
+  await step("Connect Axon Shaft's MCP server", addShaftMcp);
   const out = await reviewPullRequest({
     ...common,
     depth: oneOf("depth", ["standard", "deep"], job.options.depth),

@@ -74,6 +74,9 @@ vi.doMock('@actions/github', () => ({
 }));
 const checkedOut: unknown[][] = [];
 vi.doMock('../services/checkout.service', () => ({ checkoutHead: (...args: unknown[]) => checkedOut.push(args) }));
+// Its own tests are mcp-setup.service.test.ts; here a review only needs it to have run.
+let mcpAdded = 0;
+vi.doMock('../services/mcp-setup.service', () => ({ addShaftMcp: async () => { mcpAdded++; } }));
 let reviewed: Record<string, unknown> | undefined;
 /** Runs inside the review, with the registry `main` sees, to leave check runs and the comment open. */
 let during: ((t: typeof import('../services/finalize.service')) => Promise<void>) | undefined;
@@ -181,6 +184,7 @@ beforeEach(() => {
   tasked = undefined;
   taskOut = { model: 'claude-opus-5-5', effort: 'high', tokens, costUsd: 0.5, output: { answer: 'Fixed it.', comment_url: '' } };
   reviewError = undefined;
+  mcpAdded = 0;
   process.env.ACTIONS_ID_TOKEN_REQUEST_URL = 'https://oidc.example';
 });
 
@@ -189,6 +193,8 @@ test("a review reads only the dry_run input; everything else comes from the API'
   await main();
   expect(failed).toEqual([]);
   expect(inputs).toEqual(['dry_run']);
+  // Shaft's MCP server is added to Claude Code's config before the review starts.
+  expect(mcpAdded).toBe(1);
   expect(reviewed).toMatchObject({
     number: 12,
     claude: { kind: 'oauth', value: 'sk-ant-oat-shaft' },

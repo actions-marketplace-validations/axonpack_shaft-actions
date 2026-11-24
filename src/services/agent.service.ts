@@ -10,7 +10,7 @@ import { toolDenial } from '../utils/tool-guard.util';
 import { CANARY, SYSTEM_PROMPT } from '../guardrails/guardrail.const';
 import { scanOutput } from '../guardrails/output.util';
 import { sandboxPrefix } from './sandbox.service';
-import { claudeBinary } from './claude-binary.service';
+import { claudeBinary, claudeConfigDir } from './claude-binary.service';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -190,6 +190,8 @@ export function cliEnv(claude: ClaudeToken, names: string[] = []): Record<string
     CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1',
     CLAUDE_CODE_DISABLE_BG_EXIT_HANDOFF: '1',
     CLAUDE_AGENT_SDK_CLIENT_APP: `shaft/${pkg.version}`,
+    // Only with the action's own config folder; without it the CLI's default, as before.
+    ...(claudeConfigDir() && { CLAUDE_CONFIG_DIR: claudeConfigDir() }),
   };
 }
 
@@ -293,8 +295,9 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
       disallowedTools: DENIED,
       hooks: { PreToolUse: [{ hooks: [guard(o.cwd, o.commands)] }] },
       permissionMode: 'dontAsk',
-      // No project or user settings: a PR could otherwise add hooks or MCP servers that run its code.
-      settingSources: [],
+      // Never the project's settings: a PR could otherwise add hooks or MCP servers that run its code. User
+      // settings only from the folder the action wrote for this run (claudeConfigDir), outside the checkout.
+      settingSources: claudeConfigDir() ? ['user'] : [],
       persistSession: false,
       // Spotlighting and the canary (`SYSTEM_PROMPT`); the reply may list asks it ignored in `injection_seen`.
       systemPrompt: SYSTEM_PROMPT,

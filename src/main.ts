@@ -9,6 +9,7 @@ import { ignoresOf } from './utils/dismiss.util';
 import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
+import { addShaftMcp } from './services/mcp-setup.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
@@ -197,6 +198,8 @@ async function run(): Promise<void> {
     done = true;
     return reportRun({ model: out.model, effort: out.effort, ...usage(out), output: out.output });
   }
+  // The review model reaches Axon Shaft only through its MCP server, added to Claude Code's config here.
+  await step("Connect Axon Shaft's MCP server", addShaftMcp);
   const out = await reviewPullRequest({
     ...common,
     depth: oneOf('depth', ['standard', 'deep'], job.options.depth),
