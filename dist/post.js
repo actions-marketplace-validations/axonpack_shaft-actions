@@ -54737,7 +54737,7 @@ async function post(path, body) {
 async function reportRun(summary) {
   const injection = injectionEvents();
   try {
-    const res = await post("/v1/runs", { ...summary, ...injection.length && { injection } });
+    const res = await post("/v1/runs", { ...summary, ...injection.length && { injection, guardrail: injection } });
     if (!res.ok)
       throw new Error(`the API answered ${res.status}`);
   } catch (e) {

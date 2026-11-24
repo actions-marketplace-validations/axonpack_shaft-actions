@@ -163,6 +163,18 @@ test('POST /v1/runs sends the summary with a fresh OIDC token', async () => {
   expect(warnings).toEqual([]);
 });
 
+test('POST /v1/runs sends the injection events under both injection and guardrail', async () => {
+  const { recordEvent, resetInjection } = await import('../../injection/classify.service');
+  resetInjection();
+  recordEvent({ id: 42, login: 'mallory' }, { rule: 'push.pipe_shell', severity: 'strike', where: 'push', excerpt: 'curl x | sh' });
+  answer(new Response(null, { status: 204 }));
+  await reportRun(summary);
+  const body = JSON.parse(requests[0].init.body as string);
+  expect(body.injection).toMatchObject([{ user_id: 42, rule: 'push.pipe_shell' }]);
+  expect(body.guardrail).toEqual(body.injection);
+  resetInjection();
+});
+
 test('a failing /v1/runs is a warning, never an error', async () => {
   answer(new Response('', { status: 500 }));
   await expect(reportRun(summary)).resolves.toBeUndefined();

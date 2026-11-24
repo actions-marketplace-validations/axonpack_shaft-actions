@@ -222,13 +222,14 @@ export async function fetchPushToken(): Promise<PushGrant> {
 }
 
 /**
- * Record the run on the dashboard, with this run's injection events (`injection`, only when there are
- * any; an older API ignores it). Best effort: a failure is logged and never fails the run.
+ * Record the run on the dashboard, with this run's injection events (`injection`, and the same under the old name
+ * `guardrail`, only when there are any). Best effort: a failure is logged and never fails the run.
  */
 export async function reportRun(summary: RunSummary): Promise<void> {
   const injection = injectionEvents();
   try {
-    const res = await post('/v1/runs', { ...summary, ...(injection.length && { injection }) });
+    // ponytail: `guardrail` duplicates `injection` for an API from before the rename; drop it once every deployed API reads `injection`.
+    const res = await post('/v1/runs', { ...summary, ...(injection.length && { injection, guardrail: injection }) });
     if (!res.ok) throw new Error(`the API answered ${res.status}`);
   } catch (e) {
     core.warning(`Couldn't record the run on the Axon Shaft API: ${(e as Error).message}`);
