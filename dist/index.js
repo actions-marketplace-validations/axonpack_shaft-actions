@@ -59922,7 +59922,7 @@ var depsDiffFacts = async (input) => {
     })
   ]);
   if (!lines.length)
-    return "No lockfile in the pull request adds, removes or changes a package.";
+    return "";
   let text = "";
   for (const [i, l] of lines.entries()) {
     if (text.length + l.length > FACTS_MAX)
@@ -60328,7 +60328,7 @@ var changeset = async ({ files, checkout }) => {
       (pkgs.get(pkg.manifest) ?? pkgs.set(pkg.manifest, { pkg, files: [] }).get(pkg.manifest)).files.push(f.filename);
   }
   if (!pkgs.size && !sets.length)
-    return "The pull request changes no package and adds no changeset.";
+    return "";
   const bumped = (name) => sets.flatMap((s) => s.bumps.filter((b) => b.name === name).map((b) => `${b.bump} (${s.file})`));
   const lines = [
     checkout.read(".changeset/config.json") === undefined ? "The repo has no `.changeset/config.json`." : "The repo uses changesets (`.changeset/config.json`).",
@@ -60438,7 +60438,7 @@ var docsTouched = async ({ files, checkout }) => {
   }
   const untouched = [...readmes].filter(([r]) => !docs.some((d) => d.filename === r));
   if (!docs.length && !code.length)
-    return "The pull request changes no docs and no code.";
+    return "";
   return factsText([
     `Docs the pull request changes:${docs.length ? "" : " none"}`,
     ...docs.map((f) => `- ${f.filename} (${f.status}, +${f.additions} -${f.deletions})`),
@@ -60497,6 +60497,8 @@ var flags = async ({ files, checkout }) => {
       if (text.includes(n))
         mentions.get(n).push(path);
   }
+  if (!using && !wanted.length)
+    return "";
   const listed = (paths) => `${paths.slice(0, SHOWN).join(", ")}${paths.length > SHOWN ? ` and ${paths.length - SHOWN} more` : ""}`;
   return factsText([
     using ? wanted.length ? `The repo reads feature flags in ${using} file${using === 1 ? "" : "s"}.` : `The repo reads feature flags, such as in ${example}.` : "No feature flag reads found in the repo.",
@@ -60522,7 +60524,7 @@ var logLines = async ({ files }) => {
     const code = text.trim();
     return kind ? [`- ${f.filename}:${line} ${kind}: ${code.length > MAX_CODE ? `${code.slice(0, MAX_CODE)}...` : code}`] : [];
   }));
-  return factsText(lines.length ? ["Log, metric, analytics and error-report calls on added lines:", ...lines] : [], "No added line outside tests logs, records a metric, tracks an event or reports an error.");
+  return factsText(lines.length ? ["Log, metric, analytics and error-report calls on added lines:", ...lines] : [], "");
 };
 
 // src/services/prestep/new-files.service.ts
@@ -60545,7 +60547,7 @@ var newFiles = async ({ files }) => {
     const components = /\.[jt]sx$/.test(name) ? [...diffLines(f.patch, true).values()].filter((l) => COMPONENT.test(l)).length : 0;
     return `- ${f.filename} (${f.status === "added" ? "added" : "moved here"}): folder ${dirname6(f.filename)}/, suffix ${suffix || "none"}, ${style}${components > 1 ? `, exports ${components} components` : ""}`;
   });
-  return factsText(lines.length ? ["Added and moved files:", ...lines] : [], "The pull request adds or moves no files.");
+  return factsText(lines.length ? ["Added and moved files:", ...lines] : [], "");
 };
 
 // src/services/prestep/test-pairs.service.ts
@@ -60556,7 +60558,7 @@ var testPairs = async ({ files, checkout }) => {
   const tests = files.filter((f) => TEST.test(f.filename) && CODE.test(f.filename));
   const sources = files.filter((f) => CODE.test(f.filename) && !TEST.test(f.filename) && !/\.d\.[cm]?ts$/.test(f.filename) && f.status !== "removed");
   if (!sources.length && !tests.length)
-    return "The pull request changes no source or test files.";
+    return "";
   const paired = sources.map((s) => ({ file: s.filename, tests: tests.filter((t) => stem(t.filename) === stem(s.filename)).map((t) => t.filename) }));
   const unpaired = paired.filter((p) => !p.tests.length);
   const existing = new Map;
@@ -60623,7 +60625,7 @@ var typeEscapes = async ({ files, checkout }) => {
     });
   });
   if (!lines.length)
-    return "No added line has a type escape.";
+    return "";
   const settings = checkout.find(CONFIGS).sort().flatMap((p) => (checkout.read(p) ?? "").split(`
 `).flatMap((l, i) => SETTING.test(l) ? [`- ${p}:${i + 1} ${l.trim().slice(0, MAX_CODE2)}`] : []));
   return factsText(["Type escapes on added lines:", ...lines, ...settings.length ? ["The repo's lint and type settings that name them:", ...settings] : []], "");
@@ -60722,12 +60724,14 @@ var callers = async ({ files, checkout }) => {
 var unused = async ({ files, checkout }) => {
   const added = new Map([...changedExports(files)].filter(([, at]) => at.kind === "added"));
   if (!added.size)
-    return "The pull request exports no new name.";
+    return "";
   const { hits, cut } = search(checkout, [...added.keys()]);
   const lines = [...hits].filter(([name, found]) => found.every((h) => h.file === added.get(name).file)).map(([name]) => {
     const { file, line } = added.get(name);
     return `- \`${name}\` (${file}${line ? `:${line}` : ""})`;
   });
+  if (!lines.length && !cut.length)
+    return "";
   const head = lines.length ? `${lines.length} of the ${hits.size} new exports are named in no other code file:` : `Each of the ${hits.size} new exports is named in another code file.`;
   return factsText([...cutNote(cut), head, ...lines], "");
 };
@@ -60780,7 +60784,7 @@ var imports = async ({ files, checkout }) => {
       }
     }
   if (!js.length && !py.length)
-    return "The added lines import no package.";
+    return "";
   const lines = [];
   if (js.length) {
     const { names, aliases, read } = npmKnown(checkout);
@@ -60799,8 +60803,7 @@ var imports = async ({ files, checkout }) => {
       if (!local.has(name) && !new RegExp(`(?<![\\w-])${pyNorm(name)}(?![\\w-])`).test(text))
         lines.push(`- ${at} \`${name}\`: no Python manifest names it, and no module in the repo has the name; it may be in the standard library or published under another name`);
   }
-  const n = js.length + py.length;
-  return lines.some((l) => l.startsWith("- ")) ? factsText(lines, "") : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? "" : "s"} checked).`;
+  return lines.some((l) => l.startsWith("- ")) ? factsText(lines, "") : "";
 };
 
 // src/services/prestep/exports-diff.service.ts
@@ -60840,7 +60843,7 @@ var exportsDiff = async ({ files }) => {
     if (rows.length)
       lines.push(`${f.filename}:`, ...rows);
   }
-  return factsText(lines, "The pull request changes no exported name, no package entry point or version, and no changeset bump.");
+  return factsText(lines, "");
 };
 
 // src/services/prestep/routes.service.ts
@@ -60940,7 +60943,7 @@ var rawValues = async ({ files, checkout }) => {
     return found.length ? [`- ${f.filename}:${line} ${found.join(", ")}`] : [];
   }));
   if (!lines.length)
-    return "The added lines of UI and style files have no raw colour or size.";
+    return "";
   const themes = checkout.find(THEME).filter((p) => matches(p, STYLED) || p.endsWith(".json")).sort();
   const where = themes.length ? `Theme and token files in the repo: ${themes.slice(0, THEMES_MAX).join(", ")}${themes.length > THEMES_MAX ? ` and ${themes.length - THEMES_MAX} more` : ""}.` : "The repo has no file named for a theme, tokens, colours or a palette.";
   return factsText([where, "Raw values on added lines:", ...lines], "");
@@ -60961,7 +60964,7 @@ var nativeChanges = async ({ files, checkout, base }) => {
     return [...new Set([...was.keys(), ...now.keys()])].filter((n) => was.get(n) !== now.get(n)).map((n) => `- ${f.filename}: ${!was.has(n) ? `added ${n} ${now.get(n)}` : !now.has(n) ? `removed ${n} ${was.get(n)}` : `changed ${n} ${was.get(n)} -> ${now.get(n)}`}`);
   });
   if (!native.length && !packages.length)
-    return "No native file or package with native code changed.";
+    return "";
   const configs = await Promise.all(checkout.find(APP_CONFIG).sort().slice(0, CONFIGS_MAX).map(async (p) => {
     const [before, after] = [await base(p), checkout.read(p)];
     return ["runtimeVersion", "version"].map((k) => {
@@ -61165,7 +61168,7 @@ var actionlint = async ({ files, checkout }) => {
       lines.push(`actionlint didn't run: ${e.message}.`);
     }
   }
-  return factsText(lines, "actionlint found nothing in the changed workflows, and every action the change adds is pinned.");
+  return factsText(lines, "");
 };
 
 // src/services/prestep/hadolint.service.ts
@@ -61255,7 +61258,7 @@ var contractDiff = async (input) => {
   const lines = [...await openapi(input), ...await proto(input)];
   if (changedFiles(input.files, /\.graphql$/).length)
     lines.push("GraphQL schemas changed: no tool compares them here, so read their diff.");
-  return factsText(lines, "No OpenAPI or .proto file changed.");
+  return factsText(lines, "");
 };
 
 // src/services/prestep/focused-tests.service.ts

@@ -49,7 +49,7 @@ export const changeset: Facts = async ({ files, checkout }) => {
     if (!pkg) loose++;
     else (pkgs.get(pkg.manifest) ?? pkgs.set(pkg.manifest, { pkg, files: [] }).get(pkg.manifest)!).files.push(f.filename);
   }
-  if (!pkgs.size && !sets.length) return 'The pull request changes no package and adds no changeset.';
+  if (!pkgs.size && !sets.length) return '';
   const bumped = (name: string) => sets.flatMap((s) => s.bumps.filter((b) => b.name === name).map((b) => `${b.bump} (${s.file})`));
   const lines = [
     checkout.read('.changeset/config.json') === undefined ? 'The repo has no `.changeset/config.json`.' : 'The repo uses changesets (`.changeset/config.json`).',

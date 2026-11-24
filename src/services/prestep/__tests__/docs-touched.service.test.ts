@@ -30,5 +30,5 @@ test('the docs changed, and the nearest README above changed code that the PR le
 test('a README the PR changes is left out of the untouched list, and a PR with neither docs nor code says so', async () => {
   const facts = await docsTouched(input([changed('README.md', ['x']), changed('src/a.ts', ['x'])], { 'README.md': '# app' }));
   expect(facts).toBe('Docs the pull request changes:\n- README.md (modified, +1 -0)\nCode files changed, not counting tests: 1');
-  expect(await docsTouched(input([changed('bun.lock', ['x'])]))).toBe('The pull request changes no docs and no code.');
+  expect(await docsTouched(input([changed('bun.lock', ['x'])]))).toBe('');
 });

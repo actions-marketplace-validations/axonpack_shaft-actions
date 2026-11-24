@@ -28,6 +28,6 @@ test('native files, native packages, and each app config runtime version and ver
 });
 
 test('a JS-only change says no native change, and an app with no config says so', async () => {
-  expect(await nativeChanges(input([changed('src/App.tsx', ['x']), changed('package.json', ['    "lodash": "^4.17.21",'])], tree))).toBe('No native file or package with native code changed.');
+  expect(await nativeChanges(input([changed('src/App.tsx', ['x']), changed('package.json', ['    "lodash": "^4.17.21",'])], tree))).toBe('');
   expect((await nativeChanges(input([changed('ios/Podfile', ['pod "X"'])]))).split('\n').at(-1)).toBe('The repo has no app.json or app.config file.');
 });

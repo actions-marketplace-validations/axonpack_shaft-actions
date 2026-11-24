@@ -41,5 +41,5 @@ test('log, metric, analytics and error-report calls on added lines, with kind an
 test('a long line is cut, and a diff with no such call says so', async () => {
   const facts = await logLines(input([changed('a.ts', [`console.log('${'x'.repeat(300)}');`])]));
   expect(facts.split('\n')[1]).toMatch(/^- a\.ts:1 log: console\.log\('x{187}\.\.\.$/);
-  expect(await logLines(input([changed('a.ts', ['const a = 1;'])]))).toBe('No added line outside tests logs, records a metric, tracks an event or reports an error.');
+  expect(await logLines(input([changed('a.ts', ['const a = 1;'])]))).toBe('');
 });

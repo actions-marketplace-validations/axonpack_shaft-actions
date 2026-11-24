@@ -25,5 +25,5 @@ export const logLines: Facts = async ({ files }) => {
         return kind ? [`- ${f.filename}:${line} ${kind}: ${code.length > MAX_CODE ? `${code.slice(0, MAX_CODE)}...` : code}`] : [];
       }),
     );
-  return factsText(lines.length ? ['Log, metric, analytics and error-report calls on added lines:', ...lines] : [], 'No added line outside tests logs, records a metric, tracks an event or reports an error.');
+  return factsText(lines.length ? ['Log, metric, analytics and error-report calls on added lines:', ...lines] : [], '');
 };

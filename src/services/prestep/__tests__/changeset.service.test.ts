@@ -40,5 +40,5 @@ test('a changelog edit and a version bump in package.json show, and a PR with no
   const facts = await changeset(input(files, { 'package.json': '{ "name": "app", "version": "2.0.0" }' }));
   expect(facts).toContain('- `app` (package.json, version 2.0.0): 2 files; changesets: none; CHANGELOG.md changed; version changed: "version": "2.0.0",');
   expect(facts).toContain('The repo has no `.changeset/config.json`.');
-  expect(await changeset(input([changed('src/a.ts', ['x'])]))).toBe('The pull request changes no package and adds no changeset.');
+  expect(await changeset(input([changed('src/a.ts', ['x'])]))).toBe('');
 });

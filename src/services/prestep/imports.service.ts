@@ -60,7 +60,7 @@ export const imports: Facts = async ({ files, checkout }) => {
         py.push(...names.filter(Boolean).map((name) => ({ at, name })));
       }
     }
-  if (!js.length && !py.length) return 'The added lines import no package.';
+  if (!js.length && !py.length) return '';
   const lines: string[] = [];
   if (js.length) {
     const { names, aliases, read } = npmKnown(checkout);
@@ -76,6 +76,5 @@ export const imports: Facts = async ({ files, checkout }) => {
       if (!local.has(name) && !new RegExp(`(?<![\\w-])${pyNorm(name)}(?![\\w-])`).test(text))
         lines.push(`- ${at} \`${name}\`: no Python manifest names it, and no module in the repo has the name; it may be in the standard library or published under another name`);
   }
-  const n = js.length + py.length;
-  return lines.some((l) => l.startsWith('- ')) ? factsText(lines, '') : `Every package the added lines import is listed in a manifest (${n} import${n === 1 ? '' : 's'} checked).`;
+  return lines.some((l) => l.startsWith('- ')) ? factsText(lines, '') : '';
 };

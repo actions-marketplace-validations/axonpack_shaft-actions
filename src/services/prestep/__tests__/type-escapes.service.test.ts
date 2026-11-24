@@ -44,6 +44,6 @@ test('escapes on added TypeScript and Python lines, a def missing hints in typed
 });
 
 test('untyped Python gets no hint facts, and a clean diff says so', async () => {
-  expect(await typeEscapes(input([changed('app/a.py', ['def total(items):'])]))).toBe('No added line has a type escape.');
-  expect(await typeEscapes(input([changed('src/a.ts', ['const a: string = "x";'])]))).toBe('No added line has a type escape.');
+  expect(await typeEscapes(input([changed('app/a.py', ['def total(items):'])]))).toBe('');
+  expect(await typeEscapes(input([changed('src/a.ts', ['const a: string = "x";'])]))).toBe('');
 });

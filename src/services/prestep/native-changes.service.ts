@@ -32,7 +32,7 @@ export const nativeChanges: Facts = async ({ files, checkout, base }) => {
         .filter((n) => was.get(n) !== now.get(n))
         .map((n) => `- ${f.filename}: ${!was.has(n) ? `added ${n} ${now.get(n)}` : !now.has(n) ? `removed ${n} ${was.get(n)}` : `changed ${n} ${was.get(n)} -> ${now.get(n)}`}`);
     });
-  if (!native.length && !packages.length) return 'No native file or package with native code changed.';
+  if (!native.length && !packages.length) return '';
   const configs = await Promise.all(
     checkout
       .find(APP_CONFIG)

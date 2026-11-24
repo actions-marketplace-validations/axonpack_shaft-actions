@@ -6,7 +6,7 @@ import { search } from './search.service';
 /** The `unused` facts: each name the pull request newly exports that no other code file in the checkout names. */
 export const unused: Facts = async ({ files, checkout }) => {
   const added = new Map([...changedExports(files)].filter(([, at]) => at.kind === 'added'));
-  if (!added.size) return 'The pull request exports no new name.';
+  if (!added.size) return '';
   const { hits, cut } = search(checkout, [...added.keys()]);
   const lines = [...hits]
     .filter(([name, found]) => found.every((h) => h.file === added.get(name)!.file))
@@ -14,6 +14,7 @@ export const unused: Facts = async ({ files, checkout }) => {
       const { file, line } = added.get(name)!;
       return `- \`${name}\` (${file}${line ? `:${line}` : ''})`;
     });
+  if (!lines.length && !cut.length) return '';
   const head = lines.length ? `${lines.length} of the ${hits.size} new exports are named in no other code file:` : `Each of the ${hits.size} new exports is named in another code file.`;
   return factsText([...cutNote(cut), head, ...lines], '');
 };
