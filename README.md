@@ -469,6 +469,18 @@ A diff longer than 200,000 characters is cut, and the model reads the rest from 
 
 It never edits files, installs anything or runs the PR's code. It doesn't load the repo's Claude Code settings, hooks or MCP servers.
 
+### What the review can reach on Axon Shaft
+
+The model gets Axon Shaft's data only through Axon Shaft's MCP server. It never calls the API itself. Before a review, the action:
+
+1. asks the API for an MCP token (`POST /v1/mcp/token`, with the run's OIDC token and an empty body). The token works only for this repo and this run, only reads, and stops working once the run reports back;
+2. checks the server with one `tools/list` call to `https://api-shaft.axonpack.dev/mcp`;
+3. writes the server and that token to a Claude Code config folder it makes for this run in the runner's temp folder, which the model's tools can't read, and allows the server's tools there. Claude Code loads user settings only from that folder, never from the repo or the runner's home.
+
+If any step fails, the run stops with `mcp_unavailable` before the review starts.
+
+The server has three read-only tools: `get_advisories` (advisory details by ID), `get_checklist` (the full rules of a checklist the review runs) and `code_quality` (GitHub Code Quality's open findings). Each call sends only the tool's input. The MCP token is the only credential in that config; `GITHUB_TOKEN`, the GitHub token from the API, the push token and the Claude token never go there. The tools' names and descriptions come from the API, so the API's own code review, not this release's pin, fixes what the model is told about them. Package lookups stay a script step before the model runs, as [Checklists](#checklists) says.
+
 A PR, or a comment on it, can try to talk the model into leaking something, so the review is fenced in:
 
 - It can read and search only files inside the checkout. Paths outside it are refused, and so are `/proc`, `/sys`, the runner's temp and tool folders, and any symlink in the PR that points out of the checkout.
@@ -532,6 +544,7 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. The job log names each reply's fields, without their text, and the link opens the run. |
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
 | `claude_binary_unverified` | The Claude Code binary downloaded from npm didn't match the sha512 the release records, or the release has no hash for the runner's platform, so it wasn't run. |
+| `mcp_unavailable` | The action couldn't get its MCP token from the API, or Axon Shaft's MCP server didn't answer `tools/list`, so the review didn't start. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
 | `guardrail_leak` | The model's reply repeated the system prompt's line for the run, so nothing was posted. |
 | `self_hosted_unsupported` | A task ran on a self-hosted runner. Tasks run only on GitHub-hosted runners, so no session ran. |
