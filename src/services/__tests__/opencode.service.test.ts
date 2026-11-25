@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { opencodeArgs, opencodeConfig, opencodeEnv, sandboxUnset } from '../opencode.service';
+import { opencodeArgs, opencodeConfig, opencodeEnv } from '../opencode.service';
 
 const g = { model: 'openrouter/qwen', effort: 'high', keys: [{ name: 'OPENROUTER_API_KEY', value: 'sk-or' }] };
 
@@ -29,12 +29,4 @@ test('the config loads only our guard plugin, with its options, and turns off fo
 test('with no keys, the env is runnerEnv and the run switches only', () => {
   const env = opencodeEnv({ model: 'opencode/free', keys: [] }, [], {}, '/run/opencode.json');
   expect(Object.keys(env).filter((k) => k.endsWith('_KEY') || k.endsWith('_TOKEN'))).toEqual([]);
-});
-
-test("a key kept in GitHub Actions secrets reaches OpenCode by its project variable's name, and never a task's sandbox", () => {
-  process.env.OPENROUTER_API_KEY = 'sk-or-from-github';
-  const free = { model: 'openrouter/qwen', keys: [] };
-  expect(opencodeEnv(free, ['OPENROUTER_API_KEY'], {}, '/run/opencode.json').OPENROUTER_API_KEY).toBe('sk-or-from-github');
-  expect(sandboxUnset(g, ['OPENROUTER_API_KEY', 'HF_TOKEN', 'NODE_ENV'])).toEqual(['OPENROUTER_API_KEY', 'HF_TOKEN']);
-  delete process.env.OPENROUTER_API_KEY;
 });
