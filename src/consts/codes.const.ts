@@ -31,6 +31,10 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     kind: 'failure',
     message: "OpenCode's provider refused the run and it couldn't recover: a usage limit, an auth or billing error, or a model the provider doesn't have. The run stops at once rather than wait for the time limit.",
   },
+  opencode_model_unknown: {
+    kind: 'failure',
+    message: "The OpenCode model isn't in the model list of the OpenCode version this release pins, or its provider's key isn't set, so no model ran.",
+  },
   opencode_key_missing: {
     kind: 'failure',
     message: "An OpenCode key kept in GitHub isn't set on the runner: add it as an Actions secret, and map it under `env:` on the Axon Shaft step in the workflow.",

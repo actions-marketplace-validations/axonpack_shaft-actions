@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { addChildUsage, childUsageSql, emptyEvents, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../opencode-run.util';
+import { addChildUsage, childUsageSql, emptyEvents, modelProblem, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../opencode-run.util';
 
 test("the job's Claude tools map to OpenCode's, without edits outside a task", () => {
   expect(opencodeTools(['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)'], false)).toEqual(['read', 'grep', 'glob', 'bash']);
@@ -62,4 +62,12 @@ test("the deep passes' usage is read from their sessions' step-finish parts and 
   addChildUsage('not json', e);
   expect(e.tokens).toEqual({ input: 110, output: 20, cache_read: 3, cache_write: 4 });
   expect(e.costUsd).toBe(0.75);
+});
+
+test("a model the pinned OpenCode's list lacks, or a provider it doesn't list, is named before the run", () => {
+  const listed = 'opencode/big-pickle\nopencode/deepseek-v4.1-flash-free\n';
+  expect(modelProblem('opencode/big-pickle', '1.19.6', listed)).toBeUndefined();
+  expect(modelProblem('opencode/gpt-9', '1.19.6', listed)).toBe("opencode/gpt-9 isn't in OpenCode 1.19.6's model list");
+  expect(modelProblem('opencode/big', '1.19.6', listed)).toBeDefined();
+  expect(modelProblem('nosuch/x', '1.19.6', undefined)).toBe("OpenCode 1.19.6 has no provider nosuch, or its key isn't set for this run");
 });

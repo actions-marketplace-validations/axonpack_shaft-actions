@@ -10,7 +10,7 @@ import { CLAUDE_BINARIES, OPENCODE_BINARIES } from '../consts/claude-binary.cons
 import { ShaftFailure } from '../utils/failure.util';
 
 const SDK_VERSION = pkg.dependencies['@anthropic-ai/claude-agent-sdk'];
-const OPENCODE_VERSION = pkg.devDependencies['opencode-ai'];
+export const OPENCODE_VERSION = pkg.devDependencies['opencode-ai'];
 
 /**
  * A native binary from a per-platform npm package `name@version`. dist/index.js can't carry it (hundreds

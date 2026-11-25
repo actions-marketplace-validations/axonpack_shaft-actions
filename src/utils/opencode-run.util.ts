@@ -93,3 +93,13 @@ export function addChildUsage(json: string, into: RunEvents): void {
   for (const k of ['input', 'output', 'cache_read', 'cache_write'] as const) into.tokens[k] += Number(row[k]) || 0;
   into.costUsd += Number(row.cost) || 0;
 }
+
+/**
+ * Why OpenCode can't run `model`, from `opencode models <provider>`'s output (undefined when the command
+ * failed: OpenCode lists a provider only when it knows it and has its key), or undefined when it can.
+ */
+export function modelProblem(model: string, version: string, listed: string | undefined): string | undefined {
+  const provider = model.slice(0, model.indexOf('/'));
+  if (listed === undefined) return `OpenCode ${version} has no provider ${provider}, or its key isn't set for this run`;
+  if (!listed.split('\n').some((l) => l.trim() === model)) return `${model} isn't in OpenCode ${version}'s model list`;
+}

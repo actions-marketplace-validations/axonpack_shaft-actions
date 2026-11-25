@@ -10,11 +10,11 @@ import { ShaftFailure } from '../utils/failure.util';
 import { runnerEnv } from '../utils/env.util';
 import { guardrails, guardrailPrompt } from '../utils/guardrails.util';
 import type { GuardOptions } from '../utils/opencode-guard.util';
-import { addChildUsage, childUsageSql, emptyEvents, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../utils/opencode-run.util';
+import { addChildUsage, childUsageSql, emptyEvents, modelProblem, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../utils/opencode-run.util';
 import { SYSTEM_PROMPT } from '../abuse/abuse.const';
 import type { OpencodeGrant } from './api.service';
 import { type AgentOptions, ALLOWED, type Attempt, bashFailure, EDIT_TOOLS, READ_TOOLS, toolTarget } from './agent.service';
-import { opencodeBinary } from './claude-binary.service';
+import { OPENCODE_VERSION, opencodeBinary } from './claude-binary.service';
 import { shaftMcp } from './mcp-setup.service';
 import { sandboxPrefix, which } from './sandbox.service';
 
@@ -139,6 +139,10 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
 
   const events = emptyEvents();
   const env = opencodeEnv(g, o.env ?? [], xdg, config);
+  // The model list is the pinned binary's own (the fetch is off), so a model it lacks fails here, not as an unclear error mid-run.
+  const models = spawnSync(bin, ['models', g.model.slice(0, g.model.indexOf('/'))], { cwd: o.cwd, env, encoding: 'utf8', timeout: 60_000 });
+  const problem = modelProblem(g.model, OPENCODE_VERSION, models.status === 0 ? models.stdout : undefined);
+  if (problem) throw new ShaftFailure('opencode_model_unknown', `${problem}, so no model ran. Pick a model from that list on the dashboard.`, DASHBOARD_URL);
   const child = spawn(bin, opencodeArgs(g), { cwd: o.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], signal: controller.signal });
   child.stdin.end(schemaPrompt(prompt, schema));
   let stderr = '';
