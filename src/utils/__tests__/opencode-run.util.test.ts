@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { emptyEvents, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../opencode-run.util';
+import { addChildUsage, childUsageSql, emptyEvents, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../opencode-run.util';
 
 test("the job's Claude tools map to OpenCode's, without edits outside a task", () => {
   expect(opencodeTools(['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)'], false)).toEqual(['read', 'grep', 'glob', 'bash']);
@@ -39,13 +39,27 @@ test('run events: the last text, tokens and cost summed per step, tool calls and
     { type: 'text', part: { text: '{"a":1}' } },
     { type: 'error', error: { name: 'APIError', data: { message: 'bad key' } } },
   ];
-  for (const l of lines) readEvent(JSON.stringify(l), e);
+  for (const l of lines) readEvent(JSON.stringify({ sessionID: 'ses_1', ...l }), e);
   readEvent('a log line', e);
   expect(e).toEqual({
+    session: 'ses_1',
     text: '{"a":1}',
     tokens: { input: 101, output: 27, cache_read: 50, cache_write: 10 },
     costUsd: 0.03,
     tools: [{ tool: 'bash', input: { command: 'git log' }, error: 'denied' }],
     errors: ['bad key'],
   });
+});
+
+test("the deep passes' usage is read from their sessions' step-finish parts and added to the totals", () => {
+  expect(childUsageSql('ses_abc123')).toContain("parent_id = 'ses_abc123'");
+  expect(childUsageSql("ses_x' or 1=1 --")).toBeUndefined();
+  expect(childUsageSql(undefined)).toBeUndefined();
+  const e = emptyEvents();
+  e.tokens.input = 10;
+  e.costUsd = 0.5;
+  addChildUsage(JSON.stringify([{ input: 100, output: 20, cache_read: 3, cache_write: 4, cost: 0.25 }]), e);
+  addChildUsage('not json', e);
+  expect(e.tokens).toEqual({ input: 110, output: 20, cache_read: 3, cache_write: 4 });
+  expect(e.costUsd).toBe(0.75);
 });

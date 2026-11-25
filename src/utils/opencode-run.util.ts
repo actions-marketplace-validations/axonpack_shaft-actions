@@ -43,7 +43,7 @@ export function replyJson(text: string): Record<string, unknown> | undefined {
 }
 
 /** What `opencode run --format json` printed, read: the last text part, tokens and cost summed over steps, the tool calls and errors. */
-export type RunEvents = { text: string; tokens: Tokens; costUsd: number; tools: { tool: string; input: Record<string, unknown>; error?: string }[]; errors: string[] };
+export type RunEvents = { session?: string; text: string; tokens: Tokens; costUsd: number; tools: { tool: string; input: Record<string, unknown>; error?: string }[]; errors: string[] };
 
 /** Read one line of `opencode run --format json`'s output into `into`. Anything else (a log line) is skipped. */
 export function readEvent(line: string, into: RunEvents): void {
@@ -54,6 +54,7 @@ export function readEvent(line: string, into: RunEvents): void {
     return;
   }
   const part = e.part ?? {};
+  if (!into.session && typeof (e as { sessionID?: unknown }).sessionID === 'string') into.session = (e as { sessionID: string }).sessionID;
   if (e.type === 'text' && typeof part.text === 'string') into.text = part.text;
   if (e.type === 'step_finish') {
     const t = part.tokens ?? {};
@@ -71,3 +72,24 @@ export function readEvent(line: string, into: RunEvents): void {
 }
 
 export const emptyEvents = (): RunEvents => ({ text: '', tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, costUsd: 0, tools: [], errors: [] });
+
+/**
+ * The SQL for `opencode db` that reads the deep passes' usage: the step-finish parts of the session's
+ * subagent sessions, which `run --format json` doesn't print. Undefined for an ID that isn't OpenCode's shape.
+ */
+export function childUsageSql(session: string | undefined): string | undefined {
+  if (!session || !/^ses_[A-Za-z0-9]+$/.test(session)) return;
+  const j = (path: string) => `coalesce(sum(json_extract(data, '$.${path}')), 0)`;
+  return `select ${j('tokens.input')} as input, ${j('tokens.output')} + ${j('tokens.reasoning')} as output, ${j('tokens.cache.read')} as cache_read, ${j('tokens.cache.write')} as cache_write, ${j('cost')} as cost from part where json_extract(data, '$.type') = 'step-finish' and session_id in (select id from session where parent_id = '${session}')`;
+}
+
+/** Add `opencode db --format json`'s answer to `childUsageSql` to the run's totals. Anything else adds nothing. */
+export function addChildUsage(json: string, into: RunEvents): void {
+  let row: Record<string, unknown> | undefined;
+  try {
+    row = JSON.parse(json)?.[0];
+  } catch {}
+  if (!row) return;
+  for (const k of ['input', 'output', 'cache_read', 'cache_write'] as const) into.tokens[k] += Number(row[k]) || 0;
+  into.costUsd += Number(row.cost) || 0;
+}

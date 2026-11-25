@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,7 +9,7 @@ import { ShaftFailure } from '../utils/failure.util';
 import { runnerEnv } from '../utils/env.util';
 import { guardrails, guardrailPrompt } from '../utils/guardrails.util';
 import type { GuardOptions } from '../utils/opencode-guard.util';
-import { emptyEvents, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../utils/opencode-run.util';
+import { addChildUsage, childUsageSql, emptyEvents, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../utils/opencode-run.util';
 import { SYSTEM_PROMPT } from '../abuse/abuse.const';
 import type { OpencodeGrant } from './api.service';
 import { type AgentOptions, ALLOWED, type Attempt, bashFailure, EDIT_TOOLS, READ_TOOLS, toolTarget } from './agent.service';
@@ -135,7 +135,8 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
   writeFileSync(config, JSON.stringify(opencodeConfig(o, g, guard, fileURLToPath(new URL('./opencode-guard.js', import.meta.url)))), { mode: 0o600 });
 
   const events = emptyEvents();
-  const child = spawn(bin, opencodeArgs(g), { cwd: o.cwd, env: opencodeEnv(g, o.env ?? [], xdg, config), stdio: ['pipe', 'pipe', 'pipe'], signal: controller.signal });
+  const env = opencodeEnv(g, o.env ?? [], xdg, config);
+  const child = spawn(bin, opencodeArgs(g), { cwd: o.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], signal: controller.signal });
   child.stdin.end(schemaPrompt(prompt, schema));
   let stderr = '';
   child.stderr.on('data', (d: Buffer) => {
@@ -155,6 +156,9 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
     logged = events.tools.length;
   }
   const code = await exit;
+  // The deep passes' usage, from OpenCode's own database in the run's folder.
+  const sql = deep ? childUsageSql(events.session) : undefined;
+  if (sql) addChildUsage(spawnSync(bin, ['db', sql, '--format', 'json'], { cwd: o.cwd, env, encoding: 'utf8', timeout: 60_000 }).stdout ?? '', events);
   const spent = { models: [g.model], costUsd: events.costUsd, tokens: events.tokens };
   const output = replyJson(events.text);
   if (output && !existsSync(marker)) {
