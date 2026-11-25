@@ -6,7 +6,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "build": "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js && bun build src/post.ts --target node --outfile dist/post.js",
+    "build": "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js && bun build src/post.ts --target node --outfile dist/post.js && bun build src/opencode-guard.ts --target bun --outfile dist/opencode-guard.js",
     "lint": "oxlint src",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
