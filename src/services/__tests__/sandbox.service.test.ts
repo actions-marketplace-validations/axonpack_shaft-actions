@@ -153,3 +153,9 @@ describe.skipIf(!!reason)('in bubblewrap', () => {
     expect(readChanges(repo, head(repo))).toEqual([{ path: 'fix.ts', mode: '100644', content: Buffer.from('x') }]);
   });
 });
+
+test("on OpenCode the prefix drops exactly the run's keys, and a project variable such as NPM_TOKEN still reaches the commands", () => {
+  const p = sandboxPrefix('/w', ['OPENROUTER_API_KEY', 'HF_TOKEN']);
+  expect(p).toContain("'-u' 'OPENROUTER_API_KEY' '-u' 'HF_TOKEN'");
+  expect(p).not.toContain('NPM_TOKEN');
+});

@@ -18,6 +18,31 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     kind: 'failure',
     message: "The Claude Code binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run.",
   },
+  opencode_binary_unverified: {
+    kind: 'failure',
+    message: "The OpenCode binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run.",
+  },
+  opencode_unavailable: { kind: 'failure', message: "OpenCode's search tools need ripgrep (`rg`) on the runner, and the action couldn't install it from the runner's Ubuntu archive." },
+  opencode_guard_missing: {
+    kind: 'failure',
+    message: "OpenCode ran without Axon Shaft's tool guard plugin loaded, so its reply wasn't used and nothing was posted or pushed.",
+  },
+  opencode_provider_error: {
+    kind: 'failure',
+    message: "OpenCode's provider refused the run and it couldn't recover: a usage limit, an auth or billing error, or a model the provider doesn't have. The run stops at once rather than wait for the time limit.",
+  },
+  opencode_model_unknown: {
+    kind: 'failure',
+    message: "The OpenCode model isn't in the model list of the OpenCode version this release pins, or its provider's key isn't set, so no model ran.",
+  },
+  opencode_key_missing: {
+    kind: 'failure',
+    message: "An OpenCode key kept in GitHub isn't set on the runner: add it as an Actions secret, and map it under `env:` on the Axon Shaft step in the workflow.",
+  },
+  opencode_key_refused: {
+    kind: 'failure',
+    message: "An OpenCode key's name isn't one the action passes on: a key's name is upper-case and ends in `_KEY` or `_TOKEN`, and is never `NODE_OPTIONS`, `PATH` or a runner, GitHub, loader or Claude variable.",
+  },
   mcp_unavailable: {
     kind: 'failure',
     message: "The action couldn't get its MCP token from the Axon Shaft API, or Axon Shaft's MCP server didn't answer `tools/list`, so the review didn't start.",

@@ -92,10 +92,10 @@ export const inSandbox = (cwd: string, file: string, args: string[], o: ExecFile
 /**
  * What the model's Bash command is prefixed with, every word quoted for the shell. bubblewrap starts
  * without the Claude token, which the CLI already keeps out of its commands, so not even its own
- * process in the sandbox holds it.
+ * process in the sandbox holds it. `unset` names more variables to drop the same way: OpenCode's keys.
  */
-export const sandboxPrefix = (cwd: string): string =>
-  [bin.env, '-u', 'ANTHROPIC_API_KEY', '-u', 'CLAUDE_CODE_OAUTH_TOKEN', bin.bwrap, ...sandboxArgs(cwd), '--'].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
+export const sandboxPrefix = (cwd: string, unset: string[] = []): string =>
+  [bin.env, '-u', 'ANTHROPIC_API_KEY', '-u', 'CLAUDE_CODE_OAUTH_TOKEN', ...unset.flatMap((n) => ['-u', n]), bin.bwrap, ...sandboxArgs(cwd), '--'].map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ');
 
 /**
  * Kill every sandbox still running, and so everything in it: with `--die-with-parent` and its own
