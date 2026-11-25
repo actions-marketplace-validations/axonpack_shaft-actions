@@ -86,6 +86,13 @@ export function opencodeEnv(g: OpencodeGrant, names: string[], xdg: Record<strin
   };
 }
 
+/**
+ * What a task's sandbox drops on OpenCode: the grant's keys, and every project variable named like a
+ * key (`_KEY` or `_TOKEN`), which is how a key kept in GitHub Actions secrets reaches OpenCode. The
+ * provider SDK reads them in OpenCode's own process; the PR's commands never do.
+ */
+export const sandboxUnset = (g: OpencodeGrant, names: string[]): string[] => [...new Set([...g.keys.map((k) => k.name), ...names.filter((n) => /_(KEY|TOKEN)$/.test(n))])];
+
 /** OpenCode's config for the run: the guard plugin first, the job's permissions, our agent with the system prompt and turn cap, the deep passes, and Shaft's MCP server. */
 export function opencodeConfig(o: AgentOptions, g: OpencodeGrant, guard: GuardOptions, plugin: string): Record<string, unknown> {
   const deep = !!o.subagentModel && !!o.passes?.length;
@@ -128,7 +135,7 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
   const guard: GuardOptions = {
     cwd: o.cwd,
     tools: opencodeTools(claudeTools, edit),
-    ...(o.commands && { commands: o.commands, prefix: sandboxPrefix(o.cwd, g.keys.map((k) => k.name)) }),
+    ...(o.commands && { commands: o.commands, prefix: sandboxPrefix(o.cwd, sandboxUnset(g, o.env ?? [])) }),
     mcp: !!shaftMcp(),
     guardrails: guardrails(),
     marker,
