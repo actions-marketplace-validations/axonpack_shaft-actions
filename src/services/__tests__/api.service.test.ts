@@ -119,6 +119,15 @@ test('an OpenCode grant masks every key, and needs no Claude token', async () =>
   expect(masked).toEqual(['ghs_shaft', 'sk-or-secret']);
 });
 
+test('an OpenCode grant with no keys runs, and only a missing model fails', async () => {
+  for (const opencode of [{ model: 'opencode/free', keys: [] }, { model: 'opencode/free' }]) {
+    answer(Response.json({ ...run, claude_token: null, provider: 'opencode', opencode }));
+    expect(await fetchGrant(review)).toMatchObject({ opencode: { model: 'opencode/free', keys: [] } });
+  }
+  answer(Response.json({ ...run, claude_token: null, provider: 'opencode', opencode: { keys: [] } }));
+  expect((await failure(fetchGrant(review))).code).toBe('api_error');
+});
+
 test('an OpenCode key whose name could change what runs is opencode_key_refused', async () => {
   for (const name of ['NODE_OPTIONS', 'LD_PRELOAD', 'PATH', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'INPUT_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'openai_api_key', 'OPENCODE_CONFIG_CONTENT', 'X_KEY=1']) {
     answer(Response.json({ ...run, provider: 'opencode', opencode: { model: 'a/b', keys: [{ name, value: 'v' }] } }));

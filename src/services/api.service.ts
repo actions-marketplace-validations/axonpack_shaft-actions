@@ -68,7 +68,7 @@ export type LatestAction = { version: string; url: string };
 /** The project's Claude token, from the dashboard. */
 export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 
-/** The project's OpenCode settings: a `provider/model`, an optional variant, and each key as the env var its provider reads. */
+/** The project's OpenCode settings: a `provider/model`, an optional variant, and each key as the env var its provider reads (none for a free model). */
 export type OpencodeGrant = { model: string; effort?: string; keys: { name: string; value: string }[] };
 
 /**
@@ -82,16 +82,18 @@ export const keyNameAllowed = (name: string): boolean =>
 /** The grant's `opencode`, checked: every key name allowed, else the run stops with `opencode_key_refused`. */
 function checkOpencode(o: unknown): OpencodeGrant {
   const g = o as OpencodeGrant | undefined;
-  if (typeof g?.model !== 'string' || !g.model.includes('/') || (g.effort !== undefined && typeof g.effort !== 'string') || !Array.isArray(g.keys)) {
+  if (typeof g?.model !== 'string' || !g.model.includes('/') || (g.effort !== undefined && typeof g.effort !== 'string') || (g.keys !== undefined && !Array.isArray(g.keys))) {
     throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode setting. Rerun the job in a few minutes.');
   }
-  for (const k of g.keys) {
+  // No keys is fine: OpenCode's free models need none, and the run gets only `runnerEnv`.
+  const keys = g.keys ?? [];
+  for (const k of keys) {
     if (typeof k?.name !== 'string' || typeof k.value !== 'string') throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode key. Rerun the job in a few minutes.');
     if (!keyNameAllowed(k.name)) {
       throw new ShaftFailure('opencode_key_refused', `The OpenCode key named ${k.name.slice(0, 64)} isn't allowed, so no model ran. A key's name is upper-case and ends in _KEY or _TOKEN. Rename it on the dashboard.`, DASHBOARD_URL);
     }
   }
-  return { model: g.model, ...(g.effort && { effort: g.effort }), keys: g.keys.map(({ name, value }) => ({ name, value })) };
+  return { model: g.model, ...(g.effort && { effort: g.effort }), keys: keys.map(({ name, value }) => ({ name, value })) };
 }
 
 /**
