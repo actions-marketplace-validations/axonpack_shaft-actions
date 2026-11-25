@@ -20,5 +20,8 @@ export const ENV_ALLOW = [
 /** Names a project's own list can never pass on: the runner's OIDC and runtime tokens, the action's inputs, Claude's tokens and the workflow's GitHub token. */
 export const ENV_DENIED = /^(ACTIONS_|INPUT_|ANTHROPIC_|CLAUDE_)|^GITHUB_TOKEN$/;
 
-/** Prefixes an OpenCode key's name may never start with, as the API checks them. `ANTHROPIC_` stays refused until the user decides. */
+/** Prefixes an OpenCode key's name may never start with, as the API checks them. */
 export const KEY_NAME_DENIED_PREFIXES = ['LD_', 'GITHUB_', 'ACTIONS_', 'INPUT_', 'ANTHROPIC_', 'CLAUDE_'];
+
+/** The exact names allowed despite a refused prefix: Anthropic's key, for OpenCode's Anthropic models (the user's call). */
+export const KEY_NAME_ALLOWED = ['ANTHROPIC_API_KEY'];

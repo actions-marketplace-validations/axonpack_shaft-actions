@@ -120,7 +120,7 @@ test('an OpenCode grant masks every key, and needs no Claude token', async () =>
 });
 
 test('an OpenCode key whose name could change what runs is opencode_key_refused', async () => {
-  for (const name of ['NODE_OPTIONS', 'LD_PRELOAD', 'PATH', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'INPUT_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'openai_api_key', 'OPENCODE_CONFIG_CONTENT', 'X_KEY=1']) {
+  for (const name of ['NODE_OPTIONS', 'LD_PRELOAD', 'PATH', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'INPUT_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'openai_api_key', 'OPENCODE_CONFIG_CONTENT', 'X_KEY=1']) {
     answer(Response.json({ ...run, provider: 'opencode', opencode: { model: 'a/b', keys: [{ name, value: 'v' }] } }));
     expect((await failure(fetchGrant(review))).code).toBe('opencode_key_refused');
   }
@@ -128,7 +128,12 @@ test('an OpenCode key whose name could change what runs is opencode_key_refused'
 
 test('key names: upper-case, ending in _KEY or _TOKEN, never a runner or loader variable', () => {
   expect(['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'AWS_SECRET_KEY', 'HF_TOKEN', 'OPENCODE_API_KEY', 'NODE_AUTH_TOKEN'].every(keyNameAllowed)).toBe(true);
-  expect(['GITHUB_TOKEN', 'GITHUB_PAT_TOKEN', 'LD_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'INPUT_KEY', 'ACTIONS_KEY', 'KEY', '_KEY', 'PATH', 'NODE_OPTIONS'].some(keyNameAllowed)).toBe(false);
+  expect(['GITHUB_TOKEN', 'GITHUB_PAT_TOKEN', 'LD_KEY', 'ANTHROPIC_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'INPUT_KEY', 'ACTIONS_KEY', 'KEY', '_KEY', 'PATH', 'NODE_OPTIONS'].some(keyNameAllowed)).toBe(false);
+});
+
+test('ANTHROPIC_API_KEY is the one Anthropic name an OpenCode key may take', () => {
+  expect(keyNameAllowed('ANTHROPIC_API_KEY')).toBe(true);
+  expect(['ANTHROPIC_API_KEY_2', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_API_KEY'].some(keyNameAllowed)).toBe(false);
 });
 
 test('a missing id-token permission is missing_id_token and says which line to add', async () => {

@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL, DASHBOARD_URL } from '../consts/api.const';
-import { KEY_NAME_DENIED_PREFIXES } from '../consts/env.const';
+import { KEY_NAME_ALLOWED, KEY_NAME_DENIED_PREFIXES } from '../consts/env.const';
 import { ShaftFailure } from '../utils/failure.util';
 import { abuseEvents } from '../abuse/classify.service';
 import type { Flagged } from '../abuse/output.util';
@@ -73,11 +73,11 @@ export type OpencodeGrant = { model: string; effort?: string; keys: { name: stri
 
 /**
  * The names a stored key may take, as the API checks them: upper-case, ending in `_KEY` or `_TOKEN`, never
- * `NODE_OPTIONS` or `PATH`, and never starting with one of `KEY_NAME_DENIED_PREFIXES`. The API's data
+ * `NODE_OPTIONS` or `PATH`, and never starting with one of `KEY_NAME_DENIED_PREFIXES` unless it is one of `KEY_NAME_ALLOWED`. The API's data
  * never picks a variable that changes what a program runs.
  */
 export const keyNameAllowed = (name: string): boolean =>
-  /^[A-Z][A-Z0-9_]*_(KEY|TOKEN)$/.test(name) && name !== 'NODE_OPTIONS' && name !== 'PATH' && !KEY_NAME_DENIED_PREFIXES.some((p) => name.startsWith(p));
+  /^[A-Z][A-Z0-9_]*_(KEY|TOKEN)$/.test(name) && name !== 'NODE_OPTIONS' && name !== 'PATH' && (KEY_NAME_ALLOWED.includes(name) || !KEY_NAME_DENIED_PREFIXES.some((p) => name.startsWith(p)));
 
 /** The grant's `opencode`, checked: every key name allowed, else the run stops with `opencode_key_refused`. */
 function checkOpencode(o: unknown): OpencodeGrant {
