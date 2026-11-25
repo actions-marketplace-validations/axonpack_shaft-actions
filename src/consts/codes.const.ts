@@ -24,7 +24,7 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
   },
   opencode_key_refused: {
     kind: 'failure',
-    message: "An OpenCode key's name isn't one the action passes on: a key's name is upper-case and ends in `_API_KEY`, `_KEY` or `_TOKEN`, and is never a runner, GitHub or loader variable.",
+    message: "An OpenCode key's name isn't one the action passes on: a key's name is upper-case and ends in `_KEY` or `_TOKEN`, and is never `NODE_OPTIONS`, `PATH` or a runner, GitHub, loader or Claude variable.",
   },
   mcp_unavailable: {
     kind: 'failure',

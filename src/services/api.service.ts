@@ -1,6 +1,6 @@
 import * as core from '@actions/core';
 import { ACTION_VERSION, API_AUDIENCE, API_URL, DASHBOARD_URL } from '../consts/api.const';
-import { ENV_DENIED } from '../consts/env.const';
+import { KEY_NAME_DENIED_PREFIXES } from '../consts/env.const';
 import { ShaftFailure } from '../utils/failure.util';
 import { abuseEvents } from '../abuse/classify.service';
 import type { Flagged } from '../abuse/output.util';
@@ -72,12 +72,12 @@ export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 export type OpencodeGrant = { model: string; effort?: string; keys: { name: string; value: string }[] };
 
 /**
- * The names a stored key may take: upper-case, ending in `_API_KEY`, `_KEY` or `_TOKEN`, and never one
- * the runner or a loader reads (`ENV_DENIED`, `GITHUB_*`). The API's data never picks a variable that
- * changes what a program runs, such as `NODE_OPTIONS`, `LD_PRELOAD` or `PATH`.
+ * The names a stored key may take, as the API checks them: upper-case, ending in `_KEY` or `_TOKEN`, never
+ * `NODE_OPTIONS` or `PATH`, and never starting with one of `KEY_NAME_DENIED_PREFIXES`. The API's data
+ * never picks a variable that changes what a program runs.
  */
 export const keyNameAllowed = (name: string): boolean =>
-  /^[A-Z][A-Z0-9_]*_(API_KEY|KEY|TOKEN)$/.test(name) && !ENV_DENIED.test(name) && !/^(GITHUB_|LD_|NODE_|DYLD_|OPENCODE_CONFIG)/.test(name);
+  /^[A-Z][A-Z0-9_]*_(KEY|TOKEN)$/.test(name) && name !== 'NODE_OPTIONS' && name !== 'PATH' && !KEY_NAME_DENIED_PREFIXES.some((p) => name.startsWith(p));
 
 /** The grant's `opencode`, checked: every key name allowed, else the run stops with `opencode_key_refused`. */
 function checkOpencode(o: unknown): OpencodeGrant {
@@ -88,7 +88,7 @@ function checkOpencode(o: unknown): OpencodeGrant {
   for (const k of g.keys) {
     if (typeof k?.name !== 'string' || typeof k.value !== 'string') throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode key. Rerun the job in a few minutes.');
     if (!keyNameAllowed(k.name)) {
-      throw new ShaftFailure('opencode_key_refused', `The OpenCode key named ${k.name.slice(0, 64)} isn't allowed, so no model ran. A key's name is upper-case and ends in _API_KEY, _KEY or _TOKEN. Rename it on the dashboard.`, DASHBOARD_URL);
+      throw new ShaftFailure('opencode_key_refused', `The OpenCode key named ${k.name.slice(0, 64)} isn't allowed, so no model ran. A key's name is upper-case and ends in _KEY or _TOKEN. Rename it on the dashboard.`, DASHBOARD_URL);
     }
   }
   return { model: g.model, ...(g.effort && { effort: g.effort }), keys: g.keys.map(({ name, value }) => ({ name, value })) };
