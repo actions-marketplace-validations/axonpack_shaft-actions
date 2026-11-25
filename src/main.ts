@@ -118,7 +118,7 @@ async function run(): Promise<void> {
   // masked in the log and taken out of anything posted, like the tokens.
   const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
   for (const v of envValues) core.setSecret(v);
-  const secrets = [CANARY, grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64'), ...envValues];
+  const secrets = [CANARY, grant.claude_token.value, ...(grant.opencode?.keys.map((k) => k.value) ?? []), grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64'), ...envValues];
   reportFailure = (e) =>
     reportRun({
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
@@ -173,7 +173,7 @@ async function run(): Promise<void> {
   const usage = (o: { tokens: Tokens; costUsd: number }) => ({
     duration_ms: Date.now() - started,
     tokens: addTokens(o.tokens, classifierTokens()),
-    ...(grant.claude_token.kind === 'api_key' ? { cost_usd: o.costUsd } : {}),
+    ...(grant.provider === 'opencode' || grant.claude_token.kind === 'api_key' ? { cost_usd: o.costUsd } : {}),
   });
 
   if (r.mode === 'task') {

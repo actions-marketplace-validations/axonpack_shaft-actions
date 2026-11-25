@@ -11,7 +11,7 @@ vi.doMock('@actions/core', () => ({
   },
   warning: (s: string) => warnings.push(s),
 }));
-const { fetchGrant, fetchPushToken, reportRun } = await import('../api.service');
+const { fetchGrant, fetchPushToken, keyNameAllowed, reportRun } = await import('../api.service');
 const { version } = await import('../../../package.json');
 
 const requests: { url: string; init: RequestInit }[] = [];
@@ -109,6 +109,26 @@ test('run: true without a token or the prompt is an api_error', async () => {
       url: undefined,
     });
   }
+});
+
+test('an OpenCode grant masks every key, and needs no Claude token', async () => {
+  const opencode = { model: 'openrouter/qwen', effort: 'high', keys: [{ name: 'OPENROUTER_API_KEY', value: 'sk-or-secret' }] };
+  answer(Response.json({ ...run, claude_token: undefined, provider: 'opencode', opencode }));
+  const grant = await fetchGrant(review);
+  expect(grant).toMatchObject({ provider: 'opencode', opencode, claude_token: { value: '' } });
+  expect(masked).toEqual(['ghs_shaft', 'sk-or-secret']);
+});
+
+test('an OpenCode key whose name could change what runs is opencode_key_refused', async () => {
+  for (const name of ['NODE_OPTIONS', 'LD_PRELOAD', 'PATH', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'ANTHROPIC_API_KEY', 'openai_api_key', 'OPENCODE_CONFIG_CONTENT', 'X_KEY=1']) {
+    answer(Response.json({ ...run, provider: 'opencode', opencode: { model: 'a/b', keys: [{ name, value: 'v' }] } }));
+    expect((await failure(fetchGrant(review))).code).toBe('opencode_key_refused');
+  }
+});
+
+test('key names: upper-case, ending in _API_KEY, _KEY or _TOKEN, never a runner or loader variable', () => {
+  expect(['OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'AWS_SECRET_KEY', 'HF_TOKEN', 'OPENCODE_API_KEY'].every(keyNameAllowed)).toBe(true);
+  expect(['GITHUB_TOKEN', 'GITHUB_PAT_TOKEN', 'LD_KEY', 'NODE_AUTH_TOKEN', 'DYLD_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'INPUT_KEY', 'KEY', '_KEY', 'PATH', 'NODE_OPTIONS'].some(keyNameAllowed)).toBe(false);
 });
 
 test('a missing id-token permission is missing_id_token and says which line to add', async () => {
