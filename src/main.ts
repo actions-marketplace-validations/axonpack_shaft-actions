@@ -158,7 +158,8 @@ async function run(): Promise<void> {
     number: r.number,
     claude: grant.claude_token,
     secrets,
-    model: String(settings.model ?? ''),
+    // On OpenCode every session runs the grant's one model, so the logs and the dashboard name it.
+    model: grant.provider === 'opencode' ? grant.opencode!.model : String(settings.model ?? ''),
     effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
     // Not set on the dashboard (the API's default, or none): the review picks a cap from the diff's size.
     maxTurns: settings.maxTurns == null || settings.maxTurnsDefault === true ? undefined : positive('maxTurns', settings.maxTurns),
