@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
-import { type GuardOptions, opencodeDenial, patchFiles } from '../opencode-guard.util';
+import { fatalRetry, type GuardOptions, opencodeDenial, patchFiles } from '../opencode-guard.util';
 
 const cwd = mkdtempSync(join(tmpdir(), 'shaft-oc-guard-'));
 mkdirSync(join(cwd, 'src'));
@@ -50,4 +50,15 @@ test('a task edits the checkout, never .git/ or .github/, by edit, write or a pa
 test('patchFiles reads every file a patch adds, updates, deletes or moves to', () => {
   expect(patchFiles('*** Add File: a\n*** Update File: b\n*** Move to: c\n*** Delete File: d')).toEqual(['a', 'b', 'c', 'd']);
   expect(patchFiles(undefined)).toEqual([]);
+});
+
+test('a retry OpenCode would wait out (a usage limit) stops the run; a plain retry and other events do not', () => {
+  const status = (s: unknown) => ({ type: 'session.status', properties: { sessionID: 'ses_1', status: s } });
+  const limit = { type: 'retry', attempt: 1, message: 'Free usage limit reached.', action: { reason: 'free_tier_limit' }, next: 0 };
+  expect(fatalRetry(status(limit))).toBe('Free usage limit reached.');
+  expect(fatalRetry(status({ ...limit, message: '' }))).toBe('the provider refused the run');
+  expect(fatalRetry(status({ type: 'retry', attempt: 1, message: 'Provider is overloaded', next: 0 }))).toBeUndefined();
+  expect(fatalRetry(status({ type: 'busy' }))).toBeUndefined();
+  expect(fatalRetry({ type: 'message.updated', properties: { status: limit } })).toBeUndefined();
+  expect(fatalRetry(undefined)).toBeUndefined();
 });

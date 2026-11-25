@@ -1,10 +1,11 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as core from '@actions/core';
+import { DASHBOARD_URL } from '../consts/api.const';
 import { ShaftFailure } from '../utils/failure.util';
 import { runnerEnv } from '../utils/env.util';
 import { guardrails, guardrailPrompt } from '../utils/guardrails.util';
@@ -123,6 +124,7 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
   const edit = !!o.commands;
   const claudeTools = o.tools ?? o.allowed ?? (deep ? [...ALLOWED, 'Agent'] : edit ? EDIT_TOOLS : READ_TOOLS);
   const marker = join(dir, 'guard-loaded');
+  const stop = join(dir, 'provider-error');
   const guard: GuardOptions = {
     cwd: o.cwd,
     tools: opencodeTools(claudeTools, edit),
@@ -130,6 +132,7 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
     mcp: !!shaftMcp(),
     guardrails: guardrails(),
     marker,
+    stop,
   };
   const config = join(dir, 'opencode.json');
   writeFileSync(config, JSON.stringify(opencodeConfig(o, g, guard, fileURLToPath(new URL('./opencode-guard.js', import.meta.url)))), { mode: 0o600 });
@@ -146,6 +149,13 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
     child.on('error', reject);
     child.on('close', resolve);
   });
+  // The plugin writes `stop` when the provider refused the run in a way OpenCode would wait out: end it now.
+  let refused: string | undefined;
+  const watch = setInterval(() => {
+    if (refused || !existsSync(stop)) return;
+    refused = readFileSync(stop, 'utf8').slice(0, 500);
+    child.kill('SIGKILL');
+  }, 1000);
   let logged = 0;
   for await (const line of createInterface({ input: child.stdout })) {
     readEvent(line, events);
@@ -155,7 +165,10 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
     }
     logged = events.tools.length;
   }
-  const code = await exit;
+  const code = await exit.finally(() => clearInterval(watch));
+  const providerError = (why: string) =>
+    new ShaftFailure('opencode_provider_error', `OpenCode's provider refused the run, so nothing was posted: ${why.replace(/\.$/, '')}. Check the model and its keys or plan on the dashboard, then rerun the job.`, DASHBOARD_URL);
+  if (refused) throw providerError(refused);
   // The deep passes' usage, from OpenCode's own database in the run's folder.
   const sql = deep ? childUsageSql(events.session) : undefined;
   if (sql) addChildUsage(spawnSync(bin, ['db', sql, '--format', 'json'], { cwd: o.cwd, env, encoding: 'utf8', timeout: 60_000 }).stdout ?? '', events);
@@ -165,6 +178,7 @@ export async function runOpencode(prompt: string, o: AgentOptions, schema: Recor
     throw new ShaftFailure('opencode_guard_missing', "OpenCode ran without Axon Shaft's tool guard loaded, so its reply wasn't used and nothing was posted. Rerun the job; the job log has OpenCode's output.");
   }
   if (output) return { spent, output };
-  if (code !== 0 || events.errors.length) return { spent, failed: `OpenCode exited with ${code}: ${events.errors.join('; ') || stderr.trim().split('\n').at(-1) || 'no output'}` };
+  if (events.errors.length) throw providerError(events.errors.join('; '));
+  if (code !== 0) return { spent, failed: `OpenCode exited with ${code}: ${events.errors.join('; ') || stderr.trim().split('\n').at(-1) || 'no output'}` };
   return { spent, why: 'no JSON object in its reply' };
 }

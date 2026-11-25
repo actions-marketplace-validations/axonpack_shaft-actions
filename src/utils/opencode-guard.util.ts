@@ -3,9 +3,10 @@ import { insideCheckout, toolDenial } from './tool-guard.util';
 /**
  * What the action hands the guard plugin (`src/opencode-guard.ts`) through OpenCode's config: the
  * checkout, a task's repo commands and the sandbox prefix its Bash runs in, the OpenCode tools the
- * job may call, and the file the plugin writes once it has loaded.
+ * job may call, the file the plugin writes once it has loaded, and the file it writes when the
+ * provider refuses the run (`stop`).
  */
-export type GuardOptions = { cwd: string; tools: string[]; commands?: string[]; prefix?: string; mcp?: boolean; guardrails?: unknown; marker: string };
+export type GuardOptions = { cwd: string; tools: string[]; commands?: string[]; prefix?: string; mcp?: boolean; guardrails?: unknown; marker: string; stop?: string };
 
 /** The files an `apply_patch` call touches, from its `*** Add/Update/Delete File:` and `*** Move to:` lines. */
 export const patchFiles = (patch: unknown): string[] =>
@@ -52,4 +53,17 @@ export function opencodeDenial(tool: string, args: Record<string, unknown>, o: G
     default:
       return `${tool} isn't one of this job's tools.`;
   }
+}
+
+/**
+ * The provider's message when OpenCode is about to retry an error no retry in this run can fix: a
+ * `session.status` of type `retry` that carries an `action` (a free or Go usage limit, which OpenCode
+ * then waits out for as long as the provider's retry-after says). Undefined for any other event,
+ * including a plain retry of a 5xx or an overload.
+ */
+export function fatalRetry(event: unknown): string | undefined {
+  const e = event as { type?: string; properties?: { status?: { type?: string; message?: unknown; action?: unknown } } } | undefined;
+  const status = e?.type === 'session.status' ? e.properties?.status : undefined;
+  if (status?.type !== 'retry' || !status.action) return;
+  return typeof status.message === 'string' && status.message ? status.message : 'the provider refused the run';
 }
