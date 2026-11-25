@@ -23706,7 +23706,7 @@ var package_default = {
   license: "MIT",
   type: "module",
   scripts: {
-    build: "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js && bun build src/post.ts --target node --outfile dist/post.js",
+    build: "bun src/meta.ts && bun build src/main.ts --target node --outfile dist/index.js && bun build src/post.ts --target node --outfile dist/post.js && bun build src/opencode-guard.ts --target bun --outfile dist/opencode-guard.js",
     lint: "oxlint src",
     typecheck: "tsc --noEmit",
     test: "vitest run",
@@ -23721,6 +23721,7 @@ var package_default = {
   devDependencies: {
     "@changesets/cli": "3.0.3",
     "@types/node": "^26.6.6",
+    "opencode-ai": "1.19.6",
     oxlint: "1.90.0",
     "oxlint-config-universe": "0.2.0",
     typescript: "^7.0.2",
@@ -54640,6 +54641,7 @@ var CODE_KEYS = new Set(["suggestion", "file", "path", "fp", "step"]);
 
 // src/services/claude-binary.service.ts
 var SDK_VERSION = package_default.dependencies["@anthropic-ai/claude-agent-sdk"];
+var OPENCODE_VERSION = package_default.devDependencies["opencode-ai"];
 
 // src/services/agent.service.ts
 var SCHEMA = {
