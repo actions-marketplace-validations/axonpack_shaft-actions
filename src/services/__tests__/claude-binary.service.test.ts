@@ -30,8 +30,8 @@ vi.doMock('node:module', async (original) => ({
 }));
 vi.doMock('@actions/core', () => ({ info: () => {} }));
 const recorded: Record<string, string> = {};
-vi.doMock('../../consts/claude-binary.const', () => ({ CLAUDE_BINARIES: recorded }));
-const { claudeBinary } = await import('../claude-binary.service');
+vi.doMock('../../consts/claude-binary.const', () => ({ CLAUDE_BINARIES: recorded, OPENCODE_BINARIES: recorded }));
+const { claudeBinary, opencodeBinary } = await import('../claude-binary.service');
 
 const temp = mkdtempSync(join(tmpdir(), 'shaft-claude-'));
 afterAll(() => rmSync(temp, { recursive: true, force: true }));
@@ -74,4 +74,16 @@ test('the build records a sha512 for each platform the action installs on, at th
   for (const p of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'win32-arm64', 'win32-x64']) {
     expect(CLAUDE_BINARIES[`@anthropic-ai/claude-agent-sdk-${p}@${version}`]).toMatch(/^sha512-[A-Za-z0-9+/]{86}==$/);
   }
+});
+
+test('OpenCode comes from its own platform package, checked against its recorded sha512 the same way', () => {
+  const name = `opencode-${process.platform === 'win32' ? 'windows' : process.platform}-${process.arch}`;
+  const ocSpec = `${name}@${pkg.devDependencies['opencode-ai']}`;
+  expect(() => opencodeBinary()).toThrow(expect.objectContaining({ code: 'opencode_binary_unverified' }));
+  recorded[ocSpec] = sha512('tarball');
+  const ocDir = join(temp, 'shaft-opencode');
+  expect(opencodeBinary()).toBe(join(ocDir, 'node_modules', name, 'bin', process.platform === 'win32' ? 'opencode.exe' : 'opencode'));
+  expect(calls[0]).toEqual(['pack', '--json', '--pack-destination', ocDir, ocSpec]);
+  recorded[ocSpec] = sha512('other');
+  expect(() => opencodeBinary()).toThrow(expect.objectContaining({ code: 'opencode_binary_unverified' }));
 });

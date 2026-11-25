@@ -18,6 +18,10 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     kind: 'failure',
     message: "The Claude Code binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run.",
   },
+  opencode_binary_unverified: {
+    kind: 'failure',
+    message: "The OpenCode binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run.",
+  },
   opencode_key_refused: {
     kind: 'failure',
     message: "An OpenCode key's name isn't one the action passes on: a key's name is upper-case and ends in `_API_KEY`, `_KEY` or `_TOKEN`, and is never a runner, GitHub or loader variable.",

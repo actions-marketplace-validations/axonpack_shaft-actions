@@ -21,6 +21,7 @@
   "devDependencies": {
     "@changesets/cli": "3.0.3",
     "@types/node": "^26.6.6",
+    "opencode-ai": "1.19.6",
     "oxlint": "1.90.0",
     "oxlint-config-universe": "0.2.0",
     "typescript": "^7.0.2",
