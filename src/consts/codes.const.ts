@@ -31,6 +31,10 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     kind: 'failure',
     message: "OpenCode's provider refused the run and it couldn't recover: a usage limit, an auth or billing error, or a model the provider doesn't have. The run stops at once rather than wait for the time limit.",
   },
+  opencode_key_missing: {
+    kind: 'failure',
+    message: "An OpenCode key kept in GitHub isn't set on the runner: add it as an Actions secret, and map it under `env:` on the Axon Shaft step in the workflow.",
+  },
   opencode_key_refused: {
     kind: 'failure',
     message: "An OpenCode key's name isn't one the action passes on: a key's name is upper-case and ends in `_KEY` or `_TOKEN`, and is never `NODE_OPTIONS`, `PATH` or a runner, GitHub, loader or Claude variable.",

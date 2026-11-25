@@ -128,6 +128,25 @@ test('an OpenCode grant with no keys runs, and only a missing model fails', asyn
   expect((await failure(fetchGrant(review))).code).toBe('api_error');
 });
 
+test('a key kept in GitHub is read from the runner, masked and passed on with the stored ones', async () => {
+  process.env.OPENROUTER_API_KEY = 'sk-or-from-github';
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-from-github';
+  answer(Response.json({ ...run, claude_token: null, provider: 'opencode', opencode: { model: 'openrouter/qwen', keys: [{ name: 'HF_TOKEN', value: 'hf-stored' }], github_keys: ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY'] } }));
+  expect(await fetchGrant(review)).toMatchObject({ opencode: { keys: [{ name: 'HF_TOKEN', value: 'hf-stored' }, { name: 'OPENROUTER_API_KEY', value: 'sk-or-from-github' }, { name: 'ANTHROPIC_API_KEY', value: 'sk-ant-from-github' }] } });
+  expect(masked).toEqual(['ghs_shaft', 'hf-stored', 'sk-or-from-github', 'sk-ant-from-github']);
+  delete process.env.OPENROUTER_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+});
+
+test('a key kept in GitHub that the runner lacks is opencode_key_missing, and a bad name is refused', async () => {
+  answer(Response.json({ ...run, provider: 'opencode', opencode: { model: 'a/b', keys: [], github_keys: ['OPENROUTER_API_KEY'] } }));
+  const f = await failure(fetchGrant(review));
+  expect(f.code).toBe('opencode_key_missing');
+  expect(f.message).toContain('OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}');
+  answer(Response.json({ ...run, provider: 'opencode', opencode: { model: 'a/b', keys: [], github_keys: ['NODE_OPTIONS'] } }));
+  expect((await failure(fetchGrant(review))).code).toBe('opencode_key_refused');
+});
+
 test('an OpenCode key whose name could change what runs is opencode_key_refused', async () => {
   for (const name of ['NODE_OPTIONS', 'LD_PRELOAD', 'PATH', 'GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'INPUT_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'openai_api_key', 'OPENCODE_CONFIG_CONTENT', 'X_KEY=1']) {
     answer(Response.json({ ...run, provider: 'opencode', opencode: { model: 'a/b', keys: [{ name, value: 'v' }] } }));

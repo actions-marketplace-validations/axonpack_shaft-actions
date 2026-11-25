@@ -69,7 +69,13 @@ export type LatestAction = { version: string; url: string };
 export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 
 /** The project's OpenCode settings: a `provider/model`, an optional variant, and each key as the env var its provider reads (none for a free model). */
-export type OpencodeGrant = { model: string; effort?: string; keys: { name: string; value: string }[] };
+export type OpencodeGrant = {
+  model: string;
+  effort?: string;
+  keys: { name: string; value: string }[];
+  /** Keys kept in GitHub Actions secrets, by name: the workflow maps each into the step's env. The action reads them into `keys`. */
+  github_keys?: string[];
+};
 
 /**
  * The names a stored key may take, as the API checks them: upper-case, ending in `_KEY` or `_TOKEN`, never
@@ -82,7 +88,7 @@ export const keyNameAllowed = (name: string): boolean =>
 /** The grant's `opencode`, checked: every key name allowed, else the run stops with `opencode_key_refused`. */
 function checkOpencode(o: unknown): OpencodeGrant {
   const g = o as OpencodeGrant | undefined;
-  if (typeof g?.model !== 'string' || !g.model.includes('/') || (g.effort !== undefined && typeof g.effort !== 'string') || (g.keys !== undefined && !Array.isArray(g.keys))) {
+  if (typeof g?.model !== 'string' || !g.model.includes('/') || (g.effort !== undefined && typeof g.effort !== 'string') || (g.keys !== undefined && !Array.isArray(g.keys)) || (g.github_keys !== undefined && !Array.isArray(g.github_keys))) {
     throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode setting. Rerun the job in a few minutes.');
   }
   // No keys is fine: OpenCode's free models need none, and the run gets only `runnerEnv`.
@@ -93,7 +99,19 @@ function checkOpencode(o: unknown): OpencodeGrant {
       throw new ShaftFailure('opencode_key_refused', `The OpenCode key named ${k.name.slice(0, 64)} isn't allowed, so no model ran. A key's name is upper-case and ends in _KEY or _TOKEN. Rename it on the dashboard.`, DASHBOARD_URL);
     }
   }
-  return { model: g.model, ...(g.effort && { effort: g.effort }), keys: keys.map(({ name, value }) => ({ name, value })) };
+  // A key kept in GitHub: the same name rule, and its value from the step's env, which the workflow maps from the secret.
+  const github = (g.github_keys ?? []).map((name) => {
+    if (typeof name !== 'string') throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode key. Rerun the job in a few minutes.');
+    if (!keyNameAllowed(name)) {
+      throw new ShaftFailure('opencode_key_refused', `The OpenCode key named ${name.slice(0, 64)} isn't allowed, so no model ran. A key's name is upper-case and ends in _KEY or _TOKEN. Rename it on the dashboard.`, DASHBOARD_URL);
+    }
+    const value = process.env[name];
+    if (!value) {
+      throw new ShaftFailure('opencode_key_missing', `The OpenCode key ${name} is kept in GitHub, and this run has no ${name}, so no model ran. Add it as an Actions secret, and add \`${name}: \${{ secrets.${name} }}\` under \`env:\` on the Axon Shaft step in the workflow.`);
+    }
+    return { name, value };
+  });
+  return { model: g.model, ...(g.effort && { effort: g.effort }), keys: [...keys.map(({ name, value }) => ({ name, value })), ...github] };
 }
 
 /**
