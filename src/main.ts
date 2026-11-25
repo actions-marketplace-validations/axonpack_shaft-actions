@@ -10,6 +10,7 @@ import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
 import { addShaftMcp } from './services/mcp-setup.service';
+import { setOpencode } from './services/opencode.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
@@ -118,12 +119,14 @@ async function run(): Promise<void> {
   // masked in the log and taken out of anything posted, like the tokens.
   const envValues = globs(grant.settings.env).flatMap((n) => process.env[n] ?? []);
   for (const v of envValues) core.setSecret(v);
-  const secrets = [CANARY, grant.claude_token.value, grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64'), ...envValues];
+  const secrets = [CANARY, grant.claude_token.value, ...(grant.opencode?.keys.map((k) => k.value) ?? []), grant.github_token, Buffer.from(`x-access-token:${grant.github_token}`).toString('base64'), ...envValues];
   reportFailure = (e) =>
     reportRun({
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
       duration_ms: Date.now() - started,
     });
+  // On OpenCode every session, the classifier's and triage's included, runs `opencode run` on the grant's model.
+  setOpencode(grant.provider === 'opencode' ? grant.opencode : undefined);
   configureAbuse({ claude: grant.claude_token, cwd, secrets });
   // The API's extra input rules, added to the built-in ones (never in place of them).
   // `guardrail` is the field's name before the rename to abuse, for an API that hasn't deployed it.
@@ -155,7 +158,8 @@ async function run(): Promise<void> {
     number: r.number,
     claude: grant.claude_token,
     secrets,
-    model: String(settings.model ?? ''),
+    // On OpenCode every session runs the grant's one model, so the logs and the dashboard name it.
+    model: grant.provider === 'opencode' ? grant.opencode!.model : String(settings.model ?? ''),
     effort: oneOf('effort', ['auto', 'low', 'medium', 'high', 'xhigh', 'max'], settings.effort),
     // Not set on the dashboard (the API's default, or none): the review picks a cap from the diff's size.
     maxTurns: settings.maxTurns == null || settings.maxTurnsDefault === true ? undefined : positive('maxTurns', settings.maxTurns),
@@ -173,7 +177,7 @@ async function run(): Promise<void> {
   const usage = (o: { tokens: Tokens; costUsd: number }) => ({
     duration_ms: Date.now() - started,
     tokens: addTokens(o.tokens, classifierTokens()),
-    ...(grant.claude_token.kind === 'api_key' ? { cost_usd: o.costUsd } : {}),
+    ...(grant.provider === 'opencode' || grant.claude_token.kind === 'api_key' ? { cost_usd: o.costUsd } : {}),
   });
 
   if (r.mode === 'task') {

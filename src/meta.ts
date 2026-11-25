@@ -7,17 +7,16 @@ import { GUIDE_CAP, GUIDE_FILES } from './consts/settings.const';
 import { FACTS, SCRIPTS } from './services/prestep/prestep.service';
 import { LOCKFILES } from './utils/lockfile.util';
 
-// `bun run build` runs this before the bundle. It writes only data: the Claude Code binaries' hashes,
+// `bun run build` runs this before the bundle. It writes only data: the Claude Code and OpenCode binaries' hashes,
 // which the bundle carries, and `dist/meta.json`, which the shaft docs generator reads.
 
-// The sha512 bun.lock records for each platform's Claude Code binary package, by `name@version`.
+// The sha512 bun.lock records for each platform's Claude Code and OpenCode binary package, by `name@version`.
 // `claude-binary.service.ts` checks the tarball npm downloads against it before unpacking it.
 const lock = createRequire(import.meta.url)('../bun.lock'); // Bun parses its own lockfile
-const sdk = lock.packages['@anthropic-ai/claude-agent-sdk'];
-const binaries = Object.fromEntries(Object.keys(sdk[2].optionalDependencies).map((name) => [lock.packages[name][0], lock.packages[name][3]]));
+const hashes = (pkg: string) => JSON.stringify(Object.fromEntries(Object.keys(lock.packages[pkg][2].optionalDependencies).map((name) => [lock.packages[name][0], lock.packages[name][3]])), null, 2);
 writeFileSync(
   new URL('./consts/claude-binary.const.ts', import.meta.url),
-  `// Written by \`bun run build\` (src/meta.ts) from bun.lock. Don't edit.\n\n/** The sha512 of each Claude Code binary package, by \`name@version\`. */\nexport const CLAUDE_BINARIES: Record<string, string> = ${JSON.stringify(binaries, null, 2)};\n`,
+  `// Written by \`bun run build\` (src/meta.ts) from bun.lock. Don't edit.\n\n/** The sha512 of each Claude Code binary package, by \`name@version\`. */\nexport const CLAUDE_BINARIES: Record<string, string> = ${hashes('@anthropic-ai/claude-agent-sdk')};\n\n/** The sha512 of each OpenCode binary package (\`opencode-ai\`'s), by \`name@version\`. */\nexport const OPENCODE_BINARIES: Record<string, string> = ${hashes('opencode-ai')};\n`,
 );
 
 const action = parse(readFileSync(new URL('../action.yml', import.meta.url), 'utf8'));

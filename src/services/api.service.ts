@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
-import { ACTION_VERSION, API_AUDIENCE, API_URL } from '../consts/api.const';
+import { ACTION_VERSION, API_AUDIENCE, API_URL, DASHBOARD_URL } from '../consts/api.const';
+import { KEY_NAME_ALLOWED, KEY_NAME_DENIED_PREFIXES } from '../consts/env.const';
 import { ShaftFailure } from '../utils/failure.util';
 import { abuseEvents } from '../abuse/classify.service';
 import type { Flagged } from '../abuse/output.util';
@@ -67,6 +68,52 @@ export type LatestAction = { version: string; url: string };
 /** The project's Claude token, from the dashboard. */
 export type ClaudeToken = { kind: 'oauth' | 'api_key'; value: string };
 
+/** The project's OpenCode settings: a `provider/model`, an optional variant, and each key as the env var its provider reads (none for a free model). */
+export type OpencodeGrant = {
+  model: string;
+  effort?: string;
+  keys: { name: string; value: string }[];
+  /** Keys kept in GitHub Actions secrets, by name: the workflow maps each into the step's env. The action reads them into `keys`. */
+  github_keys?: string[];
+};
+
+/**
+ * The names a stored key may take, as the API checks them: upper-case, ending in `_KEY` or `_TOKEN`, never
+ * `NODE_OPTIONS` or `PATH`, and never starting with one of `KEY_NAME_DENIED_PREFIXES` unless it is one of `KEY_NAME_ALLOWED`. The API's data
+ * never picks a variable that changes what a program runs.
+ */
+export const keyNameAllowed = (name: string): boolean =>
+  /^[A-Z][A-Z0-9_]*_(KEY|TOKEN)$/.test(name) && name !== 'NODE_OPTIONS' && name !== 'PATH' && (KEY_NAME_ALLOWED.includes(name) || !KEY_NAME_DENIED_PREFIXES.some((p) => name.startsWith(p)));
+
+/** The grant's `opencode`, checked: every key name allowed, else the run stops with `opencode_key_refused`. */
+function checkOpencode(o: unknown): OpencodeGrant {
+  const g = o as OpencodeGrant | undefined;
+  if (typeof g?.model !== 'string' || !g.model.includes('/') || (g.effort !== undefined && typeof g.effort !== 'string') || (g.keys !== undefined && !Array.isArray(g.keys)) || (g.github_keys !== undefined && !Array.isArray(g.github_keys))) {
+    throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode setting. Rerun the job in a few minutes.');
+  }
+  // No keys is fine: OpenCode's free models need none, and the run gets only `runnerEnv`.
+  const keys = g.keys ?? [];
+  for (const k of keys) {
+    if (typeof k?.name !== 'string' || typeof k.value !== 'string') throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode key. Rerun the job in a few minutes.');
+    if (!keyNameAllowed(k.name)) {
+      throw new ShaftFailure('opencode_key_refused', `The OpenCode key named ${k.name.slice(0, 64)} isn't allowed, so no model ran. A key's name is upper-case and ends in _KEY or _TOKEN. Rename it on the dashboard.`, DASHBOARD_URL);
+    }
+  }
+  // A key kept in GitHub: the same name rule, and its value from the step's env, which the workflow maps from the secret.
+  const github = (g.github_keys ?? []).map((name) => {
+    if (typeof name !== 'string') throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete OpenCode key. Rerun the job in a few minutes.');
+    if (!keyNameAllowed(name)) {
+      throw new ShaftFailure('opencode_key_refused', `The OpenCode key named ${name.slice(0, 64)} isn't allowed, so no model ran. A key's name is upper-case and ends in _KEY or _TOKEN. Rename it on the dashboard.`, DASHBOARD_URL);
+    }
+    const value = process.env[name];
+    if (!value) {
+      throw new ShaftFailure('opencode_key_missing', `The OpenCode key ${name} is kept in GitHub, and this run has no ${name}, so no model ran. Add it as an Actions secret, and add \`${name}: \${{ secrets.${name} }}\` under \`env:\` on the Axon Shaft step in the workflow.`);
+    }
+    return { name, value };
+  });
+  return { model: g.model, ...(g.effort && { effort: g.effort }), keys: [...keys.map(({ name, value }) => ({ name, value })), ...github] };
+}
+
 /**
  * What `POST /v1/token` returns: no run (the job is off, or not on for this event), or the run's
  * tokens. A fork's PR on a job set to ask a maintainer first also gets the `comment` to post, and the
@@ -80,6 +127,10 @@ export type Grant =
       run: true;
       github_token: string;
       claude_token: ClaudeToken;
+      /** Which agent runs the model. Absent from an older API, and then `claude`. */
+      provider?: 'claude' | 'opencode';
+      /** With `provider: 'opencode'`. */
+      opencode?: OpencodeGrant;
       /**
        * The dashboard's settings for this repo, already merged with the account's and the defaults.
        * `maxTurnsDefault: true` says `maxTurns` is the default, not a value set on the dashboard.
@@ -198,12 +249,27 @@ export async function fetchGrant(request: GrantRequest): Promise<Grant> {
     if (typeof grant.github_token === 'string') core.setSecret(grant.github_token);
     return grant;
   }
-  if (typeof grant?.github_token !== 'string' || typeof grant.claude_token?.value !== 'string' || typeof grant.job?.prompt?.template !== 'string' || !Array.isArray(grant.job.prompt.passes)) {
+  const provider = grant?.provider ?? 'claude';
+  if (
+    typeof grant?.github_token !== 'string' ||
+    (provider !== 'claude' && provider !== 'opencode') ||
+    (provider === 'claude' && typeof grant.claude_token?.value !== 'string') ||
+    typeof grant.job?.prompt?.template !== 'string' ||
+    !Array.isArray(grant.job.prompt.passes)
+  ) {
     throw new ShaftFailure('api_error', 'The Axon Shaft API sent an incomplete answer. Rerun the job in a few minutes.');
   }
   core.setSecret(grant.github_token);
-  core.setSecret(grant.claude_token.value);
-  return grant;
+  if (provider === 'claude') {
+    core.setSecret(grant.claude_token.value);
+    return grant;
+  }
+  const opencode = checkOpencode(grant.opencode);
+  for (const k of opencode.keys) core.setSecret(k.value);
+  // No Claude token runs on OpenCode; an empty one is never used, and never redacted.
+  const claude = typeof grant.claude_token?.value === 'string' ? grant.claude_token : { kind: 'api_key' as const, value: '' };
+  if (claude.value) core.setSecret(claude.value);
+  return { ...grant, provider, opencode, claude_token: claude };
 }
 
 /** What `POST /v1/push-token` returns: a token with Contents write only, and the pull request's branch as GitHub has it. */
