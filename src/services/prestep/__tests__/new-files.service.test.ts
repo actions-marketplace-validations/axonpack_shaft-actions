@@ -27,5 +27,5 @@ test('each added or moved file with its folder, suffix and name case, and how ma
       '- src/utils/formatDate.ts (moved here): folder src/utils/, suffix .ts, camelCase',
     ].join('\n'),
   );
-  expect(await newFiles(input([changed('src/main.ts', ['x'])]))).toBe('The pull request adds or moves no files.');
+  expect(await newFiles(input([changed('src/main.ts', ['x'])]))).toBe('');
 });

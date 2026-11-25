@@ -21,3 +21,12 @@ test('removed and context lines, placeholders and the docs example key are left 
   const file = { ...changed('src/a.ts', []), patch: `@@ -1,2 +1,3 @@\n-old ${AWS}\n context ${GH}\n+AKIAXXXXXXXXXXXXXXXX\n+AKIAIOSFODNN7EXAMPLE` };
   expect(secrets(input([file]))).toEqual([]);
 });
+
+test('a long random string is should-fix with no value shown; ordinary strings and lockfiles pass, and the API sets the thresholds', () => {
+  const random = ['q8Zr2LmX9', 'vTn4Ka7Wp', 'E1sYd6Hc3'].join('');
+  const file = changed('src/a.ts', [`const apiSecret = "${random}";`, 'const name = "a-perfectly-ordinary-name";', 'id: 123e4567-e89b-12d3-a456-426614174000']);
+  const found = secrets(input([file, changed('bun.lock', [`"x": "${random}",`])]));
+  expect(found.map((f) => `${f.severity} ${f.file}:${f.line}`)).toEqual(['should-fix src/a.ts:1']);
+  expect(JSON.stringify(found)).not.toContain(random);
+  expect(secrets(input([file]), { entropy: 6 })).toEqual([]);
+});

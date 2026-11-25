@@ -5,8 +5,8 @@ import { DASHBOARD_URL } from '../consts/api.const';
 import { TRIAGE_START } from '../consts/ladder.const';
 import { ladder, matches } from '../utils/auto-pick.util';
 import { failureMarkdown, noticeText, ShaftFailure } from '../utils/failure.util';
-import { pushHits } from '../guardrails/push.util';
-import { recordEvent } from '../guardrails/classify.service';
+import { pushHits } from '../abuse/push.util';
+import { recordEvent } from '../abuse/classify.service';
 import { pushDenial, type PushTarget, runsCode, sameChanges, unaskedBuildInputs } from '../utils/push.util';
 import { footer, prose, redact } from '../utils/render.util';
 import { dataBlock } from '../utils/prompt.util';
@@ -213,8 +213,8 @@ export async function runTask(o: TaskOptions): Promise<TaskOutcome> {
         core.warning(`Nothing was pushed: ${outside.join(', ')} isn't named by any finding.`);
         lines.push(`Nothing was pushed: a fix of the review's findings may change only the files they name, and this one also changed ${outside.map(name).join(', ')}.`);
       } else if (blocked.length) {
-        const why = `Nothing was pushed: a guardrail rule refused the change (${blocked.map((b) => `${b.name} in ${name(b.path)}`).join('; ')}).`;
-        core.warning(noticeText(why, 'guardrail_blocked'));
+        const why = `Nothing was pushed: an abuse rule refused the change (${blocked.map((b) => `${b.name} in ${name(b.path)}`).join('; ')}).`;
+        core.warning(noticeText(why, 'abuse_blocked'));
         recordEvent(o.askerId ? { id: o.askerId, login: o.asker } : undefined, { rule: blocked[0]!.rule, severity: 'strike', where: 'push', excerpt: blocked[0]!.line });
         lines.push(why);
       } else if (unasked.length) {

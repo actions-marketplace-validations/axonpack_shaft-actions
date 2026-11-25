@@ -20,5 +20,5 @@ test('a newly exported name no other code file names is listed; a used one and a
 test('Python, Go and Rust exports count, and no new export says so', async () => {
   const files = [changed('a.py', ['def load():', '    def inner():', 'def _private():']), changed('b.go', ['func Serve() {}', 'func (s *S) Close() {}', 'func local() {}']), changed('c.rs', ['pub fn run() {}'])];
   expect(await unused(input(files, { 'main.py': 'from a import load' }))).toBe('3 of the 4 new exports are named in no other code file:\n- `Serve` (b.go:1)\n- `Close` (b.go:2)\n- `run` (c.rs:1)');
-  expect(await unused(input([changed('a.ts', ['const x = 1;'])]))).toBe('The pull request exports no new name.');
+  expect(await unused(input([changed('a.ts', ['const x = 1;'])]))).toBe('');
 });

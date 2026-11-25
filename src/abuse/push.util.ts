@@ -1,5 +1,5 @@
 import { LOCKFILE } from '../utils/auto-pick.util';
-import { PUSH_RULES } from './guardrail.const';
+import { PUSH_RULES } from './abuse.const';
 
 /**
  * The push rules the lines `changes` add break, one per file: a download piped into a shell, the

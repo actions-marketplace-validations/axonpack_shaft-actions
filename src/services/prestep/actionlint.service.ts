@@ -32,5 +32,5 @@ export const actionlint: Facts = async ({ files, checkout }) => {
       lines.push(`actionlint didn't run: ${(e as Error).message}.`);
     }
   }
-  return factsText(lines, 'actionlint found nothing in the changed workflows, and every action the change adds is pinned.');
+  return factsText(lines, '');
 };

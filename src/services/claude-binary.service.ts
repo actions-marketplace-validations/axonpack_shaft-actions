@@ -39,3 +39,11 @@ export function claudeBinary(): string {
   execFileSync('npm', ['install', '--no-save', '--no-package-lock', '--prefix', dir, tarball], { stdio: 'inherit' });
   return join(dir, 'node_modules', file);
 }
+
+let configDir: string | undefined;
+
+/** Claude Code's config folder for this run, once the action has written one (`addShaftMcp`); until then the CLI loads no settings at all. */
+export const claudeConfigDir = () => configDir;
+export const setClaudeConfigDir = (dir: string | undefined) => {
+  configDir = dir;
+};

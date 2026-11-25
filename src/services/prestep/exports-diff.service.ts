@@ -48,5 +48,5 @@ export const exportsDiff: Facts = async ({ files }) => {
     }
     if (rows.length) lines.push(`${f.filename}:`, ...rows);
   }
-  return factsText(lines, 'The pull request changes no exported name, no package entry point or version, and no changeset bump.');
+  return factsText(lines, '');
 };

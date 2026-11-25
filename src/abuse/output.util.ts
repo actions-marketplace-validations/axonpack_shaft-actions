@@ -1,4 +1,4 @@
-import { LINK_HOSTS, TOKEN_SHAPES } from './guardrail.const';
+import { LINK_HOSTS, TOKEN_SHAPES } from './abuse.const';
 
 /** Keys whose text is code or a path: only token shapes are taken out of them, the rest stays as written. */
 const CODE_KEYS = new Set(['suggestion', 'file', 'path', 'fp', 'step']);
@@ -65,7 +65,7 @@ export type Flagged = { user_id: number; login: string; strikes: number; exempt?
 
 /**
  * One summary line for each user with strikes: the API's count plus this run's strike, and the rule
- * of this run's strike when there is one. Never the text itself, which would repeat the injection.
+ * of this run's strike when there is one. Never the text itself, which would repeat the abuse.
  */
 export function flaggedLines(flagged: Flagged[], events: { user_id: number; login: string; rule: string; severity: string }[], names: (rule: string) => string): string[] {
   const users = new Map(flagged.map((f) => [f.user_id, { ...f }]));
@@ -76,11 +76,11 @@ export function flaggedLines(flagged: Flagged[], events: { user_id: number; logi
   return [...users.values()].map((u) => {
     const rule = events.find((e) => e.user_id === u.user_id && e.severity === 'strike')?.rule;
     const named = rule ? `: ${names(rule)}` : '';
-    if ('exempt' in u && u.exempt) return `⚠️ @${u.login} has ${u.strikes} guardrail strike${u.strikes === 1 ? '' : 's'}${named}. Admins and maintainers aren't blocked.`;
+    if ('exempt' in u && u.exempt) return `⚠️ @${u.login} has ${u.strikes} abuse strike${u.strikes === 1 ? '' : 's'}${named}. Admins and maintainers aren't blocked.`;
     const before = flagged.find((f) => f.user_id === u.user_id)?.strikes ?? 0;
     // This run went ahead, so a user the API already counted at 3 isn't blocked (strikes set to warn, or the block lapsed).
-    if (before >= 3) return `⚠️ @${u.login} has ${u.strikes} guardrail strikes${named}.`;
-    if (u.strikes >= 3) return `@${u.login} has reached 3 guardrail strikes. Unless strikes are set to warn only, Axon Shaft won't run for them on this account until an admin clears them on the dashboard.`;
+    if (before >= 3) return `⚠️ @${u.login} has ${u.strikes} abuse strikes${named}.`;
+    if (u.strikes >= 3) return `@${u.login} has reached 3 abuse strikes. Unless strikes are set to warn only, Axon Shaft won't run for them on this account until an admin clears them on the dashboard.`;
     return `⚠️ @${u.login} is flagged (${u.strikes} of 3)${named}. A third strike stops Axon Shaft from running for them on this account.`;
   });
 }

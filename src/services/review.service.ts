@@ -1,7 +1,8 @@
 import * as core from '@actions/core';
-import { datamark } from '../guardrails/input.util';
-import { guardrailEvents, ruleName } from '../guardrails/classify.service';
-import { type Flagged, flaggedLines } from '../guardrails/output.util';
+import { datamark } from '../abuse/input.util';
+import { guardrails, matchesAny } from '../utils/guardrails.util';
+import { abuseEvents, ruleName } from '../abuse/classify.service';
+import { type Flagged, flaggedLines } from '../abuse/output.util';
 import { type Choice, ladder, matches } from '../utils/auto-pick.util';
 import { planChecklists, STEPS_AT_END, stepsBlock } from '../utils/checklist-plan.util';
 import { failureMarkdown, ShaftFailure } from '../utils/failure.util';
@@ -14,7 +15,7 @@ import { openAdvisories } from './advisory.service';
 import { checkoutFiles } from './checkout.service';
 import { type LightResult, lightPass } from './light-pass.service';
 import { LIGHT_PASS, MAIN_PASS_ONLY } from '../consts/ladder.const';
-import { factsBlock, runScripts, SCRIPTS } from './prestep/prestep.service';
+import { factsBlock, quietChecklists, runScripts, SCRIPTS } from './prestep/prestep.service';
 import { baseFile, type Context, collectContext } from './context.service';
 import {
   CATEGORY_CONCLUSION,
@@ -93,7 +94,7 @@ export type ReviewOptions = {
   ignore?: Ignore[];
   /** Why the API left the repo's config file out, for a warning in the summary. */
   repoConfig?: { path: string; problems: string[] };
-  /** The users the API says have active strikes, for the summary's guardrail lines. */
+  /** The users the API says have active strikes, for the summary's Abuse protection lines. */
   flagged?: Flagged[];
   /** Permissions the installation hasn't approved, for the footer's table. */
   missingPermissions?: MissingPermission[];
@@ -273,8 +274,8 @@ async function postReview(
   const carried = rerun?.length ? (fired?.filter((c) => !rerun.includes(c.key)).map((c) => c.key) ?? []) : [];
   const running = fired?.filter((c) => !carried.includes(c.key));
   // Script checklists' findings are their result: they never reach the model.
-  const scripted = running?.filter((c) => c.mode === 'script') ?? [];
-  const modelled = running?.filter((c) => c.mode !== 'script');
+  let scripted = running?.filter((c) => c.mode === 'script') ?? [];
+  let modelled = running?.filter((c) => c.mode !== 'script');
   // What the footer says about the run, whichever way it goes.
   const facts = {
     sha,
@@ -334,7 +335,7 @@ async function postReview(
         type: '',
         confidence: 0,
         comment_url: url,
-        checks: states.slice(0, 50),
+        checks: states.slice(0, 60),
         passes: [],
         findings: [],
         fixed: 0,
@@ -376,7 +377,7 @@ async function postReview(
         type: '',
         confidence: 0,
         comment_url: url,
-        checks: states.slice(0, 50),
+        checks: states.slice(0, 60),
         passes: [],
         findings: placed.slice(0, 200).map((p) => ({ severity: p.severity, check: p.step, file: p.file, line: Math.max(1, p.line), title: p.title, body: '', inline: true })),
         fixed: 0,
@@ -391,11 +392,18 @@ async function postReview(
     files,
     pr: ctx.pr,
     guides: ctx.guides,
+    commits: ctx.commits,
     checkout: checkoutFiles(o.cwd),
     base: (path) => reads.get(path) ?? reads.set(path, baseFile(octokit, ctx.owner, ctx.repo, ctx.pr.base, path)).get(path)!,
     octokit,
   };
   const scriptFindings = scripted.length ? await step('Run the script checklists', async () => runScripts(scripted, input)) : [];
+  // No script hit, no model call: a script+model checklist whose script found nothing passes as a script checklist would.
+  const quiet = modelled?.length ? await quietChecklists(modelled, input) : [];
+  if (quiet.length) {
+    modelled = modelled!.filter((c) => !quiet.includes(c));
+    scripted = [...scripted, ...quiet];
+  }
   // With only script checklists to run, no model is called, unless merge gates need judging.
   const useModel = !modelled || modelled.length > 0 || !!o.gates?.length;
 
@@ -489,7 +497,10 @@ async function postReview(
   // A carried finding goes through `place` again, so it keeps its fingerprint and only its first inline comment.
   const kept = (prior?.findings ?? []).filter((f) => carried.includes(f.step ?? '')).map((f): Finding => ({ ...f, step: f.step!, body: 'Found by an earlier review. Its checklist had nothing new to check on this push.' }));
   const all = place([...review.findings, ...kept], files, o.nits, [...(prior?.findings ?? []), ...dismissed]);
-  const placed = all.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
+  // A finding on a file the project's guardrails cover is never posted, nor its suggestion.
+  const { no_edit, no_read } = guardrails();
+  const unguarded = all.filter((p) => !matchesAny(p.file, [...no_edit, ...no_read]));
+  const placed = unguarded.filter((p) => !dismissed.some((d) => d.fp === p.fp) && !ignored(p, o.ignore ?? []));
   if (placed.length < all.length) review.verdict = verdictAfter(review.verdict, placed) as Review['verdict'];
   // A carried finding raises the verdict as a script's does.
   const old = placed.filter((p) => carried.includes(p.step));
@@ -540,9 +551,10 @@ async function postReview(
     checklists: planned,
     latestAction: o.latestAction,
     workflowEditUrl: o.workflowEditUrl,
-    ignored: all.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    ignored: unguarded.filter((p) => !dismissed.some((d) => d.fp === p.fp)).length - placed.length,
+    guardrailed: all.length - unguarded.length,
     repoConfig: o.repoConfig,
-    flagged: flaggedLines(o.flagged ?? [], guardrailEvents(), ruleName),
+    flagged: flaggedLines(o.flagged ?? [], abuseEvents(), ruleName),
     // `/resolve` only when GitHub says the pull request has conflicts.
     commands: o.commands?.filter((c) => c !== 'resolve' || ctx.pr.conflicts),
     ...(models && {
@@ -588,12 +600,12 @@ async function postReview(
     type: cut(review.type, 40),
     confidence: Math.min(100, Math.max(0, Math.round(review.confidence))),
     comment_url: o.dryRun ? '' : (summary?.html_url ?? ''),
-    checks: states.slice(0, 50),
+    checks: states.slice(0, 60),
     ...(modelled && {
       passes: models
         ? [
-            { name: 'main', model: models.main, tokens: light ? subtract(result.tokens, light.spent.tokens) : result.tokens, checklists: steps!.slice(0, 50).map((c) => c.key), max_turns: choice.maxTurns },
-            ...(light ? [{ name: 'light', model: lightModel(light), tokens: light.spent.tokens, checklists: lightKeys.slice(0, 50), max_turns: LIGHT_PASS.maxTurns }] : []),
+            { name: 'main', model: models.main, tokens: light ? subtract(result.tokens, light.spent.tokens) : result.tokens, checklists: steps!.slice(0, 60).map((c) => c.key), max_turns: choice.maxTurns },
+            ...(light ? [{ name: 'light', model: lightModel(light), tokens: light.spent.tokens, checklists: lightKeys.slice(0, 60), max_turns: LIGHT_PASS.maxTurns }] : []),
           ]
         : [],
     }),

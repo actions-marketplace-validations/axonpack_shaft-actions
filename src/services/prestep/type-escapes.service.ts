@@ -52,7 +52,7 @@ export const typeEscapes: Facts = async ({ files, checkout }) => {
       return found.length ? [`- ${f.filename}:${line} ${found.join(', ')}: ${code.length > MAX_CODE ? `${code.slice(0, MAX_CODE)}...` : code}${TEST.test(f.filename) ? ' (test file)' : ''}`] : [];
     });
   });
-  if (!lines.length) return 'No added line has a type escape.';
+  if (!lines.length) return '';
   const settings = checkout
     .find(CONFIGS)
     .sort()

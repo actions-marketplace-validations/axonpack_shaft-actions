@@ -277,9 +277,11 @@ export type Footer = {
   advisories?: string;
   /** Findings left out by the repo config file's `ignore`. */
   ignored?: number;
+  /** Findings on files the project's guardrails cover, which weren't posted. */
+  guardrailed?: number;
   /** The repo config file the API left out, and why. */
   repoConfig?: { path: string; problems: string[] };
-  /** The guardrails' lines for people with strikes (`flaggedLines`). */
+  /** The Abuse protection lines for people with strikes (`flaggedLines`). */
   flagged?: string[];
   /** Permissions the installation hasn't approved: the level wanted, and the one it has if any. */
   missingPermissions?: { name: string; wanted: string; granted: string | null }[];
@@ -409,29 +411,64 @@ export function checkStates(review: Review, placed: Placed[], checks?: string[],
  */
 function card(review: Review, placed: Placed[], fixed: number, f: Footer): string {
   const n = (s: Severity) => placed.filter((p) => p.severity === s).length;
-  const countChips = [
-    n('blocking') && chip(`🔴 ${n('blocking')} blocking`),
-    n('should-fix') && chip(`🟡 ${n('should-fix')} should fix`),
-    n('nit') && chip(`⚪ ${plural(n('nit'), 'nit')}`),
-    !placed.length && chip('✅ No findings'),
-    fixed && chip(`✅ ${fixed} fixed`),
+  const counts = [
+    n('blocking') && `🔴 ${n('blocking')} blocking`,
+    n('should-fix') && `🟡 ${n('should-fix')} should fix`,
+    n('nit') && `⚪ ${plural(n('nit'), 'nit')}`,
+    !placed.length && '✅ none',
+    fixed && `✅ ${fixed} fixed`,
   ].filter(Boolean);
-  const checkChips = checkStates(review, placed, f.checks, f.checklists).map(stateChip);
+  const states = checkStates(review, placed, f.checks, f.checklists);
+  const ran = states.filter((c) => c.state !== 'off' && c.state !== 'not_checked');
+  const clean = ran.filter((c) => c.state === 'passed').length;
+  const flagged = states.filter((c) => c.state === 'failed' || c.state === 'warned').sort((a, b) => (a.state === b.state ? 0 : a.state === 'failed' ? -1 : 1));
+  const unchecked = states.filter((c) => c.state === 'not_checked');
   const headline = html(review.headline).split(/\r?\n/);
   const type = review.type.charAt(0).toUpperCase() + review.type.slice(1).replace(/-/g, ' ');
   const alert = VERDICT_ALERT[review.verdict];
+  const checksLine = [`${clean} of ${ran.length} clean`, flagged.length && `${flagged.length} with findings`, unchecked.length && `${unchecked.length} not checked`].filter(Boolean).join(' · ');
+  // The checks that found something (blocking first) and the ones that didn't run, folded so the card keeps its height.
+  const foundLine = (c: CheckItem) => {
+    const mine = placed.filter((p) => p.step === c.key);
+    const by = SEVERITIES.map((s) => [s, mine.filter((p) => p.severity === s).length] as const).filter(([, k]) => k);
+    return `${CHECK_MARK[c.state]} **${c.label}** · ${by.map(([s, k]) => (s === 'nit' ? plural(k, 'nit') : `${k} ${s === 'blocking' ? 'blocking' : 'should fix'}`)).join(', ')}`;
+  };
+  const fold = [...flagged.map(foundLine), ...unchecked.map((c) => `${CHECK_MARK.not_checked} **${c.label}** · not checked${c.reason ? `: ${html(c.reason)}` : ''}`)];
+  const summary = [flagged.length && plural(flagged.length, 'check') + ' with findings', unchecked.length && `${unchecked.length} not checked`].filter(Boolean).join(', ');
   return [
     `> [!${alert}]`,
     `> ${statusCard(review.verdict, VERDICT_LABEL[review.verdict]!)}`,
+    '>',
     ...headline.map((l) => `> ${l}`),
     '>',
-    `> **Findings** &nbsp; ${countChips.join(' ')}`,
+    `> ${meter('Checks', checksBar(states))} &nbsp;${checksLine}<br>`,
+    `> ${meter('Findings', mathBar(SEVERITIES.map((s) => [SEVERITY_COLOR[s], n(s)] as const)))} &nbsp;${counts.join(' · ')}<br>`,
+    `> ${meter('Confidence', mathBar([[METER_BLUE, review.confidence], [METER_GREY, 100 - review.confidence]]))} &nbsp;${review.confidence}%`,
+    ...(fold.length ? ['>', `> <details><summary>${summary}</summary>`, '>', ...fold.map((l, i) => `> ${l}${i < fold.length - 1 ? '<br>' : ''}`), '>', '> </details>'] : []),
     '>',
-    `> **Checks** &nbsp; ${checkChips.join(' ')}`,
-    '>',
-    `> <sub>${[type, `${review.confidence}% confidence`, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(' · ')}</sub>`,
+    `> <sub>${[type, `reviewed [\`${f.sha.slice(0, 7)}\`](https://github.com/${f.repo}/commit/${f.sha})`].filter(Boolean).join(' · ')}</sub>`,
   ].join('\n');
 }
+
+const METER_PX = 150;
+const METER_BLUE = '#0969da';
+const METER_GREY = '#8c959f';
+const CHECK_COLOR: Record<'passed' | 'not_checked' | 'warned' | 'failed', string> = { passed: '#1a7f37', not_checked: METER_GREY, warned: '#bf8700', failed: '#d1242f' };
+const SEVERITY_COLOR: Record<Severity, string> = { blocking: '#d1242f', 'should-fix': '#bf8700', nit: METER_GREY };
+
+/** A bar in GitHub math, one coloured stretch per part, sized by its share. Empty when every part is 0. */
+function mathBar(parts: readonly (readonly [string, number])[]): string {
+  const total = parts.reduce((a, [, k]) => a + k, 0);
+  if (!total) return '';
+  const rules = parts.filter(([, k]) => k > 0).map(([c, k]) => `\\color{${c}}{\\rule{${Math.max(4, Math.round((k / total) * METER_PX))}px}{8px}}`);
+  return `$${rules.join('')}$`;
+}
+
+/** The checks as one bar: green clean, grey not checked, amber a finding, red blocking. Turned-off checks are left out. */
+const checksBar = (states: CheckItem[]) => mathBar((['passed', 'not_checked', 'warned', 'failed'] as const).map((s) => [CHECK_COLOR[s], states.filter((c) => c.state === s).length] as const));
+
+/** The row's label in a code span padded to one width, so every row's bar starts at the same column, then its bar. */
+const meter = (label: string, bar: string) => `\`${label.padEnd(11, ' ')}\`${bar && ` ${bar}`}`;
 
 /** A table of findings, each location linked to its lines at the reviewed commit, and each finding to its page when it has one. */
 function table(rows: Placed[], f: Pick<Footer, 'repo' | 'sha'>): string {
@@ -534,6 +571,7 @@ export function renderSummary(raw: Review, placed: Placed[], prior: State | unde
   if (fixed.length) out.push('', `**Fixed since last review:** ${fixed.length} (${fixed.map((p) => `${where(p)} ${prose(p.title)}`).join(', ')})`);
   if (dismissed.length) out.push('', dismissedSection(dismissed));
   if (f.ignored) out.push('', `**Ignored:** ${plural(f.ignored, 'finding')} matched \`ignore\` in the repo's config file.`);
+  if (f.guardrailed) out.push('', `**Guardrails:** ${plural(f.guardrailed, 'finding')} on files the project's guardrails cover weren't posted.`);
   if (f.skipped) out.push('', `**Skipped:** ${plural(f.skipped, 'file')} matched \`skip\` and weren't reviewed.`);
   if (raw.walkthrough?.areas.length) out.push('', walkthrough(raw.walkthrough));
   // A run with no model call has no claim to show.

@@ -24,7 +24,7 @@ export const docsTouched: Facts = async ({ files, checkout }) => {
     }
   }
   const untouched = [...readmes].filter(([r]) => !docs.some((d) => d.filename === r));
-  if (!docs.length && !code.length) return 'The pull request changes no docs and no code.';
+  if (!docs.length && !code.length) return '';
   return factsText(
     [
       `Docs the pull request changes:${docs.length ? '' : ' none'}`,

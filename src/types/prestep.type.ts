@@ -13,10 +13,10 @@ export type Checkout = {
 };
 
 /**
- * What a script reads: the diff (after `skip`), the pull request, the base branch's guides, the
+ * What a script reads: the diff (after `skip`), the pull request and its commit messages, the base branch's guides, the
  * checkout, a file as the base branch has it (undefined when it has none), and the run's GitHub client.
  */
-export type ScriptInput = Pick<Context, 'files' | 'pr' | 'guides'> & { checkout: Checkout; base: (path: string) => Promise<string | undefined>; octokit: Octokit };
+export type ScriptInput = Pick<Context, 'files' | 'pr' | 'guides' | 'commits'> & { checkout: Checkout; base: (path: string) => Promise<string | undefined>; octokit: Octokit };
 
 /** A script's finding; the checklist that ran the script fills in `step`. */
 export type ScriptFinding = Omit<Finding, 'step'>;

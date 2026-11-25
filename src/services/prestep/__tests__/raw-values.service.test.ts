@@ -20,5 +20,5 @@ test('raw colours and sizes on added UI and style lines, outside theme files, wi
 });
 
 test('no raw value says so', async () => {
-  expect(await rawValues(input([changed('src/a.tsx', ['<p className="text-sm">Hi</p>'])]))).toBe('The added lines of UI and style files have no raw colour or size.');
+  expect(await rawValues(input([changed('src/a.tsx', ['<p className="text-sm">Hi</p>'])]))).toBe('');
 });

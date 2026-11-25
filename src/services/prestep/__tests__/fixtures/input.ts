@@ -15,6 +15,7 @@ export const input = (files: ScriptInput['files'], tree: Record<string, string> 
   files,
   pr: { number: 7, title: 'fix: a thing', body: '', author: 'a', headSha: 'abc1234', base: 'main', head: 'feature', fork: false, defaultBranch: 'main' },
   guides: [],
+  commits: [],
   checkout: { find: (globs) => Object.keys(tree).filter((p) => matches(p, globs)), read: (p) => tree[p], size: (p) => tree[p]?.length },
   base: async () => undefined,
   octokit: {} as ScriptInput['octokit'],

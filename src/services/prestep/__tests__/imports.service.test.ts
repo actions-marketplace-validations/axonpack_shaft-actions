@@ -39,6 +39,6 @@ test('a Python import no manifest names and no module in the repo has', async ()
 });
 
 test('nothing missing or nothing imported says so', async () => {
-  expect(await imports(input([changed('src/a.ts', ["import React from 'react';"])], tree))).toBe('Every package the added lines import is listed in a manifest (1 import checked).');
-  expect(await imports(input([changed('src/a.ts', ['const x = 1;'])], tree))).toBe('The added lines import no package.');
+  expect(await imports(input([changed('src/a.ts', ["import React from 'react';"])], tree))).toBe('');
+  expect(await imports(input([changed('src/a.ts', ['const x = 1;'])], tree))).toBe('');
 });

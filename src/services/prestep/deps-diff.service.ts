@@ -80,7 +80,7 @@ export const depsDiffFacts: Facts = async (input) => {
       return `- ${kind} ${name} ${[from.join(', '), now].filter(Boolean).join(' -> ')}${to.length ? ` (line ${to[0]!.line})` : ''}`;
     }),
   ]);
-  if (!lines.length) return 'No lockfile in the pull request adds, removes or changes a package.';
+  if (!lines.length) return '';
   let text = '';
   for (const [i, l] of lines.entries()) {
     if (text.length + l.length > FACTS_MAX) return `${text}... and ${lines.length - i} more lines, cut to fit.`;

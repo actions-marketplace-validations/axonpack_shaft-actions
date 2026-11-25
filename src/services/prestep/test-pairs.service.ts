@@ -22,7 +22,7 @@ export const testPairs: Facts = async ({ files, checkout }) => {
   // ponytail: paired by file name only; an `index.ts` or a test named after a feature won't pair, read imports if that gets noisy.
   const tests = files.filter((f) => TEST.test(f.filename) && CODE.test(f.filename));
   const sources = files.filter((f) => CODE.test(f.filename) && !TEST.test(f.filename) && !/\.d\.[cm]?ts$/.test(f.filename) && f.status !== 'removed');
-  if (!sources.length && !tests.length) return 'The pull request changes no source or test files.';
+  if (!sources.length && !tests.length) return '';
   const paired = sources.map((s) => ({ file: s.filename, tests: tests.filter((t) => stem(t.filename) === stem(s.filename)).map((t) => t.filename) }));
   const unpaired = paired.filter((p) => !p.tests.length);
   const existing = new Map<string, string[]>();

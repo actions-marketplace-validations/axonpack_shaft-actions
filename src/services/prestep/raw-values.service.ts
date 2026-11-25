@@ -28,7 +28,7 @@ export const rawValues: Facts = async ({ files, checkout }) => {
         return found.length ? [`- ${f.filename}:${line} ${found.join(', ')}`] : [];
       }),
     );
-  if (!lines.length) return 'The added lines of UI and style files have no raw colour or size.';
+  if (!lines.length) return '';
   const themes = checkout
     .find(THEME)
     .filter((p) => matches(p, STYLED) || p.endsWith('.json'))

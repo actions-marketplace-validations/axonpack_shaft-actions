@@ -1,3 +1,4 @@
+import { guardrails, matchesAny } from './guardrails.util';
 import { basename, dirname } from 'node:path';
 import { BUILD_INPUTS, MANIFEST } from '../consts/build-inputs.const';
 
@@ -39,7 +40,7 @@ const mb = (bytes: number) => `${bytes / 1024 / 1024} MB`;
  * Why a commit of `changes` may not be pushed, or undefined when it may: a path that leaves the
  * checkout or goes into `.git/`, or `.github/` or anything under it, whose workflows run with the
  * repo's secrets, in any case (a case-insensitive file system makes `.GitHub/` the same folder); or
- * more than `COMMIT_MAX`. A change without `content` counts no bytes, so the paths can be checked
+ * a file the project's `no_edit` guardrails match; or more than `COMMIT_MAX`. A change without `content` counts no bytes, so the paths can be checked
  * before any file is read.
  */
 export function commitDenial(changes: Pick<Change, 'path' | 'content'>[]): string | undefined {
@@ -48,6 +49,8 @@ export function commitDenial(changes: Pick<Change, 'path' | 'content'>[]): strin
   if (bad) return `The change names ${bad}, outside the files a commit can hold, so nothing was pushed.`;
   const github = paths.filter((p) => /^\.github(\/|$)/i.test(p));
   if (github.length) return `The change touches ${github.join(', ')}, and Axon Shaft never commits anything under .github/, so nothing was pushed.`;
+  const guarded = paths.filter((p) => matchesAny(p, guardrails().no_edit));
+  if (guarded.length) return `The change touches ${guarded.join(', ')}, which the project's guardrails say is never edited, so nothing was pushed.`;
   if (changes.length > COMMIT_MAX.files)
     return `The change has ${changes.length} files, more than the ${COMMIT_MAX.files} one commit from Axon Shaft may hold, so nothing was pushed.`;
   const big = changes.find((c) => (c.content?.length ?? 0) > COMMIT_MAX.fileBytes);
