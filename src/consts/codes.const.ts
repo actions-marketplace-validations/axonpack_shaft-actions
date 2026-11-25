@@ -22,6 +22,11 @@ export const ACTION_CODES: Record<string, { kind: 'failure' | 'notice' | 'both';
     kind: 'failure',
     message: "The OpenCode binary the action downloads from npm didn't match the sha512 this release records, or the release records none for the runner's platform, so it wasn't run.",
   },
+  opencode_unavailable: { kind: 'failure', message: "OpenCode's search tools need ripgrep (`rg`) on the runner, and the action couldn't install it from the runner's Ubuntu archive." },
+  opencode_guard_missing: {
+    kind: 'failure',
+    message: "OpenCode ran without Axon Shaft's tool guard plugin loaded, so its reply wasn't used and nothing was posted or pushed.",
+  },
   opencode_key_refused: {
     kind: 'failure',
     message: "An OpenCode key's name isn't one the action passes on: a key's name is upper-case and ends in `_KEY` or `_TOKEN`, and is never `NODE_OPTIONS`, `PATH` or a runner, GitHub, loader or Claude variable.",

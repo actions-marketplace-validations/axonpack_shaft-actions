@@ -12,6 +12,7 @@ import { CANARY, SYSTEM_PROMPT } from '../abuse/abuse.const';
 import { scanOutput } from '../abuse/output.util';
 import { sandboxPrefix } from './sandbox.service';
 import { claudeBinary, claudeConfigDir } from './claude-binary.service';
+import { opencodeSettings, runOpencode } from './opencode.service';
 
 /** The JSON schema the model's reply must match (the plan's output). */
 export const SCHEMA = {
@@ -153,9 +154,9 @@ export function parseReview(x: unknown): Review | undefined {
   };
 }
 
-const READ_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
-const EDIT_TOOLS = [...READ_TOOLS, 'Edit', 'Write'];
-const ALLOWED = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)'];
+export const READ_TOOLS = ['Read', 'Grep', 'Glob', 'Bash'];
+export const EDIT_TOOLS = [...READ_TOOLS, 'Edit', 'Write'];
+export const ALLOWED = ['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)', 'Bash(git show:*)'];
 /** The CLI's own deny rules, on top of the hook below. `//` makes a rule path absolute. */
 const DENIED = ['Read(//proc/**)', 'Read(//sys/**)'];
 
@@ -268,7 +269,7 @@ export function bashFailure(command: string, content: unknown): string {
 }
 
 /** The reply's schema with `abuse_seen`, the asks the model noticed and ignored, as a warning only. */
-const withAbuseSeen = (schema: Record<string, unknown>) => ({
+export const withAbuseSeen = (schema: Record<string, unknown>) => ({
   ...schema,
   properties: { ...(schema.properties as object), abuse_seen: { type: 'array', items: { type: 'string', maxLength: 200 }, maxItems: 5 } },
 });
@@ -327,6 +328,22 @@ async function once(prompt: string, o: AgentOptions, schema: Record<string, unkn
 }
 
 /**
+ * One session's outcome, from either agent: what it used, and its reply (`output`), a reason to retry
+ * (`why`), or a reason to stop (`failed`).
+ */
+export type Attempt = { spent?: Omit<AgentResult<unknown>, 'reply'>; output?: unknown; why?: string; failed?: string };
+
+/** The Agent SDK's result as an attempt. */
+function claudeAttempt(result: SDKResultMessage | undefined): Attempt {
+  if (!result) return {};
+  const usage = result.modelUsage ?? {};
+  const spent = { models: Object.keys(usage), costUsd: result.total_cost_usd ?? 0, tokens: sumTokens(usage) };
+  if (result.subtype === 'success') return { spent, output: result.structured_output };
+  if (result.subtype !== 'error_max_structured_output_retries') return { spent, failed: `The Agent SDK run ended with ${result.subtype}: ${result.errors.join('; ')}` };
+  return { spent, why: result.errors.join('; ') };
+}
+
+/**
  * Run the session with read-only tools (a task's also edit and run the repo's commands), for a reply in `format`: the review's, or a job's own. A
  * reply that doesn't match the schema is retried once, then the run fails. Every failure comes out
  * as a `ShaftFailure` with a `review_*` code, whatever the job.
@@ -343,16 +360,15 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
   const spent: Omit<AgentResult<T>, 'reply'> = { models: [], costUsd: 0, tokens: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
   try {
     for (let attempt = 1; ; attempt++) {
-      const result = await once(prompt, o, format.schema, controller);
-      if (result) {
-        const usage = result.modelUsage ?? {};
-        const t = sumTokens(usage);
-        spent.models = [...new Set([...spent.models, ...Object.keys(usage)])];
-        spent.costUsd += result.total_cost_usd ?? 0;
-        for (const k of Object.keys(t) as (keyof Tokens)[]) spent.tokens[k] += t[k];
+      const a = opencodeSettings() ? await runOpencode(prompt, o, withAbuseSeen(format.schema), controller) : claudeAttempt(await once(prompt, o, format.schema, controller));
+      if (a.spent) {
+        spent.models = [...new Set([...spent.models, ...a.spent.models])];
+        spent.costUsd += a.spent.costUsd;
+        for (const k of Object.keys(a.spent.tokens) as (keyof Tokens)[]) spent.tokens[k] += a.spent.tokens[k];
       }
-      if (result?.subtype === 'success') {
-        const out = scanOutput(result.structured_output as Record<string, unknown> | undefined, CANARY);
+      if (a.failed) throw new Error(a.failed);
+      if ('output' in a) {
+        const out = scanOutput(a.output as Record<string, unknown> | undefined, CANARY);
         if (out.leak) throw new ShaftFailure('abuse_leak', `The ${format.name} repeated Axon Shaft's system prompt, so nothing was posted.`);
         if (out.hits.length) core.warning(`Abuse protection: took ${out.hits.join(', ')} out of the ${format.name} before posting.`);
         const { abuse_seen: seen, ...rest } = out.reply ?? {};
@@ -360,12 +376,9 @@ export async function runAgent<T>(prompt: string, o: AgentOptions, format: Reply
         if (Array.isArray(seen) && seen.length) core.warning(`The model saw ${seen.length} instruction${seen.length === 1 ? '' : 's'} aimed at it in the pull request's text and ignored ${seen.length === 1 ? 'it' : 'them'}.`);
         const reply = format.parse(rest);
         if (reply) return { reply, ...spent };
-      } else if (result && result.subtype !== 'error_max_structured_output_retries') {
-        throw new Error(`The Agent SDK run ended with ${result.subtype}: ${result.errors.join('; ')}`);
       }
       // Only the reply's field names: the job log is public on a public repo, and a finding's text mustn't reach it.
-      const out = result?.subtype === 'success' ? result.structured_output : undefined;
-      const what = result?.subtype === 'success' ? `its fields: ${Object.keys(out && typeof out === 'object' ? out : {}).join(', ') || 'none'}` : (result?.errors.join('; ') ?? 'no result');
+      const what = 'output' in a ? `its fields: ${Object.keys(a.output && typeof a.output === 'object' ? a.output : {}).join(', ') || 'none'}` : (a.why ?? 'no result');
       core.warning(`The reply didn't match the ${format.name} schema (attempt ${attempt}), ${what}`);
       if (attempt === 2 || o.retry === false) {
         throw new ShaftFailure('review_invalid_reply', `The model's reply didn't match the ${format.name} format twice, so nothing was posted. Rerun the job.`);

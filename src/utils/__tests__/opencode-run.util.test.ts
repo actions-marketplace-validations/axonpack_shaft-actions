@@ -1,0 +1,51 @@
+import { expect, test } from 'vitest';
+import { emptyEvents, opencodePermission, opencodeTools, readEvent, replyJson, schemaPrompt } from '../opencode-run.util';
+
+test("the job's Claude tools map to OpenCode's, without edits outside a task", () => {
+  expect(opencodeTools(['Read', 'Grep', 'Glob', 'Bash(git diff:*)', 'Bash(git log:*)'], false)).toEqual(['read', 'grep', 'glob', 'bash']);
+  expect(opencodeTools(['Read', 'Edit', 'Write', 'Bash'], false)).toEqual(['read', 'bash']);
+  expect(opencodeTools(['Read', 'Edit', 'Write', 'Bash'], true)).toEqual(['read', 'edit', 'apply_patch', 'write', 'bash']);
+  expect(opencodeTools([], false)).toEqual([]);
+});
+
+test('permissions deny everything first, then allow only the listed tools', () => {
+  expect(opencodePermission([], {})).toEqual({ '*': 'deny', external_directory: 'deny' });
+  const review = opencodePermission(['read', 'bash'], { mcp: true });
+  expect(Object.keys(review)[0]).toBe('*');
+  expect(review.bash).toEqual({ '*': 'deny', 'git diff *': 'allow', 'git log *': 'allow', 'git show *': 'allow' });
+  expect(review['shaft_*']).toBe('allow');
+  expect(review.edit).toBeUndefined();
+  const task = opencodePermission(['bash', 'edit'], { prefix: "'bwrap' '--'" });
+  expect(task.bash).toEqual({ '*': 'deny', "'bwrap' '--' *": 'allow' });
+  expect(task.edit).toEqual({ '*': 'allow', '.git/*': 'deny', '.github/*': 'deny' });
+  expect(opencodePermission(['task'], { passes: [{ name: 'security', description: '', prompt: '' }] }).task).toEqual({ '*': 'deny', security: 'allow' });
+});
+
+test('the reply is the JSON object in the last text, fence or not', () => {
+  expect(replyJson('```json\n{"verdict":"approve"}\n```')).toEqual({ verdict: 'approve' });
+  expect(replyJson('no json')).toBeUndefined();
+  expect(replyJson('[1]')).toBeUndefined();
+  expect(schemaPrompt('Review', { type: 'object' })).toContain('{"type":"object"}');
+});
+
+test('run events: the last text, tokens and cost summed per step, tool calls and errors', () => {
+  const e = emptyEvents();
+  const lines = [
+    { type: 'step_start', part: {} },
+    { type: 'tool_use', part: { tool: 'bash', state: { status: 'error', input: { command: 'git log' }, error: 'denied' } } },
+    { type: 'step_finish', part: { tokens: { input: 100, output: 20, reasoning: 5, cache: { read: 50, write: 10 } }, cost: 0.01 } },
+    { type: 'text', part: { text: 'first' } },
+    { type: 'step_finish', part: { tokens: { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0.02 } },
+    { type: 'text', part: { text: '{"a":1}' } },
+    { type: 'error', error: { name: 'APIError', data: { message: 'bad key' } } },
+  ];
+  for (const l of lines) readEvent(JSON.stringify(l), e);
+  readEvent('a log line', e);
+  expect(e).toEqual({
+    text: '{"a":1}',
+    tokens: { input: 101, output: 27, cache_read: 50, cache_write: 10 },
+    costUsd: 0.03,
+    tools: [{ tool: 'bash', input: { command: 'git log' }, error: 'denied' }],
+    errors: ['bad key'],
+  });
+});

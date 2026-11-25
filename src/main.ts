@@ -10,6 +10,7 @@ import { type Ending, finalize, trackRun } from './services/finalize.service';
 import { type Reaction, reactEnd, reactStart } from './services/reaction.service';
 import { replyToComment } from './services/reply.service';
 import { addShaftMcp } from './services/mcp-setup.service';
+import { setOpencode } from './services/opencode.service';
 import { reviewPullRequest } from './services/review.service';
 import { commentOnce, hasWriteAccess, pullRequestOf, REVIEW_COMMAND, route } from './services/route.service';
 import { step } from './services/step.service';
@@ -124,6 +125,8 @@ async function run(): Promise<void> {
       error: { code: e instanceof ShaftFailure ? e.code : 'review_failed', message: redact(e instanceof Error ? e.message : String(e), secrets) },
       duration_ms: Date.now() - started,
     });
+  // On OpenCode every session, the classifier's and triage's included, runs `opencode run` on the grant's model.
+  setOpencode(grant.provider === 'opencode' ? grant.opencode : undefined);
   configureAbuse({ claude: grant.claude_token, cwd, secrets });
   // The API's extra input rules, added to the built-in ones (never in place of them).
   // `guardrail` is the field's name before the rename to abuse, for an API that hasn't deployed it.

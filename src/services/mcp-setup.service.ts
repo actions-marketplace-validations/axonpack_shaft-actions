@@ -10,6 +10,11 @@ import { setClaudeConfigDir } from './claude-binary.service';
 /** The server's name in Claude Code's config; its tools are `mcp__shaft__<tool>`. */
 const NAME = 'shaft';
 
+let server: { url: string; headers: Record<string, string> } | undefined;
+
+/** Shaft's MCP server once `addShaftMcp` connected it, for OpenCode's config. */
+export const shaftMcp = () => server;
+
 const unavailable = (why: string) =>
   new ShaftFailure('mcp_unavailable', `Couldn't connect Axon Shaft's MCP server, so the review didn't start: ${why.replace(/\.$/, '')}. Rerun the job in a few minutes.`);
 
@@ -48,5 +53,6 @@ export async function addShaftMcp(): Promise<void> {
   writeFileSync(join(dir, '.claude.json'), JSON.stringify({ mcpServers: { [NAME]: { type: 'http', url, headers } } }), { mode: 0o600 });
   writeFileSync(join(dir, 'settings.json'), JSON.stringify({ permissions: { allow: [`mcp__${NAME}`] } }), { mode: 0o600 });
   setClaudeConfigDir(dir);
+  server = { url, headers };
   core.info(`Connected Axon Shaft's MCP server: ${tools.map((t) => t.name).join(', ')}`);
 }
