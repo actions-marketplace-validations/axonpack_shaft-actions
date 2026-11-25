@@ -71,7 +71,7 @@ A comment on the pull request's conversation tab doesn't carry the branch, so a 
 When the job is on for that event, the API answers with a GitHub token for this repo only, the saved Claude token, the settings and the review prompt.
 Comments come from `axonshaft[bot]` through that token, so the workflow's own token only needs `contents: read`.
 
-Before the session starts, the action downloads the Claude Code binary the Agent SDK runs: the npm package `@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, at the SDK version the release pins, fetched with `npm pack` into the runner's temp folder. It unpacks the tarball only when its sha512 matches the one the release recorded from its `bun.lock` at build time. If it doesn't match, or the release has no hash for the runner's platform, the step fails with `claude_binary_unverified` and the binary never runs. This is the only code the action downloads for itself.
+Before the session starts, the action downloads the Claude Code binary the Agent SDK runs: the npm package `@anthropic-ai/claude-agent-sdk-<platform>-<arch>`, at the SDK version the release pins, fetched with `npm pack` into the runner's temp folder. It unpacks the tarball only when its sha512 matches the one the release recorded from its `bun.lock` at build time. If it doesn't match, or the release has no hash for the runner's platform, the step fails with `claude_binary_unverified` and the binary never runs. This is the only code the action downloads for itself. A project on OpenCode gets the OpenCode binary in its place, checked the same way (see [Running on OpenCode](#running-on-opencode)).
 
 After the review, the action sends the run to the dashboard, where it has its own page. It sends:
 
@@ -269,6 +269,7 @@ Everything else is set on the dashboard:
 
 | Setting | Default | What it does |
 |---|---|---|
+| Provider | Claude | Claude, or OpenCode with its own model and keys. See [Running on OpenCode](#running-on-opencode). |
 | Model | `auto` | The model the review runs on, or `auto`. |
 | Effort | `auto` | The effort, or `auto`. |
 | Depth | Standard | A deep review adds subagents for the correctness, breakage and security checks. |
@@ -524,6 +525,46 @@ The limits above hold even when the model is fooled. Abuse protection also check
 
 </details>
 
+## Running on OpenCode
+
+A project can run on OpenCode instead of Claude. Pick OpenCode in the Provider section on the dashboard, then set a model as `provider/model` (for example `openrouter/qwen/qwen3-coder` or `opencode/big-pickle`), an optional variant, and the keys the provider needs. Every job runs on that one model: reviews, deep passes, replies, tasks, and the checks Axon Shaft runs before the review.
+
+### Keys
+
+A key is an environment variable name and a value. Its name must be upper-case and end in `_KEY` or `_TOKEN`. It can't be `NODE_OPTIONS` or `PATH`, and it can't start with `LD_`, `GITHUB_`, `ACTIONS_`, `INPUT_`, `ANTHROPIC_` or `CLAUDE_`, except for `ANTHROPIC_API_KEY`. Any other name stops the run with `opencode_key_refused`. OpenCode's free models need no key.
+
+You can save a key's value on the dashboard, or keep it in GitHub Actions secrets and save only its name. For a key kept in GitHub, map the secret on the Axon Shaft step:
+
+```yaml
+      - uses: axonpack/shaft-actions@v1
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+```
+
+If the step doesn't have it, the run stops with `opencode_key_missing`. The action masks every key's value in the job log and in anything it posts.
+
+### The OpenCode binary
+
+The action downloads OpenCode the same way it downloads Claude Code. It fetches the platform package of `opencode-ai` at the version the release pins (1.19.6) with `npm pack`, and runs it only when its sha512 matches the hash the release recorded from `bun.lock`. Otherwise the run stops with `opencode_binary_unverified`.
+
+OpenCode's search tools need ripgrep. When `rg` isn't on the runner's PATH, the action installs `ripgrep` from the runner's Ubuntu archive, as it does bubblewrap, and stops with `opencode_unavailable` if it can't.
+
+The model list comes from the pinned binary and is never fetched. Before the run, the action asks OpenCode for that provider's models, and a model that isn't listed stops the run with `opencode_model_unknown`. So a model newer than OpenCode 1.19.6 can't be used until the release moves to a newer OpenCode. The same applies to a provider whose SDK isn't built into the binary.
+
+### What OpenCode can do
+
+OpenCode has the same limits as Claude Code, enforced in its own way:
+
+- OpenCode runs with a config the action writes in the runner's temp folder for this run. It never loads the pull request's `opencode.json`, `.opencode/` folder, `AGENTS.md`, `CLAUDE.md`, skills or plugins. Formatters, language servers, sharing, snapshots and updates are off.
+- Every tool call goes through the same tool guard as on Claude, through a plugin file that ships in the release (`dist/opencode-guard.js`). The model only gets the tools its job lists, and OpenCode's own permission rules deny everything else first. If the plugin didn't load, the action doesn't use the reply and the run stops with `opencode_guard_missing`.
+- A task's commands run in the same bubblewrap sandbox, without any OpenCode key in their environment.
+- OpenCode's environment has only the runner variables, the project's Environment variables and the keys.
+- A review reaches Axon Shaft's MCP server as on Claude, added to OpenCode's config as a remote server after the action checks the connection.
+
+OpenCode can't hold the reply to a schema, so the schema goes in the prompt. The action then parses and checks the reply itself, and retries once if it doesn't match. Tokens and cost come from OpenCode's run events, plus the deep passes' sessions, and the dashboard shows the cost OpenCode reports.
+
+When the provider refuses the run with something a retry won't fix, such as a usage limit, a bad key or a missing model, the run stops at once with `opencode_provider_error` and the provider's message. It doesn't wait for the time limit.
+
 ## When a run fails
 
 The step fails with a message that says what to do. The job summary shows a card for the failure, the same message and, when there is one, a link to where to fix it.
@@ -553,6 +594,13 @@ The card is an image of the failure's code from `https://shaft.axonpack.dev/erro
 | `review_invalid_reply` | The model's reply didn't match the review, reply or task format twice, so nothing was posted. The job log names each reply's fields, without their text, and the link opens the run. |
 | `review_failed` | The review, reply or task stopped for another reason, such as an Agent SDK error or the turn limit. The link opens the run. |
 | `claude_binary_unverified` | The Claude Code binary downloaded from npm didn't match the sha512 the release records, or the release has no hash for the runner's platform, so it wasn't run. |
+| `opencode_key_refused` | An OpenCode key's name isn't one the action passes on. See [keys](#keys). |
+| `opencode_key_missing` | An OpenCode key kept in GitHub isn't set on the Axon Shaft step. Add the Actions secret and the `env:` line. |
+| `opencode_binary_unverified` | The OpenCode binary downloaded from npm didn't match the sha512 the release records, or the release has no hash for the runner's platform, so it wasn't run. |
+| `opencode_unavailable` | OpenCode needs ripgrep, and the action couldn't install it on the runner. |
+| `opencode_model_unknown` | The model isn't in the pinned OpenCode's model list, or its provider's key isn't set. |
+| `opencode_provider_error` | The provider refused the run and a retry wouldn't fix it: a usage limit, an auth or billing error, or a model it doesn't have. |
+| `opencode_guard_missing` | OpenCode ran without Axon Shaft's tool guard plugin, so its reply wasn't used and nothing was posted or pushed. |
 | `mcp_unavailable` | The action couldn't get its MCP token from the API, or Axon Shaft's MCP server didn't answer `tools/list`, so the review didn't start. |
 | `push_failed` | A task couldn't push its commit: Push mode, a fork's branch or the default branch ruled it out before the session or when the API was asked for the push token, the change touched `.github/`, or GitHub refused the push. |
 | `abuse_leak` | The model's reply repeated the system prompt's line for the run, so nothing was posted. |
